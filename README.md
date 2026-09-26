@@ -34,13 +34,14 @@ git clone [https://github.com/SEU-USUARIO/rclone-drive-gui.git](https://github.c
 cd rclone-drive-gui
 chmod +x install.sh
 ./install.sh
-
-Como Usar
+```
+## Como Usar
 Após a instalação, busque por Rclone Drive GUI no menu de aplicativos do seu sistema.
 Se for o seu primeiro acesso, a tela de configuração saltará automaticamente pedindo os dados da nuvem. Caso contrário, o aplicativo iniciará discretamente na bandeja do sistema (perto do relógio) e fará a montagem da sua nuvem.
 
-Desinstalação
+## Desinstalação
 Para remover completamente o aplicativo, interromper os processos e limpar os atalhos do sistema, execute:
+```bash 
 pkill -f "python3.*main.py"
 fusermount3 -uz ~/GoogleDrive || umount -l ~/GoogleDrive
 rm -rf ~/.local/share/rclone-drive-gui
