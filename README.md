@@ -30,7 +30,7 @@ O aplicativo utiliza o FUSE com a flag `--vfs-cache-mode full` para garantir est
 Abra o seu terminal e execute os comandos abaixo. O script cuidará de criar o ambiente virtual, instalar as dependências Python e registrar os atalhos no menu do sistema.
 
 ```bash
-git clone [https://github.com/SEU-USUARIO/rclone-drive-gui.git](https://github.com/SEU-USUARIO/rclone-drive-gui.git)
+git clone [https://github.com/Patopatetico2-lab/rclone-drive-gui.git](https://github.com/Patopatetico2-lab/rclone-drive-gui.git)
 cd rclone-drive-gui
 chmod +x install.sh
 ./install.sh
