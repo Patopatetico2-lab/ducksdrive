@@ -31,7 +31,7 @@ Abra o seu terminal e execute os comandos abaixo. O script cuidará de criar o a
 
 ```bash
 git clone https://github.com/Patopatetico2-lab/ducksdrive.git
-cd rclone-drive-gui
+cd ducksdrive
 chmod +x install.sh
 ./install.sh
 ```
@@ -44,8 +44,7 @@ Para remover completamente o aplicativo, interromper os processos e limpar os at
 ```bash 
 pkill -f "python3.*main.py"
 fusermount3 -uz ~/GoogleDrive || umount -l ~/GoogleDrive
-rm -rf ~/.local/share/rclone-drive-gui
-rm -f ~/.local/bin/rclone-drive-gui
-rm -f ~/.local/share/applications/rclone-drive-gui.desktop
+rm -rf ~/.local/share/ducksdrive
+rm -f ~/.local/bin/ducksdrive
+rm -f ~/.local/share/applications/ducksdrive.desktop
 rm -rf ~/.config/rclone
-
