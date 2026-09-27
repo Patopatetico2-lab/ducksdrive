@@ -47,3 +47,5 @@ fusermount3 -uz ~/GoogleDrive || umount -l ~/GoogleDrive
 rm -rf ~/.local/share/rclone-drive-gui
 rm -f ~/.local/bin/rclone-drive-gui
 rm -f ~/.local/share/applications/rclone-drive-gui.desktop
+rm -rf ~/.config/rclone
+
