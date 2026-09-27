@@ -36,6 +36,7 @@ from rclone_config import (
 )
 from rclone_daemon import RcloneDaemon
 from rclone_stats import StatsData
+from status_popup import StatusPopup
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.daemon = daemon
         self.setToolTip(f"{APP_NAME}: Idle")
         self._pending_remote_name: Optional[str] = None
+        
+        # Initialize floating status popup panel
+        self.status_popup = StatusPopup(daemon)
         
         self._menu = QMenu()
         self._setup_menu()
@@ -169,7 +173,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
-        """Updates the tray tooltip and status entry with live telemetry."""
+        """Updates the tray tooltip, menu status, and floating status popup with live telemetry."""
         if stats.is_online:
             self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
             self.setToolTip(f"{APP_NAME}: {stats.status_text}")
@@ -177,9 +181,16 @@ class RcloneTrayIcon(QSystemTrayIcon):
             if self.daemon.state == "mounted":
                 self.action_status.setText("Status: Connection Lost")
 
+        # Forward telemetry to floating status popup
+        self.status_popup.update_stats(stats)
+
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        """Left-click on tray icon toggles/shows the floating status panel."""
         if reason == QSystemTrayIcon.Trigger:
-            self._open_folder()
+            if self.status_popup.isVisible():
+                self.status_popup.close()
+            else:
+                self.status_popup.show_near_cursor()
 
     def _open_folder(self) -> None:
         """Opens the mount point in the system file manager."""
