@@ -1,34 +1,43 @@
-# DucksDrive (Rclone Drive GUI)
+# DucksDrive 🦆☁️
 
-Uma interface gráfica leve e nativa (PySide6/Qt) para gerenciar e montar nuvens via Rclone no Linux. O objetivo do projeto é oferecer uma experiência "it just works", focada em integração com o sistema operacional e facilidade de uso (no estilo Google Drive para Windows).
+O **DucksDrive** é uma interface gráfica (GUI) desktop moderna, leve e robusta desenvolvida em **Python (PySide6/Qt)** para o gerenciamento de serviços de nuvem e unidades de rede através do ecossistema **Rclone** no Linux (compatível com KDE Plasma, GNOME, XFCE e outros ambientes).
 
-## Recursos Principais
+---
 
-**Montagem FUSE Segura:** Gerencia o processo `rclone mount` em background, capturando sinais do sistema operacional (SIGINT/SIGTERM) para garantir a desmontagem limpa. Conta com trava de segurança crítica no desinstalador (`uninstall.sh`) para impedir a remoção forçada do diretório caso o FUSE ainda esteja acoplado, evitando corromper dados na nuvem.
-**Painel de Configurações Dinâmico:** Personalização de parâmetros de desempenho através de um arquivo de configuração local (`~/.config/ducksdrive/config.json`), permitindo ao usuário ajustar limites de largura de banda (`--bwlimit`), cache VFS (`--vfs-cache-max-size`), transferências paralelas (`--transfers`) e inicialização automática sem mexer no código-fonte.
-**Integração Nativa com File Managers:** Cria e remove atalhos dinamicamente no painel lateral dos gerenciadores de arquivos mais populares (Dolphin, Nautilus, Thunar, Nemo).
-**System Tray Inteligente:** Ícone na bandeja do sistema com telemetria em tempo real via API RC (MB/s, ETA e status), além de menus de contexto para acesso rápido e painel de preferências.
-**Auto-Mount e First-Run:** Abre a tela de configuração via OAuth automaticamente na primeira execução e monta a nuvem principal de forma silenciosa nas execuções seguintes.
+## 🚀 Principais Funcionalidades
 
-## Casos de Uso e Limitações Técnicas
+1. **Painel Flutuante de Status (Estilo Google Drive Nativo)**:
+   * Ao clicar no ícone da bandeja, uma janela flutuante exibe métricas em tempo real.
+   * **Gráfico de Velocidade**: Linha do tempo com histórico de picos de upload/download renderizada via `QPainter`.
+   * **Progresso e ETA**: Barra de progresso do arquivo atual, velocidade em MB/s e tempo estimado restante formatado em `HH:MM:SS`.
+   * **Disparo Automático**: Abre sozinho quando uma transferência (upload ou download) é iniciada.
 
-O aplicativo utiliza o FUSE com a flag `--vfs-cache-mode full` por padrão para garantir estabilidade e segurança na edição de arquivos. Compreenda onde isso brilha e onde falha:
+2. **Painel de Configurações Amigável (`~/.config/ducksdrive/config.json`)**:
+   * **Limite de Banda (`--bwlimit`)**: Defina tetos de velocidade (ex: `10M` ou `off`) para evitar saturar a rede ou travar jogos online.
+   * **Cache VFS Máximo (`--vfs-cache-max-size`)**: Controle o espaço no SSD reservado para arquivos temporários (ex: `2G`).
+   * **Transferências Paralelas (`--transfers`)**: Ajuste quantos arquivos são sincronizados simultaneamente (ex: `4`).
+   * **Início com o Sistema (Autostart)**: Ative/desative a inicialização automática direto pelo menu.
 
-✅ **Cold Storage:** Excelente para arquivamento de instaladores de jogos, ISOs e backups pesados.
-✅ **Sincronização de Saves:** Funciona perfeitamente criando links simbólicos dos seus *saves* locais para a pasta montada.
-✅ **Emulação (Retro Gaming):** ROMs leves (SNES, PS1, GBA) carregam rapidamente para a RAM e rodam sem problemas.
-❌ **Jogos Nativos Pesados (Steam/Proton/AAA):** Não tente instalar e rodar jogos modernos direto da nuvem. O VFS Cache vai baixar os arquivos para o seu SSD local enquanto você joga e a latência causará *stuttering* severo ou travamentos no Proton.
+3. **Ciclo de Vida FUSE Robusto e Seguro**:
+   * **Polling de Montagem**: Verificação ativa (até 10s) para garantir que o drive foi montado corretamente sem travar.
+   * **Monitoramento de Saúde (`QTimer`)**: Detecta quedas inesperadas do processo FUSE em background e atualiza o estado do app.
+   * **Flush Seguro de Cache**: Timeout estendido de 10 segundos no encerramento para garantir gravação íntegra na nuvem.
 
-## Pré-requisitos
+4. **Integração Nativa com Gerenciadores de Arquivos**:
+   * **KDE (Dolphin) & GTK (Nautilus/Thunar/Nemo)**: Inserção automática de atalhos na barra lateral.
+   * **Backup Automático**: Cria uma cópia de segurança (`user-places.xbel.bak`) antes de modificar o arquivo de favoritos do KDE.
+   * **Branding Dinâmico**: O ponto de montagem e os marcadores utilizam nomes dinâmicos baseados na nuvem conectada (ex: `~/DucksDrive_meu_drive`).
 
-`rclone` (versão recente compatível com `rclone config dump`)
-`fuse3`
-`python3` e `python3-venv`
-git`
+5. **Engenharia e Confiabilidade**:
+   * **Instância Única (`QSharedMemory`)**: Impede execuções duplicadas e conflitos na porta RC.
+   * **Logs em Disco (`RotatingFileHandler`)**: Gravação automática de eventos em `~/.local/share/ducksdrive/ducksdrive.log` (até 5MB, com rotação).
+   * **Desinstalação Segura (`uninstall.sh`)**: Validação estrita com `mountpoint -q` que impede a exclusão do diretório se o drive ainda estiver montado, evitando perda de dados na nuvem.
 
-## Instalação
+---
 
-Abra o seu terminal e execute os comandos abaixo. O script cuidará de criar o ambiente virtual, instalar as dependências Python e registrar os atalhos no menu do sistema[cite: 2].
+## 📦 Como Instalar
+
+Certifique-se de estar na pasta raiz do repositório clonado e execute o instalador automatizado:
 
 ```bash
 git clone https://github.com/Patopatetico2-lab/ducksdrive.git
@@ -36,12 +45,25 @@ cd ducksdrive
 chmod +x install.sh
 ./install.sh
 ```
-## Como Usar
-Após a instalação, busque por Rclone Drive GUI no menu de aplicativos do seu sistema.
-Se for o seu primeiro acesso, a tela de configuração saltará automaticamente pedindo os dados da nuvem. Caso contrário, o aplicativo iniciará discretamente na bandeja do sistema (perto do relógio) e fará a montagem da sua nuvem.
 
-## Desinstalação
-Para remover completamente o aplicativo, interromper os processos e limpar os atalhos do sistema, execute:
-```bash 
+O script detecta automaticamente a sua distribuição (Debian/Ubuntu via `apt` ou Arch Linux via `pacman`), instala as dependências necessárias (`rclone`, `fuse3`), configura o ambiente virtual Python (`venv`), instala o `PySide6` e registra o atalho e o ícone no seu sistema.
+
+---
+
+## 🛠️ Como Desinstalar
+
+Para remover o aplicativo e todos os seus componentes de forma limpa e segura:
+
+```bash
 pkill -f "python3.*main.py"
 ./uninstall.sh
+```
+
+---
+
+## ⚙️ Requisitos do Sistema
+
+* **Linux** com ambiente gráfico (X11 ou Wayland).
+* **Python 3.8+** com suporte a `venv`.
+* **Rclone** (instalado automaticamente pelo script).
+* **FUSE3** (`fuse3`).
