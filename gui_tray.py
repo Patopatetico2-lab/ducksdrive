@@ -11,8 +11,8 @@ import shutil
 import subprocess
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
+from PySide6.QtGui import QAction, QIcon, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -34,6 +34,7 @@ from rclone_config import (
 )
 from rclone_daemon import RcloneDaemon
 from rclone_stats import StatsData
+from rclone_settings import load_config, save_config
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
 
@@ -153,9 +154,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._menu.addAction(self.action_new)
         
         # Start with system autostart toggle
-        autostart_file = os.path.expanduser("~/.config/autostart/ducksdrive.desktop")
+        cfg = load_config()
         self.action_autostart = QAction("Start with system", self, checkable=True)
-        self.action_autostart.setChecked(os.path.exists(autostart_file))
+        self.action_autostart.setChecked(bool(cfg.get("autostart", True)))
         self.action_autostart.triggered.connect(self._toggle_autostart)
         self._menu.addAction(self.action_autostart)
 
@@ -177,40 +178,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog.exec()
 
     def _toggle_autostart(self, checked: bool) -> None:
-        """Enables or disables system autostart by managing ~/.config/autostart/ducksdrive.desktop."""
-        autostart_dir = os.path.expanduser("~/.config/autostart")
-        autostart_file = os.path.join(autostart_dir, "ducksdrive.desktop")
-        
-        if checked:
-            os.makedirs(autostart_dir, exist_ok=True)
-            bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
-            if not os.path.exists(bin_path):
-                bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
-            icon_path = os.path.expanduser("~/.local/share/ducksdrive/icon.svg")
-            
-            content = f"""[Desktop Entry]
-Name=DucksDrive
-Comment=Manage cloud drives with Rclone
-Exec={bin_path}
-Icon={icon_path}
-Terminal=false
-Type=Application
-Categories=Network;Utility;
-StartupNotify=true
-"""
-            try:
-                with open(autostart_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-                logger.info("Enabled system autostart.")
-            except Exception as e:
-                logger.error("Failed to enable autostart: %s", e)
-        else:
-            if os.path.exists(autostart_file):
-                try:
-                    os.remove(autostart_file)
-                    logger.info("Disabled system autostart.")
-                except Exception as e:
-                    logger.error("Failed to disable autostart: %s", e)
+        """Enables or disables system autostart via rclone_settings."""
+        config = load_config()
+        config["autostart"] = checked
+        save_config(config)
 
     @Slot(str)
     def _on_state_changed(self, state: str) -> None:
@@ -285,13 +256,13 @@ StartupNotify=true
         self.request_exit.emit()
 
     def _open_folder(self) -> None:
-        """Opens the mount point in the system file manager using xdg-open."""
+        """Opens the mount point in the system file manager using QDesktopServices."""
         path = self.daemon.mount_point
         if os.path.exists(path):
             try:
-                subprocess.Popen(["xdg-open", path])
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             except Exception as e:
-                logger.error("Failed to open folder with xdg-open: %s", e)
+                logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
             QMessageBox.warning(None, "Folder Missing", f"The directory {path} does not exist.")
 
@@ -351,5 +322,6 @@ StartupNotify=true
                 # Add a 1-second QTimer delay to ensure rclone config file flush completes before mounting
                 QTimer.singleShot(1000, lambda: self.daemon.start(remote_name))
         else:
+            self._pending_remote_name = None
             if "cancelled" not in message.lower():
                 QMessageBox.critical(None, "Configuration Failed", message)

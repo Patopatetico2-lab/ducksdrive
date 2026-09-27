@@ -16,36 +16,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
+from PySide6.QtCore import QObject, Signal, QTimer
+
 logger = logging.getLogger(__name__)
 
-# Fallback-safe PySide6 imports
-try:
-    from PySide6.QtCore import QObject, Signal, QTimer
-except ImportError:  # pragma: no cover
-    QObject = object  # type: ignore
-
-    def Signal(*args: Any) -> Any:  # type: ignore
-        """Dummy signal placeholder if PySide6 is not yet installed."""
-        class _Signal:
-            def emit(self, *a: Any, **kw: Any) -> None:
-                pass
-
-            def connect(self, slot: Any) -> None:
-                pass
-        return _Signal()
-
-    class QTimer:  # type: ignore
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-        def setInterval(self, ms: int) -> None:
-            pass
-        def start(self) -> None:
-            pass
-        def stop(self) -> None:
-            pass
-
-
-DEFAULT_MOUNT_POINT = os.path.expanduser("~/GoogleDrive")
+DEFAULT_MOUNT_POINT = os.path.expanduser("~/CloudDrives")
 DEFAULT_RC_HOST = "127.0.0.1"
 DEFAULT_RC_PORT = 5572
 DEFAULT_VFS_CACHE_MODE = "full"
@@ -247,6 +222,10 @@ class RcloneDaemon(QObject):
             self.mount_error.emit(err)
             self._set_state("error")
             return False
+
+        # Set dynamic mount point based on remote: ~/CloudDrives/{remote_name}
+        clean_remote_name = remote_name.rstrip(":")
+        self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_remote_name}"))
 
         # Prepare target mount folder
         try:

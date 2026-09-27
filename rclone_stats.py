@@ -15,25 +15,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from PySide6.QtCore import QThread, Signal
+
 from rclone_daemon import RCCredentials
 
 logger = logging.getLogger(__name__)
-
-# Fallback-safe PySide6 imports
-try:
-    from PySide6.QtCore import QThread, Signal
-except ImportError:  # pragma: no cover
-    QThread = object  # type: ignore
-
-    def Signal(*args: Any) -> Any:  # type: ignore
-        """Dummy signal placeholder if PySide6 is not yet installed."""
-        class _Signal:
-            def emit(self, *a: Any, **kw: Any) -> None:
-                pass
-
-            def connect(self, slot: Any) -> None:
-                pass
-        return _Signal()
 
 
 @dataclass

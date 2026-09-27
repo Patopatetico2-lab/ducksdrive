@@ -6,8 +6,6 @@ for bandwidth limit, cache size, parallel transfers, and autostart.
 """
 
 import logging
-import os
-import shutil
 from typing import Optional
 
 from PySide6.QtCore import Qt
@@ -134,10 +132,27 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
 
     def _save_and_accept(self) -> None:
-        """Validates inputs, saves to config file, updates autostart desktop file, and closes."""
+        """Validates inputs, saves to config file, and closes."""
         bwlimit = self.bwlimit_input.text().strip() or "off"
         cache_size = self.cache_size_input.text().strip() or "2G"
         
+        # Validate cache size warning if >= 50G
+        if "g" in cache_size.lower():
+            try:
+                num_part = int(''.join(filter(str.isdigit, cache_size)))
+                if num_part >= 50:
+                    res = QMessageBox.warning(
+                        self,
+                        "High Cache Size Warning",
+                        f"Warning: A VFS cache size of '{cache_size}' is very large and risks filling up your SSD!\n\nDo you want to proceed?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    if res != QMessageBox.Yes:
+                        return
+            except ValueError:
+                pass
+
         try:
             transfers = int(self.transfers_input.text().strip() or "4")
             if transfers < 1:
@@ -154,47 +169,9 @@ class SettingsDialog(QDialog):
         self.config["transfers"] = transfers
         self.config["autostart"] = autostart
 
-        # Save to disk
+        # Save to disk (which also synchronizes autostart via rclone_settings)
         if save_config(self.config):
-            # Synchronize system autostart state
-            self._sync_autostart(autostart)
             QMessageBox.information(self, "Settings Saved", "Preferences updated successfully.\nChanges will apply on next drive connection.")
             self.accept()
         else:
             QMessageBox.critical(self, "Error", "Failed to save configuration file.")
-
-    def _sync_autostart(self, enabled: bool) -> None:
-        """Creates or removes the autostart .desktop file."""
-        autostart_dir = os.path.expanduser("~/.config/autostart")
-        autostart_file = os.path.join(autostart_dir, "ducksdrive.desktop")
-        
-        if enabled:
-            os.makedirs(autostart_dir, exist_ok=True)
-            bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
-            if not os.path.exists(bin_path):
-                bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
-            icon_path = os.path.expanduser("~/.local/share/ducksdrive/icon.svg")
-            
-            content = f"""[Desktop Entry]
-Name=DucksDrive
-Comment=Manage cloud drives with Rclone
-Exec={bin_path}
-Icon={icon_path}
-Terminal=false
-Type=Application
-Categories=Network;Utility;
-StartupNotify=true
-"""
-            try:
-                with open(autostart_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-                logger.info("Synchronized autostart: Enabled.")
-            except Exception as e:
-                logger.error("Failed to enable autostart: %s", e)
-        else:
-            if os.path.exists(autostart_file):
-                try:
-                    os.remove(autostart_file)
-                    logger.info("Synchronized autostart: Disabled.")
-                except Exception as e:
-                    logger.error("Failed to disable autostart: %s", e)
