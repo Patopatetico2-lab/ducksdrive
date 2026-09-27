@@ -11,7 +11,6 @@ import logging
 import os
 import secrets
 import shutil
-import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Fallback-safe PySide6 imports
 try:
-    from PySide6.QtCore import QObject, Signal
+    from PySide6.QtCore import QObject, Signal, QTimer
 except ImportError:  # pragma: no cover
     QObject = object  # type: ignore
 
@@ -34,6 +33,16 @@ except ImportError:  # pragma: no cover
             def connect(self, slot: Any) -> None:
                 pass
         return _Signal()
+
+    class QTimer:  # type: ignore
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+        def setInterval(self, ms: int) -> None:
+            pass
+        def start(self) -> None:
+            pass
+        def stop(self) -> None:
+            pass
 
 
 DEFAULT_MOUNT_POINT = os.path.expanduser("~/GoogleDrive")
@@ -194,12 +203,27 @@ class RcloneDaemon(QObject):
         self.current_remote: Optional[str] = None
         self.state = "stopped"
 
+        # Active health monitoring timer for background FUSE process
+        self.health_timer = QTimer(self)
+        self.health_timer.setInterval(2000)
+        self.health_timer.timeout.connect(self._check_process_health)
+        self.health_timer.start()
+
         # Register exit handler for clean shutdown
         atexit.register(self.stop)
 
     def _set_state(self, new_state: str) -> None:
         self.state = new_state
         self.state_changed.emit(new_state)
+
+    def _check_process_health(self) -> None:
+        """Actively monitors if the rclone mount process died unexpectedly in background."""
+        if self.state == "mounted" and self.process is not None:
+            if self.process.poll() is not None:
+                logger.error("Rclone mount process died unexpectedly in background!")
+                self.mount_error.emit("Rclone mount process died unexpectedly.")
+                self._set_state("error")
+                self.stop()
 
     def start(self, remote_name: str, extra_args: Optional[List[str]] = None) -> bool:
         """
@@ -287,13 +311,27 @@ class RcloneDaemon(QObject):
                 text=True,
             )
 
-            # Wait briefly to detect immediate startup errors or successful mount
-            time.sleep(1.0)
-            if self.process.poll() is not None:
-                _, stderr = self.process.communicate()
-                err = f"Rclone mount exited immediately:\n{stderr.strip()}"
+            # Polling loop (up to 10 seconds, checking every 0.5s) for successful mount establishment
+            start_time = time.time()
+            mounted = False
+            while time.time() - start_time < 10.0:
+                if self.process.poll() is not None:
+                    _, stderr = self.process.communicate()
+                    err = f"Rclone mount exited during startup:\n{stderr.strip()}"
+                    logger.error(err)
+                    self.mount_error.emit(err)
+                    self._set_state("error")
+                    return False
+                if is_path_mounted(self.mount_point):
+                    mounted = True
+                    break
+                time.sleep(0.5)
+
+            if not mounted:
+                err = f"Rclone mount timed out after 10s for path '{self.mount_point}'."
                 logger.error(err)
                 self.mount_error.emit(err)
+                self.stop()
                 self._set_state("error")
                 return False
 
@@ -323,16 +361,16 @@ class RcloneDaemon(QObject):
         # 1. First attempt to unmount via FUSE tool
         unmounted = unmount_fuse_path(self.mount_point, lazy=False)
 
-        # 2. Terminate the subprocess if still alive
+        # 2. Terminate the subprocess with extended timeout (10s) for safe VFS cache flushing
         if self.process and self.process.poll() is None:
             try:
                 self.process.terminate()
                 try:
-                    self.process.wait(timeout=3)
+                    self.process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    logger.warning("Process did not terminate within 3s, sending SIGKILL...")
+                    logger.warning("Process did not terminate within 10s, sending SIGKILL...")
                     self.process.kill()
-                    self.process.wait(timeout=2)
+                    self.process.wait(timeout=3)
             except Exception as exc:
                 logger.warning("Error terminating rclone process: %s", exc)
 

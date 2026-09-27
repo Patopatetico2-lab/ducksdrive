@@ -2,15 +2,14 @@
 filemanager_integration.py - Desktop integration for file manager sidebars.
 
 Provides functions to inject and remove the virtual drive path from:
-1. KDE (Dolphin) sidebars via `~/.config/user-places.xbel` (XML).
+1. KDE (Dolphin) sidebars via `~/.config/user-places.xbel` (XML) with automatic .bak backup.
 2. GTK (GNOME/XFCE/Nautilus/Thunar) sidebars via `~/.config/gtk-3.0/bookmarks`.
 """
 
 import logging
 import os
-import re
+import shutil
 import xml.etree.ElementTree as ET
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,7 @@ logger = logging.getLogger(__name__)
 ET.register_namespace("", "http://www.freedesktop.org/standards/shared-mime-info")
 ET.register_namespace("kbel", "http://www.kde.org/standards/kbel/1.0")
 
-APP_NAME = "GoogleDrive (Rclone)"
+APP_NAME = "DucksDrive"
 GTK_BOOKMARKS_PATH = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
 KDE_PLACES_PATH = os.path.expanduser("~/.config/user-places.xbel")
 
@@ -83,7 +82,7 @@ def remove_gtk_bookmark(path: str) -> bool:
 
 def add_kde_place(path: str, label: str = APP_NAME) -> bool:
     """
-    Adds an entry to KDE's user-places.xbel.
+    Adds an entry to KDE's user-places.xbel (with automatic .bak backup).
     Injects a <bookmark> element with the appropriate metadata.
     """
     if not os.path.exists(KDE_PLACES_PATH):
@@ -92,6 +91,12 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
 
     path = os.path.abspath(os.path.expanduser(path))
     uri = f"file://{path}"
+
+    try:
+        # Create backup before modifying user-places.xbel
+        shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
+    except Exception as e:
+        logger.warning("Failed to create backup of user-places.xbel: %s", e)
 
     try:
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
@@ -132,6 +137,12 @@ def remove_kde_place(path: str) -> bool:
 
     path = os.path.abspath(os.path.expanduser(path))
     uri = f"file://{path}"
+
+    try:
+        # Create backup before modifying
+        shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
+    except Exception as e:
+        logger.warning("Failed to create backup of user-places.xbel: %s", e)
 
     try:
         tree = ET.parse(KDE_PLACES_PATH)

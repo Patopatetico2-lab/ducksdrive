@@ -7,14 +7,13 @@ context menus, status notifications, and dialogs for remote management.
 
 import logging
 import os
+import shutil
 import subprocess
-import webbrowser
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
-from PySide6.QtCore import QObject, QSize, Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QAction, QIcon, QPixmap, QCursor
+from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QFormLayout,
     QInputDialog,
@@ -25,8 +24,7 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
-    QComboBox,
-    QLabel
+    QComboBox
 )
 
 from rclone_config import (
@@ -58,7 +56,7 @@ def get_app_icon() -> QIcon:
 
 
 class NewRemoteDialog(QDialog):
-    """Dialog to gather details for creating a new rclone remote."""
+    """Dialog to gather details for creating a new rclone remote with duplicate validation."""
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Configure New Cloud")
@@ -82,6 +80,19 @@ class NewRemoteDialog(QDialog):
         self.btn_create = QPushButton("Start Browser Auth")
         self.btn_create.clicked.connect(self.accept)
         layout.addWidget(self.btn_create)
+
+    def accept(self) -> None:
+        name = self.name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Input Error", "Remote name cannot be empty.")
+            return
+        
+        existing_remotes = list_remote_names()
+        if name in existing_remotes:
+            QMessageBox.warning(self, "Duplicate Error", f"A remote named '{name}' already exists.")
+            return
+
+        super().accept()
         
     def get_data(self) -> tuple[str, str]:
         return self.name_input.text().strip(), self.type_combo.currentData()
@@ -140,11 +151,54 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self._menu.addAction(self.action_new)
         
+        # Start with system autostart toggle
+        autostart_file = os.path.expanduser("~/.config/autostart/ducksdrive.desktop")
+        self.action_autostart = QAction("Start with system", self, checkable=True)
+        self.action_autostart.setChecked(os.path.exists(autostart_file))
+        self.action_autostart.triggered.connect(self._toggle_autostart)
+        self._menu.addAction(self.action_autostart)
+        
         self._menu.addSeparator()
         
         self.action_exit = QAction("Quit", self)
-        self.action_exit.triggered.connect(self.request_exit.emit)
+        self.action_exit.triggered.connect(self._confirm_quit)
         self._menu.addAction(self.action_exit)
+
+    def _toggle_autostart(self, checked: bool) -> None:
+        """Enables or disables system autostart by managing ~/.config/autostart/ducksdrive.desktop."""
+        autostart_dir = os.path.expanduser("~/.config/autostart")
+        autostart_file = os.path.join(autostart_dir, "ducksdrive.desktop")
+        
+        if checked:
+            os.makedirs(autostart_dir, exist_ok=True)
+            bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
+            if not os.path.exists(bin_path):
+                bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
+            icon_path = os.path.expanduser("~/.local/share/ducksdrive/icon.svg")
+            
+            content = f"""[Desktop Entry]
+Name=DucksDrive
+Comment=Manage cloud drives with Rclone
+Exec={bin_path}
+Icon={icon_path}
+Terminal=false
+Type=Application
+Categories=Network;Utility;
+StartupNotify=true
+"""
+            try:
+                with open(autostart_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+                logger.info("Enabled system autostart.")
+            except Exception as e:
+                logger.error("Failed to enable autostart: %s", e)
+        else:
+            if os.path.exists(autostart_file):
+                try:
+                    os.remove(autostart_file)
+                    logger.info("Disabled system autostart.")
+                except Exception as e:
+                    logger.error("Failed to disable autostart: %s", e)
 
     @Slot(str)
     def _on_state_changed(self, state: str) -> None:
@@ -195,23 +249,37 @@ class RcloneTrayIcon(QSystemTrayIcon):
     @Slot(QSystemTrayIcon.ActivationReason)
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """
-        Mouse button activation handlers:
-        - Left-click (Trigger): Shows or toggles the floating status popup.
-        - Right-click (Context): Displays the native context menu.
+        Left-click (Trigger) toggles the floating status popup.
+        Right-click (Context) is handled natively by setContextMenu().
         """
         if reason == QSystemTrayIcon.Trigger:
             if self.status_popup.isVisible():
                 self.status_popup.close()
             else:
                 self.status_popup.show_near_cursor()
-        elif reason == QSystemTrayIcon.Context:
-            self._menu.popup(QCursor.pos())
+
+    def _confirm_quit(self) -> None:
+        """Confirms exit if active transfers are currently in progress."""
+        if self._has_active_transfer():
+            res = QMessageBox.warning(
+                None,
+                "Active Transfers",
+                "File transfers are currently in progress.\nAre you sure you want to quit and interrupt them?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if res != QMessageBox.Yes:
+                return
+        self.request_exit.emit()
 
     def _open_folder(self) -> None:
-        """Opens the mount point in the system file manager."""
+        """Opens the mount point in the system file manager using xdg-open."""
         path = self.daemon.mount_point
         if os.path.exists(path):
-            webbrowser.open(f"file://{path}")
+            try:
+                subprocess.Popen(["xdg-open", path])
+            except Exception as e:
+                logger.error("Failed to open folder with xdg-open: %s", e)
         else:
             QMessageBox.warning(None, "Folder Missing", f"The directory {path} does not exist.")
 

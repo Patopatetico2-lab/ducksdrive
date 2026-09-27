@@ -1,11 +1,12 @@
 """
-main.py - Entrypoint for Rclone Drive GUI.
+main.py - Entrypoint for DucksDrive.
 
 Orchestrates the application lifecycle:
-1. Validates rclone version (>= 1.73.5).
-2. Initializes the Daemon, Stats Poller, and Tray UI.
-3. Manages OS signals (SIGINT/SIGTERM) for graceful FUSE unmount.
-4. Handles file manager integration.
+1. Enforces single instance execution via QSharedMemory.
+2. Configures dual logging (StreamHandler + RotatingFileHandler).
+3. Validates system tray availability and rclone version (>= 1.73.5).
+4. Initializes the Daemon, Stats Poller, and Tray UI.
+5. Manages OS signals (SIGINT/SIGTERM) for graceful FUSE unmount.
 """
 
 import logging
@@ -14,10 +15,11 @@ import re
 import signal
 import subprocess
 import sys
+from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Slot, QTimer
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QObject, Slot, QTimer, QSharedMemory
+from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from rclone_config import list_remote_names
 from rclone_daemon import RcloneDaemon
@@ -25,13 +27,20 @@ from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
 from gui_tray import RcloneTrayIcon
 
-# Configure logging
+# Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
+LOG_DIR = os.path.expanduser("~/.local/share/ducksdrive")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "ducksdrive.log")
+
+file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3)
+file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout), file_handler]
 )
-logger = logging.getLogger("rclone_gui")
+logger = logging.getLogger("ducksdrive")
 
 REQUIRED_RCLONE_VERSION = (1, 73, 5)
 
@@ -43,7 +52,6 @@ def get_rclone_version() -> Optional[tuple[int, int, int]]:
     """
     try:
         result = subprocess.run(["rclone", "version"], capture_output=True, text=True, check=True)
-        # Matches 'rclone v1.73.5', 'rclone 1.73.5-beta', 'rclone v1.74.0-DEV', etc.
         match = re.search(r"rclone v?(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9.-]+)?", result.stdout)
         if match:
             return tuple(map(int, match.groups()))
@@ -130,7 +138,26 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
-    # 1. Version Check
+    # 1. Enforce Single Instance via QSharedMemory
+    shared_memory = QSharedMemory("DucksDrive_SingleInstance_Key")
+    if not shared_memory.create(1):
+        QMessageBox.critical(
+            None,
+            "Already Running",
+            "An instance of DucksDrive is already running in the system tray."
+        )
+        sys.exit(1)
+
+    # 2. System Tray Availability Check
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        QMessageBox.critical(
+            None,
+            "System Tray Not Found",
+            "The system tray is not available. Please ensure a desktop environment is running."
+        )
+        sys.exit(1)
+
+    # 3. Version Check
     version = get_rclone_version()
     if not version:
         QMessageBox.critical(None, "Rclone Not Found", 
@@ -143,11 +170,11 @@ def main() -> None:
         QMessageBox.warning(None, "Rclone Outdated", 
                             f"Detected Rclone v{v_str}.\nVersion v{req_str} or higher is recommended.")
 
-    # 2. Initialize Controller
+    # 4. Initialize Controller
     controller = RcloneAppController(app)
     controller.run()
 
-    # 3. Execute Loop
+    # 5. Execute Loop
     sys.exit(app.exec())
 
 

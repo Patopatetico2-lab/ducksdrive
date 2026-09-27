@@ -63,7 +63,7 @@ def get_rclone_path() -> str:
 
 def list_remotes() -> Dict[str, Dict[str, Any]]:
     """
-    Retrieves configured remotes using `rclone config dumped`.
+    Retrieves configured remotes using `rclone config dump`.
 
     Returns:
         Dict[str, Dict[str, Any]]: Dictionary mapping remote names to their configuration.
@@ -71,7 +71,7 @@ def list_remotes() -> Dict[str, Dict[str, Any]]:
     rclone_bin = get_rclone_path()
     try:
         result = subprocess.run(
-            [rclone_bin, "config", "dumped"],
+            [rclone_bin, "config", "dump"],
             capture_output=True,
             text=True,
             check=True,
