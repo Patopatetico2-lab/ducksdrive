@@ -14,7 +14,7 @@ echo "=== Uninstalling $APP_NAME ==="
 
 # 1. Stop any running instances of the app
 echo "Stopping running application instances..."
-pkill -f "main.py" 2>/dev/null || true
+pkill -f "ducksdrive/main.py" 2>/dev/null || true
 pkill -f "$APP_NAME" 2>/dev/null || true
 
 # 2. Unmount virtual drive if active

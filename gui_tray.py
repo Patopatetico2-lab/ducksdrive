@@ -104,7 +104,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         
         self._menu = QMenu()
         self._setup_menu()
-        # Do not use setContextMenu so we can manually handle Left vs Right click events in activated()
+        self.setContextMenu(self._menu)
         
         self.daemon.state_changed.connect(self._on_state_changed)
         self.daemon.mount_error.connect(self._on_mount_error)
@@ -192,27 +192,20 @@ class RcloneTrayIcon(QSystemTrayIcon):
             return False
         return self.latest_stats.transfers_count > 0 or len(self.latest_stats.active_transfers) > 0
 
-    @Slot(int)
+    @Slot(QSystemTrayIcon.ActivationReason)
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """
-        Inverted mouse button handlers:
-        - Left-click (Trigger): Opens Context Menu.
-        - Right-click (Context): Opens Status Popup ONLY during active file transfers;
-          falls back to Context Menu if idle/no transfer.
+        Mouse button activation handlers:
+        - Left-click (Trigger): Shows or toggles the floating status popup.
+        - Right-click (Context): Displays the native context menu.
         """
         if reason == QSystemTrayIcon.Trigger:
-            # Left-click -> Context Menu
-            self._menu.popup(QCursor.pos())
-        elif reason == QSystemTrayIcon.Context:
-            # Right-click -> Status Popup ONLY if actively transferring files
-            if self._has_active_transfer():
-                if self.status_popup.isVisible():
-                    self.status_popup.close()
-                else:
-                    self.status_popup.show_near_cursor()
+            if self.status_popup.isVisible():
+                self.status_popup.close()
             else:
-                # Fallback to Context Menu when idle
-                self._menu.popup(QCursor.pos())
+                self.status_popup.show_near_cursor()
+        elif reason == QSystemTrayIcon.Context:
+            self._menu.popup(QCursor.pos())
 
     def _open_folder(self) -> None:
         """Opens the mount point in the system file manager."""
