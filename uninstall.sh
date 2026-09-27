@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# uninstall.sh - Complete uninstallation script for rclone-drive-gui
+# uninstall.sh - Complete uninstallation script for ducksdrive
 
 set -e
 
-APP_NAME="rclone-drive-gui"
+APP_NAME="ducksdrive"
 INSTALL_DIR="$HOME/.local/share/$APP_NAME"
 BIN_FILE="$HOME/.local/bin/$APP_NAME"
 DESKTOP_FILE="$HOME/.local/share/applications/$APP_NAME.desktop"

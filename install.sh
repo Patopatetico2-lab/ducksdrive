@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# install.sh - Installation script for rclone-drive-gui
+# install.sh - Installation script for ducksdrive
 # Supports Debian/Ubuntu (apt) and Arch Linux (pacman)
 
 set -e
 
-APP_NAME="rclone-drive-gui"
+APP_NAME="ducksdrive"
 INSTALL_DIR="$HOME/.local/share/$APP_NAME"
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_FILE="$HOME/.local/share/applications/$APP_NAME.desktop"
@@ -15,7 +15,7 @@ echo "=== Installing $APP_NAME ==="
 # Verify that script is run from inside the repository directory containing main.py
 if [ ! -f "main.py" ]; then
     echo "Error: 'main.py' not found in the current directory."
-    echo "Please run this script from inside the cloned rclone-drive-gui directory."
+    echo "Please run this script from inside the cloned ducksdrive directory."
     exit 1
 fi
 
@@ -31,10 +31,10 @@ else
     echo "Unsupported distribution. Please ensure 'rclone', 'fuse3', and 'python3' are installed manually."
 fi
 
-# 2. Prepare Installation Directory
+# 2. Prepare Installation Directory and Copy Assets
 echo "Preparing installation directory at $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
-cp *.py "$INSTALL_DIR/"
+cp *.py icon.svg "$INSTALL_DIR/"
 
 # 3. Setup Python Virtual Environment
 echo "Setting up Python virtual environment..."
@@ -57,15 +57,15 @@ python3 "$INSTALL_DIR/main.py" "\$@"
 EOF
 chmod +x "$BIN_DIR/$APP_NAME"
 
-# 5. Create Desktop Entry
+# 5. Create Desktop Entry with Absolute Icon Path
 echo "Creating desktop entry..."
 mkdir -p "$(dirname "$DESKTOP_FILE")"
 cat <<EOF > "$DESKTOP_FILE"
 [Desktop Entry]
-Name=Rclone Drive GUI
+Name=DucksDrive
 Comment=Manage cloud drives with Rclone
 Exec=$BIN_DIR/$APP_NAME
-Icon=network-cloud
+Icon=$INSTALL_DIR/icon.svg
 Terminal=false
 Type=Application
 Categories=Network;Utility;
@@ -73,5 +73,5 @@ StartupNotify=true
 EOF
 
 echo "=== Installation Complete ==="
-echo "You can now run the app by typing '$APP_NAME' in your terminal or searching for 'Rclone Drive GUI' in your application menu."
+echo "You can now run the app by typing '$APP_NAME' in your terminal or searching for 'DucksDrive' in your application menu."
 echo "Note: If '$BIN_DIR' is not in your PATH, add 'export PATH=\$PATH:$BIN_DIR' to your .bashrc or .zshrc."

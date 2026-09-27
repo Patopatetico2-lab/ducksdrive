@@ -39,15 +39,16 @@ from rclone_stats import StatsData
 
 logger = logging.getLogger(__name__)
 
-APP_NAME = "Rclone Drive GUI"
+APP_NAME = "DucksDrive"
 
 
 def get_app_icon() -> QIcon:
     """
-    Returns the application icon by loading the physical icon.svg file,
-    falling back to QIcon.fromTheme if not available.
+    Returns the application icon by loading the physical icon.svg file
+    using an absolute path based on the script location.
     """
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg")
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(current_dir, "icon.svg")
     if os.path.exists(icon_path):
         icon = QIcon(icon_path)
         if not icon.isNull():
@@ -94,6 +95,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         super().__init__(get_app_icon(), parent)
         self.daemon = daemon
         self.setToolTip(f"{APP_NAME}: Idle")
+        self._pending_remote_name: Optional[str] = None
         
         self._menu = QMenu()
         self._setup_menu()
@@ -215,6 +217,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 QMessageBox.warning(None, "Input Error", "Remote name cannot be empty.")
                 return
 
+            self._pending_remote_name = name
             self._creation_thread = RemoteCreationThread(name, rtype)
             
             # Show a progress message since this can take time
@@ -230,8 +233,15 @@ class RcloneTrayIcon(QSystemTrayIcon):
             progress.exec()
 
     def _on_creation_finished(self, success: bool, message: str) -> None:
+        """
+        Handles remote creation completion. If successful, automatically initiates
+        silent background FUSE mount without opening file manager windows.
+        """
         if success:
-            QMessageBox.information(None, "Success", message)
+            logger.info("Remote successfully configured. Starting silent mount for '%s'", self._pending_remote_name)
+            if self._pending_remote_name:
+                self.daemon.start(self._pending_remote_name)
+                self._pending_remote_name = None
         else:
             if "cancelled" not in message.lower():
                 QMessageBox.critical(None, "Configuration Failed", message)
