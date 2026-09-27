@@ -11,8 +11,8 @@ import subprocess
 import webbrowser
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QObject, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtCore import QObject, QSize, Qt, Signal, Slot, QTimer
+from PySide6.QtGui import QAction, QIcon, QPixmap, QCursor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -97,13 +97,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.daemon = daemon
         self.setToolTip(f"{APP_NAME}: Idle")
         self._pending_remote_name: Optional[str] = None
+        self.latest_stats: Optional[StatsData] = None
         
         # Initialize floating status popup panel
         self.status_popup = StatusPopup(daemon)
         
         self._menu = QMenu()
         self._setup_menu()
-        self.setContextMenu(self._menu)
+        # Do not use setContextMenu so we can manually handle Left vs Right click events in activated()
         
         self.daemon.state_changed.connect(self._on_state_changed)
         self.daemon.mount_error.connect(self._on_mount_error)
@@ -174,6 +175,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
         """Updates the tray tooltip, menu status, and floating status popup with live telemetry."""
+        self.latest_stats = stats
         if stats.is_online:
             self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
             self.setToolTip(f"{APP_NAME}: {stats.status_text}")
@@ -184,13 +186,33 @@ class RcloneTrayIcon(QSystemTrayIcon):
         # Forward telemetry to floating status popup
         self.status_popup.update_stats(stats)
 
+    def _has_active_transfer(self) -> bool:
+        """Checks if there is any active file transfer in progress."""
+        if not self.latest_stats or not self.latest_stats.is_online:
+            return False
+        return self.latest_stats.transfers_count > 0 or len(self.latest_stats.active_transfers) > 0
+
+    @Slot(int)
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Left-click on tray icon toggles/shows the floating status panel."""
+        """
+        Inverted mouse button handlers:
+        - Left-click (Trigger): Opens Context Menu.
+        - Right-click (Context): Opens Status Popup ONLY during active file transfers;
+          falls back to Context Menu if idle/no transfer.
+        """
         if reason == QSystemTrayIcon.Trigger:
-            if self.status_popup.isVisible():
-                self.status_popup.close()
+            # Left-click -> Context Menu
+            self._menu.popup(QCursor.pos())
+        elif reason == QSystemTrayIcon.Context:
+            # Right-click -> Status Popup ONLY if actively transferring files
+            if self._has_active_transfer():
+                if self.status_popup.isVisible():
+                    self.status_popup.close()
+                else:
+                    self.status_popup.show_near_cursor()
             else:
-                self.status_popup.show_near_cursor()
+                # Fallback to Context Menu when idle
+                self._menu.popup(QCursor.pos())
 
     def _open_folder(self) -> None:
         """Opens the mount point in the system file manager."""
@@ -246,13 +268,15 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _on_creation_finished(self, success: bool, message: str) -> None:
         """
         Handles remote creation completion. If successful, automatically initiates
-        silent background FUSE mount without opening file manager windows.
+        silent background FUSE mount after a 1-second delay to ensure config file flush.
         """
         if success:
             logger.info("Remote successfully configured. Starting silent mount for '%s'", self._pending_remote_name)
             if self._pending_remote_name:
-                self.daemon.start(self._pending_remote_name)
+                remote_name = self._pending_remote_name
                 self._pending_remote_name = None
+                # Add a 1-second QTimer delay to ensure rclone config file flush completes before mounting
+                QTimer.singleShot(1000, lambda: self.daemon.start(remote_name))
         else:
             if "cancelled" not in message.lower():
                 QMessageBox.critical(None, "Configuration Failed", message)

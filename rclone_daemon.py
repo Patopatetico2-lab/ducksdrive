@@ -245,7 +245,7 @@ class RcloneDaemon(QObject):
 
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
 
-        # Build mandatory rclone mount arguments
+        # Build mandatory rclone mount arguments with immediate write-back delay (0s)
         cmd = [
             rclone_bin,
             "mount",
@@ -255,6 +255,8 @@ class RcloneDaemon(QObject):
             DEFAULT_VFS_CACHE_MODE,
             "--vfs-cache-max-size",
             DEFAULT_VFS_CACHE_MAX_SIZE,
+            "--vfs-write-back-delay",
+            "0s",
             "--rc",
             "--rc-addr",
             f"{self.rc_credentials.host}:{self.rc_credentials.port}",
