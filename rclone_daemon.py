@@ -269,20 +269,30 @@ class RcloneDaemon(QObject):
 
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
 
-        # Build mandatory rclone mount arguments with VFS cache and network limiters
+        # Load dynamic configuration preferences
+        from rclone_settings import load_config
+        cfg = load_config()
+        bwlimit = str(cfg.get("bwlimit", "off"))
+        cache_size = str(cfg.get("vfs_cache_max_size", "2G"))
+        transfers = str(cfg.get("transfers", 4))
+        vfs_cache_mode = str(cfg.get("vfs_cache_mode", "full"))
+
+        # Build mandatory rclone mount arguments with user settings
         cmd = [
             rclone_bin,
             "mount",
             formatted_remote,
             self.mount_point,
             "--vfs-cache-mode",
-            DEFAULT_VFS_CACHE_MODE,
+            vfs_cache_mode,
             "--vfs-cache-max-size",
-            DEFAULT_VFS_CACHE_MAX_SIZE,
-            "--bwlimit",
-            "25M",
+            cache_size,
+        ]
+        if bwlimit.lower() != "off":
+            cmd.extend(["--bwlimit", bwlimit])
+        cmd.extend([
             "--transfers",
-            "3",
+            transfers,
             "--rc",
             "--rc-addr",
             f"{self.rc_credentials.host}:{self.rc_credentials.port}",
@@ -290,7 +300,7 @@ class RcloneDaemon(QObject):
             self.rc_credentials.user,
             "--rc-pass",
             self.rc_credentials.password,
-        ]
+        ])
 
         if extra_args:
             cmd.extend(extra_args)

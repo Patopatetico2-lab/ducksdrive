@@ -35,6 +35,7 @@ from rclone_config import (
 from rclone_daemon import RcloneDaemon
 from rclone_stats import StatsData
 from status_popup import StatusPopup
+from settings_dialog import SettingsDialog
 
 logger = logging.getLogger(__name__)
 
@@ -157,12 +158,23 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_autostart.setChecked(os.path.exists(autostart_file))
         self.action_autostart.triggered.connect(self._toggle_autostart)
         self._menu.addAction(self.action_autostart)
+
+        # Settings dialog action
+        self.action_settings = QAction("Settings...", self)
+        self.action_settings.triggered.connect(self._show_settings_dialog)
+        self._menu.addAction(self.action_settings)
         
         self._menu.addSeparator()
         
         self.action_exit = QAction("Quit", self)
         self.action_exit.triggered.connect(self._confirm_quit)
         self._menu.addAction(self.action_exit)
+
+    def _show_settings_dialog(self) -> None:
+        """Opens the settings configuration dialog."""
+        dialog = SettingsDialog()
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+        dialog.exec()
 
     def _toggle_autostart(self, checked: bool) -> None:
         """Enables or disables system autostart by managing ~/.config/autostart/ducksdrive.desktop."""
