@@ -115,7 +115,7 @@ class SpeedChartWidget(QWidget):
             pen.setCapStyle(Qt.RoundCap)
             pen.setJoinStyle(Qt.RoundJoin)
             painter.setPen(pen)
-            painter.setBrush(Qt.NoPen)
+            painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
 
 

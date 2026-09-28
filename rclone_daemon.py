@@ -266,6 +266,10 @@ class RcloneDaemon(QObject):
             vfs_cache_mode,
             "--vfs-cache-max-size",
             cache_size,
+            "--vfs-read-chunk-size",
+            "64M",
+            "--vfs-read-chunk-size-limit",
+            "off",
         ]
         if bwlimit.lower() != "off":
             cmd.extend(["--bwlimit", bwlimit])

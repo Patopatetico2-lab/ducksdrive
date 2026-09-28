@@ -136,6 +136,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_open = QAction("Open Drive Folder", self)
         self.action_open.triggered.connect(self._open_folder)
         self._menu.addAction(self.action_open)
+
+        self.action_panel = QAction("Painel de Transferências", self)
+        self.action_panel.triggered.connect(self._show_transfer_panel)
+        self._menu.addAction(self.action_panel)
         
         self.action_mount = QAction("Connect Drive...", self)
         self.action_mount.triggered.connect(self._show_mount_selector)
@@ -214,11 +218,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     t = stats.active_transfers[0]
                     name = t.get("name", "file")
                     pct = int(t.get("percentage", 0))
-                    text = f"Syncing: {name} ({pct}%) • {stats.speed_str}"
+                    text = f"A enviar: {name} ({pct}%) • {stats.speed_str} • ETA: {stats.eta_str}"
                     self.action_status.setText(text)
                     self.setToolTip(f"{APP_NAME}: {text}")
                 else:
-                    self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
+                    text = f"Speed: {stats.speed_str} • ETA: {stats.eta_str}"
+                    self.action_status.setText(text)
                     self.setToolTip(f"{APP_NAME}: {stats.status_text}")
             else:
                 if self._was_syncing:
@@ -229,7 +234,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
                         QSystemTrayIcon.Information,
                         4000
                     )
-                self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
+                text = f"Speed: {stats.speed_str} • ETA: {stats.eta_str}"
+                self.action_status.setText(text)
                 self.setToolTip(f"{APP_NAME}: {stats.status_text}")
         else:
             self._was_syncing = False
@@ -244,6 +250,13 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if not self.latest_stats or not self.latest_stats.is_online:
             return False
         return self.latest_stats.transfers_count > 0 or len(self.latest_stats.active_transfers) > 0
+
+    def _show_transfer_panel(self) -> None:
+        """Shows or toggles the floating status popup panel."""
+        if self.status_popup.isVisible():
+            self.status_popup.close()
+        else:
+            self.status_popup.show_near_cursor()
 
     @Slot(QSystemTrayIcon.ActivationReason)
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
