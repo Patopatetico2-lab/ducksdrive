@@ -212,8 +212,8 @@ class RcloneDaemon(QObject):
             bool: True if mount started successfully, False otherwise.
         """
         if self.is_running():
-            logger.warning("Mount daemon is already running.")
-            return True
+            logger.info("Another mount is active. Stopping current mount before starting '%s'", remote_name)
+            self.stop()
 
         rclone_bin = shutil.which("rclone")
         if not rclone_bin:
@@ -299,40 +299,49 @@ class RcloneDaemon(QObject):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-
-            # Polling loop (up to 10 seconds, checking every 0.5s) for successful mount establishment
-            start_time = time.time()
-            mounted = False
-            while time.time() - start_time < 10.0:
-                if self.process.poll() is not None:
-                    _, stderr = self.process.communicate()
-                    err = f"Rclone mount exited during startup:\n{stderr.strip()}"
-                    logger.error(err)
-                    self.mount_error.emit(err)
-                    self._set_state("error")
-                    return False
-                if is_path_mounted(self.mount_point):
-                    mounted = True
-                    break
-                time.sleep(0.5)
-
-            if not mounted:
-                err = f"Rclone mount timed out after 10s for path '{self.mount_point}'."
-                logger.error(err)
-                self.mount_error.emit(err)
-                self.stop()
-                self._set_state("error")
-                return False
-
-            self._set_state("mounted")
-            return True
-
         except Exception as exc:
             err = f"Failed to spawn rclone mount: {exc}"
             logger.error(err)
             self.mount_error.emit(err)
             self._set_state("error")
             return False
+
+        # Asynchronous non-blocking startup check using QTimer (avoids freezing GUI)
+        self._startup_start_time = time.time()
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setInterval(500)
+
+        def check_startup() -> None:
+            if not self.process or self.state != "starting":
+                self._startup_timer.stop()
+                return
+
+            if self.process.poll() is not None:
+                self._startup_timer.stop()
+                _, stderr = self.process.communicate()
+                err = f"Rclone mount exited during startup:\n{stderr.strip()}"
+                logger.error(err)
+                self.mount_error.emit(err)
+                self._set_state("error")
+                return
+
+            if is_path_mounted(self.mount_point):
+                self._startup_timer.stop()
+                self._set_state("mounted")
+                return
+
+            if time.time() - self._startup_start_time > 10.0:
+                self._startup_timer.stop()
+                err = f"Rclone mount timed out after 10s for path '{self.mount_point}'."
+                logger.error(err)
+                self.mount_error.emit(err)
+                self.stop()
+                self._set_state("error")
+                return
+
+        self._startup_timer.timeout.connect(check_startup)
+        self._startup_timer.start()
+        return True
 
     def stop(self) -> bool:
         """

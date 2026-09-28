@@ -2,7 +2,7 @@
 main.py - Entrypoint for DucksDrive.
 
 Orchestrates the application lifecycle:
-1. Enforces single instance execution via QSharedMemory.
+1. Enforces single instance execution via QLockFile.
 2. Configures dual logging (StreamHandler + RotatingFileHandler).
 3. Validates system tray availability and rclone version (>= 1.73.5).
 4. Initializes the Daemon, Stats Poller, and Tray UI.
@@ -18,7 +18,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Slot, QTimer, QSharedMemory
+from PySide6.QtCore import QObject, Slot, QTimer, QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from rclone_config import list_remote_names
@@ -138,9 +138,15 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
-    # 1. Enforce Single Instance via QSharedMemory
-    shared_memory = QSharedMemory("DucksDrive_SingleInstance_Key")
-    if not shared_memory.create(1):
+    # 1. Enforce Single Instance via QLockFile
+    lock_dir = os.path.expanduser("~/.config/ducksdrive")
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_file_path = os.path.join(lock_dir, "app.lock")
+    
+    # Retain lock_file reference in main scope
+    lock_file = QLockFile(lock_file_path)
+    lock_file.setStaleLockTime(3000)
+    if not lock_file.tryLock(100):
         QMessageBox.critical(
             None,
             "Already Running",

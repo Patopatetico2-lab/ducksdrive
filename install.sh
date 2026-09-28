@@ -12,9 +12,15 @@ if [ ! -f "main.py" ]; then
 fi
 
 if [ -f /etc/debian_version ]; then
+    echo "Detected Debian/Ubuntu-based system."
     sudo apt update && sudo apt install -y rclone fuse3 python3-venv python3-pip
 elif [ -f /etc/arch-release ]; then
+    echo "Detected Arch Linux-based system."
     sudo pacman -Syu --noconfirm rclone fuse3 python-pip
+else
+    echo "Error: Unsupported Linux distribution. Automatic dependency installation is only supported on Debian/Ubuntu and Arch Linux." >&2
+    echo "Please ensure 'rclone', 'fuse3', 'python3-venv', and 'python3-pip' are installed manually." >&2
+    exit 1
 fi
 
 mkdir -p "$INSTALL_DIR"
@@ -49,3 +55,5 @@ EOF
 
 update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
 echo "=== Installation Complete ==="
+echo "You can now run the app by typing '$APP_NAME' in your terminal or searching for 'DucksDrive' in your application menu."
+echo "Note: If '$BIN_DIR' is not in your PATH, add 'export PATH=\$PATH:$BIN_DIR' to your .bashrc or .zshrc."

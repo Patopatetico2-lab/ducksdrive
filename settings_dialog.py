@@ -6,9 +6,9 @@ for bandwidth limit, cache size, parallel transfers, and autostart.
 """
 
 import logging
+import re
 from typing import Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -25,6 +25,27 @@ from PySide6.QtWidgets import (
 from rclone_settings import load_config, save_config
 
 logger = logging.getLogger(__name__)
+
+
+def parse_size_to_bytes(size_str: str) -> Optional[int]:
+    """
+    Parses rclone size strings like '2G', '50000M', '100K', '10T' into bytes
+    for robust comparisons.
+    """
+    size_str = size_str.strip().upper()
+    match = re.match(r"^(\d+)([KMGT]?)$", size_str)
+    if not match:
+        return None
+    val_str, unit = match.groups()
+    val = int(val_str)
+    multipliers = {
+        "": 1,
+        "K": 1024,
+        "M": 1024 * 1024,
+        "G": 1024 * 1024 * 1024,
+        "T": 1024 * 1024 * 1024 * 1024,
+    }
+    return val * multipliers.get(unit, 1)
 
 
 class SettingsDialog(QDialog):
@@ -136,22 +157,31 @@ class SettingsDialog(QDialog):
         bwlimit = self.bwlimit_input.text().strip() or "off"
         cache_size = self.cache_size_input.text().strip() or "2G"
         
-        # Validate cache size warning if >= 50G
-        if "g" in cache_size.lower():
-            try:
-                num_part = int(''.join(filter(str.isdigit, cache_size)))
-                if num_part >= 50:
-                    res = QMessageBox.warning(
-                        self,
-                        "High Cache Size Warning",
-                        f"Warning: A VFS cache size of '{cache_size}' is very large and risks filling up your SSD!\n\nDo you want to proceed?",
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.No
-                    )
-                    if res != QMessageBox.Yes:
-                        return
-            except ValueError:
-                pass
+        # Validate bwlimit format
+        if bwlimit.lower() != "off":
+            if not re.match(r"^\d+[kKmMgGgGtT]?$", bwlimit):
+                QMessageBox.warning(self, "Invalid Input", "Bandwidth limit must be 'off' or a valid size format (e.g., '10M', '500K').")
+                return
+
+        # Validate cache size format
+        if not re.match(r"^\d+[kKmMgGgGtT]?$", cache_size):
+            QMessageBox.warning(self, "Invalid Input", "VFS cache size must be a valid size format (e.g., '2G', '500M').")
+            return
+
+        # Validate high cache size warning if >= 50 GB (50 * 1024 * 1024 * 1024 bytes)
+        cache_bytes = parse_size_to_bytes(cache_size)
+        if cache_bytes is not None:
+            fifty_gb_bytes = 50 * 1024 * 1024 * 1024
+            if cache_bytes >= fifty_gb_bytes:
+                res = QMessageBox.warning(
+                    self,
+                    "High Cache Size Warning",
+                    f"Warning: A VFS cache size of '{cache_size}' is very large and risks filling up your SSD!\n\nDo you want to proceed?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if res != QMessageBox.Yes:
+                    return
 
         try:
             transfers = int(self.transfers_input.text().strip() or "4")

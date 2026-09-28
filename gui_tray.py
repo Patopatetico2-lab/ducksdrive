@@ -7,8 +7,6 @@ context menus, status notifications, and dialogs for remote management.
 
 import logging
 import os
-import shutil
-import subprocess
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
@@ -275,6 +273,17 @@ class RcloneTrayIcon(QSystemTrayIcon):
             if res == QMessageBox.Yes:
                 self._show_new_remote_dialog()
             return
+
+        if self.daemon.is_running():
+            res = QMessageBox.question(
+                None,
+                "Switch Drive",
+                f"A drive is already connected ({self.daemon.current_remote}).\nWould you like to disconnect it and connect to a new one?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if res != QMessageBox.Yes:
+                return
             
         remote, ok = QInputDialog.getItem(
             None, "Connect Drive", "Select a cloud remote to mount:", remotes, 0, False

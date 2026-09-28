@@ -7,11 +7,10 @@ progress bars, active file info, a rolling speed history chart, and quick action
 
 import logging
 import os
-import webbrowser
 from collections import deque
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QSize, QPoint
+from PySide6.QtCore import Qt, QSize, QPoint, QUrl
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -20,7 +19,8 @@ from PySide6.QtGui import (
     QLinearGradient,
     QPen,
     QBrush,
-    QCursor
+    QCursor,
+    QDesktopServices
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -283,10 +283,13 @@ class StatusPopup(QWidget):
         self.btn_open.setEnabled(is_mounted)
 
     def _open_cloud_folder(self) -> None:
-        """Opens the mount point in the file manager and closes popup."""
+        """Opens the mount point in the file manager using QDesktopServices and closes popup."""
         path = self.daemon.mount_point
         if os.path.exists(path):
-            webbrowser.open(f"file://{path}")
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            except Exception as e:
+                logger.error("Failed to open folder with QDesktopServices: %s", e)
         self.close()
 
     def show_near_cursor(self) -> None:
