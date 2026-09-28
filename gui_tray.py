@@ -109,6 +109,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.setToolTip(f"{APP_NAME}: Idle")
         self._pending_remote_name: Optional[str] = None
         self.latest_stats: Optional[StatsData] = None
+        self._was_syncing = False
         
         # Initialize floating status popup panel
         self.status_popup = StatusPopup(daemon)
@@ -150,13 +151,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_new = QAction("Configure New Cloud...", self)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self._menu.addAction(self.action_new)
-        
-        # Start with system autostart toggle
-        cfg = load_config()
-        self.action_autostart = QAction("Start with system", self, checkable=True)
-        self.action_autostart.setChecked(bool(cfg.get("autostart", True)))
-        self.action_autostart.triggered.connect(self._toggle_autostart)
-        self._menu.addAction(self.action_autostart)
 
         # Settings dialog action
         self.action_settings = QAction("Settings...", self)
@@ -212,9 +206,33 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Updates the tray tooltip, menu status, and floating status popup with live telemetry."""
         self.latest_stats = stats
         if stats.is_online:
-            self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
-            self.setToolTip(f"{APP_NAME}: {stats.status_text}")
+            has_active = stats.transfers_count > 0 or len(stats.active_transfers) > 0
+            
+            if has_active:
+                self._was_syncing = True
+                if stats.active_transfers:
+                    t = stats.active_transfers[0]
+                    name = t.get("name", "file")
+                    pct = int(t.get("percentage", 0))
+                    text = f"Syncing: {name} ({pct}%) • {stats.speed_str}"
+                    self.action_status.setText(text)
+                    self.setToolTip(f"{APP_NAME}: {text}")
+                else:
+                    self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
+                    self.setToolTip(f"{APP_NAME}: {stats.status_text}")
+            else:
+                if self._was_syncing:
+                    self._was_syncing = False
+                    self.showMessage(
+                        APP_NAME,
+                        "Transferências concluídas! Todos os ficheiros foram sincronizados com a nuvem.",
+                        QSystemTrayIcon.Information,
+                        4000
+                    )
+                self.action_status.setText(f"Speed: {stats.speed_str} | ETA: {stats.eta_str}")
+                self.setToolTip(f"{APP_NAME}: {stats.status_text}")
         else:
+            self._was_syncing = False
             if self.daemon.state == "mounted":
                 self.action_status.setText("Status: Connection Lost")
 
