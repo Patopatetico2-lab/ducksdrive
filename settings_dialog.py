@@ -1,23 +1,24 @@
 """
 settings_dialog.py - Configuration Dialog for DucksDrive.
 
-Provides a user-friendly settings dialog with friendly explanations
-for bandwidth limit, cache size, parallel transfers, and autostart.
+Provides a user-friendly settings dialog with safe GUI controls (QSpinBox, QComboBox)
+organized into semantic QGroupBox sections for bandwidth, cache, and system preferences.
 """
 
 import logging
-import re
 from typing import Optional
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget
 )
@@ -27,116 +28,84 @@ from rclone_settings import load_config, save_config
 logger = logging.getLogger(__name__)
 
 
-def parse_size_to_bytes(size_str: str) -> Optional[int]:
-    """
-    Parses rclone size strings like '2G', '50000M', '100K', '10T' into bytes
-    for robust comparisons.
-    """
-    size_str = size_str.strip().upper()
-    match = re.match(r"^(\d+)([KMGT]?)$", size_str)
-    if not match:
-        return None
-    val_str, unit = match.groups()
-    val = int(val_str)
-    multipliers = {
-        "": 1,
-        "K": 1024,
-        "M": 1024 * 1024,
-        "G": 1024 * 1024 * 1024,
-        "T": 1024 * 1024 * 1024 * 1024,
-    }
-    return val * multipliers.get(unit, 1)
-
-
 class SettingsDialog(QDialog):
     """
     Settings dialog allowing users to adjust Rclone performance limits
-    and system integration preferences with clear, layman-friendly explanations.
+    and system integration preferences using safe controls instead of free text inputs.
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("DucksDrive Settings")
-        self.setMinimumWidth(450)
+        self.setWindowTitle("DucksDrive • Configurações")
+        self.setMinimumWidth(480)
         
         self.config = load_config()
         self._init_ui()
         self._load_values()
 
     def _init_ui(self) -> None:
-        """Initializes form layout, inputs, and explanatory text labels."""
+        """Initializes grouped form layouts with QGroupBox controls."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(14)
 
-        title_label = QLabel("<b>Performance & System Preferences</b>")
+        title_label = QLabel("<b>Preferências de Desempenho e Sistema</b>")
         title_label.setStyleSheet("font-size: 13pt; color: #2c3e50;")
         main_layout.addWidget(title_label)
 
-        form_layout = QFormLayout()
-        form_layout.setSpacing(12)
+        # 1. Grupo Rede & Desempenho
+        net_group = QGroupBox("Rede e Transferência")
+        net_layout = QFormLayout(net_group)
+        net_layout.setSpacing(10)
 
-        # 1. Bandwidth Limit (--bwlimit)
-        self.bwlimit_input = QLineEdit()
-        self.bwlimit_input.setPlaceholderText("e.g., 10M, 5M, off")
-        bwlimit_label_layout = QVBoxLayout()
-        bwlimit_label_layout.setSpacing(2)
-        bwlimit_label_layout.addWidget(self.bwlimit_input)
-        bwlimit_desc = QLabel(
-            "Internet speed ceiling (e.g. '10M' for 10 MB/s, or 'off' for unlimited).\n"
-            "• Too low: Intentionally slow.\n"
-            "• Too high: May saturate home bandwidth and lag online games/streaming."
-        )
-        bwlimit_desc.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        bwlimit_label_layout.addWidget(bwlimit_desc)
-        form_layout.addRow("Bandwidth Limit:", bwlimit_label_layout)
+        self.bwlimit_combo = QComboBox()
+        self.bwlimit_combo.addItem("Ilimitado (Sem teto de banda)", "off")
+        self.bwlimit_combo.addItem("2 MB/s (Modesto)", "2M")
+        self.bwlimit_combo.addItem("5 MB/s (Equilibrado)", "5M")
+        self.bwlimit_combo.addItem("10 MB/s (Rápido)", "10M")
+        self.bwlimit_combo.addItem("25 MB/s (Muito Rápido)", "25M")
+        self.bwlimit_combo.addItem("50 MB/s (Máximo)", "50M")
+        net_layout.addRow("Limite de Banda:", self.bwlimit_combo)
 
-        # 2. Max VFS Cache Size (--vfs-cache-max-size)
-        self.cache_size_input = QLineEdit()
-        self.cache_size_input.setPlaceholderText("e.g., 2G, 500M")
-        cache_label_layout = QVBoxLayout()
-        cache_label_layout.setSpacing(2)
-        cache_label_layout.addWidget(self.cache_size_input)
-        cache_desc = QLabel(
-            "Maximum SSD storage reserved for temporary file copies (e.g. '2G').\n"
-            "• Too low: Clears cache quickly, forcing constant re-downloads.\n"
-            "• Too high: Accumulates temporary files until filling up your SSD."
-        )
-        cache_desc.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        cache_label_layout.addWidget(cache_desc)
-        form_layout.addRow("Max VFS Cache Size:", cache_label_layout)
+        self.transfers_spin = QSpinBox()
+        self.transfers_spin.setRange(1, 16)
+        self.transfers_spin.setValue(4)
+        net_layout.addRow("Transferências Paralelas:", self.transfers_spin)
 
-        # 3. Parallel Transfers (--transfers)
-        self.transfers_input = QLineEdit()
-        self.transfers_input.setPlaceholderText("e.g., 4")
-        transfers_label_layout = QVBoxLayout()
-        transfers_label_layout.setSpacing(2)
-        transfers_label_layout.addWidget(self.transfers_input)
-        transfers_desc = QLabel(
-            "Number of files uploaded or downloaded simultaneously (e.g. 4).\n"
-            "• Too low: Slow for bulk file syncs.\n"
-            "• Too high: Can choke your home router and trigger connection errors."
-        )
-        transfers_desc.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        transfers_label_layout.addWidget(transfers_desc)
-        form_layout.addRow("Parallel Transfers:", transfers_label_layout)
+        main_layout.addWidget(net_group)
 
-        # 4. Start with system (Autostart)
-        self.autostart_checkbox = QCheckBox("Start DucksDrive automatically when system boots")
-        form_layout.addRow("System Startup:", self.autostart_checkbox)
+        # 2. Grupo Armazenamento & Cache
+        cache_group = QGroupBox("Armazenamento e Cache SSD")
+        cache_layout = QFormLayout(cache_group)
+        cache_layout.setSpacing(10)
 
-        main_layout.addLayout(form_layout)
+        self.cache_spin = QSpinBox()
+        self.cache_spin.setRange(1, 500)
+        self.cache_spin.setSuffix(" GB")
+        self.cache_spin.setValue(2)
+        cache_layout.addRow("Tamanho Máximo do Cache VFS:", self.cache_spin)
+
+        main_layout.addWidget(cache_group)
+
+        # 3. Grupo Geral / Sistema
+        sys_group = QGroupBox("Integração com o Sistema")
+        sys_layout = QVBoxLayout(sys_group)
+        
+        self.autostart_checkbox = QCheckBox("Iniciar DucksDrive automaticamente com o sistema operativo")
+        sys_layout.addWidget(self.autostart_checkbox)
+
+        main_layout.addWidget(sys_group)
 
         # Buttons layout
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel = QPushButton("Cancelar")
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_cancel.setStyleSheet("padding: 6px 14px;")
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton("Save Settings")
+        self.btn_save = QPushButton("Guardar Configurações")
         self.btn_save.clicked.connect(self._save_and_accept)
         self.btn_save.setStyleSheet(
             "background-color: #3498db; color: white; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold;"
@@ -146,50 +115,45 @@ class SettingsDialog(QDialog):
         main_layout.addLayout(btn_layout)
 
     def _load_values(self) -> None:
-        """Populates form fields with values loaded from config."""
-        self.bwlimit_input.setText(str(self.config.get("bwlimit", "off")))
-        self.cache_size_input.setText(str(self.config.get("vfs_cache_max_size", "2G")))
-        self.transfers_input.setText(str(self.config.get("transfers", 4)))
+        """Populates form controls with values loaded from config."""
+        bwlimit_val = str(self.config.get("bwlimit", "off"))
+        index = self.bwlimit_combo.findData(bwlimit_val)
+        if index >= 0:
+            self.bwlimit_combo.setCurrentIndex(index)
+        else:
+            self.bwlimit_combo.setCurrentIndex(0)
+
+        transfers_val = int(self.config.get("transfers", 4))
+        self.transfers_spin.setValue(transfers_val)
+
+        cache_str = str(self.config.get("vfs_cache_max_size", "2G")).upper()
+        cache_num = 2
+        try:
+            cache_num = int(''.join(filter(str.isdigit, cache_str)) or 2)
+        except ValueError:
+            pass
+        self.cache_spin.setValue(cache_num)
+
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
 
     def _save_and_accept(self) -> None:
-        """Validates inputs, saves to config file, and closes."""
-        bwlimit = self.bwlimit_input.text().strip() or "off"
-        cache_size = self.cache_size_input.text().strip() or "2G"
-        
-        # Validate bwlimit format
-        if bwlimit.lower() != "off":
-            if not re.match(r"^\d+[kKmMgGgGtT]?$", bwlimit):
-                QMessageBox.warning(self, "Invalid Input", "Bandwidth limit must be 'off' or a valid size format (e.g., '10M', '500K').")
+        """Validates controls, warns on high SSD cache size, saves to config, and closes."""
+        bwlimit = self.bwlimit_combo.currentData() or "off"
+        transfers = self.transfers_spin.value()
+        cache_gb = self.cache_spin.value()
+        cache_size = f"{cache_gb}G"
+
+        # Validate high cache size warning if >= 50 GB
+        if cache_gb >= 50:
+            res = QMessageBox.warning(
+                self,
+                "Aviso de Cache Elevado",
+                f"Atenção: Um tamanho de cache VFS de {cache_gb} GB é muito elevado e corre o risco de esgotar o espaço do seu SSD!\n\nDeseja prosseguir?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if res != QMessageBox.Yes:
                 return
-
-        # Validate cache size format
-        if not re.match(r"^\d+[kKmMgGgGtT]?$", cache_size):
-            QMessageBox.warning(self, "Invalid Input", "VFS cache size must be a valid size format (e.g., '2G', '500M').")
-            return
-
-        # Validate high cache size warning if >= 50 GB (50 * 1024 * 1024 * 1024 bytes)
-        cache_bytes = parse_size_to_bytes(cache_size)
-        if cache_bytes is not None:
-            fifty_gb_bytes = 50 * 1024 * 1024 * 1024
-            if cache_bytes >= fifty_gb_bytes:
-                res = QMessageBox.warning(
-                    self,
-                    "High Cache Size Warning",
-                    f"Warning: A VFS cache size of '{cache_size}' is very large and risks filling up your SSD!\n\nDo you want to proceed?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
-                if res != QMessageBox.Yes:
-                    return
-
-        try:
-            transfers = int(self.transfers_input.text().strip() or "4")
-            if transfers < 1:
-                raise ValueError
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Parallel transfers must be a positive integer.")
-            return
 
         autostart = self.autostart_checkbox.isChecked()
 
@@ -199,9 +163,9 @@ class SettingsDialog(QDialog):
         self.config["transfers"] = transfers
         self.config["autostart"] = autostart
 
-        # Save to disk (which also synchronizes autostart via rclone_settings)
+        # Save to disk
         if save_config(self.config):
-            QMessageBox.information(self, "Settings Saved", "Preferences updated successfully.\nChanges will apply on next drive connection.")
+            QMessageBox.information(self, "Configuração Guardada", "Preferências atualizadas com sucesso.\nAs alterações serão aplicadas na próxima conexão.")
             self.accept()
         else:
-            QMessageBox.critical(self, "Error", "Failed to save configuration file.")
+            QMessageBox.critical(self, "Erro", "Falha ao gravar o ficheiro de configuração.")

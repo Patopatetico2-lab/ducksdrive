@@ -10,7 +10,16 @@ import os
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
-from PySide6.QtGui import QAction, QIcon, QDesktopServices
+from PySide6.QtGui import (
+    QAction,
+    QIcon,
+    QDesktopServices,
+    QPainter,
+    QColor,
+    QBrush,
+    QPen,
+    QPixmap
+)
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -53,6 +62,56 @@ def get_app_icon() -> QIcon:
         if not icon.isNull():
             return icon
     return QIcon.fromTheme("network-cloud", QIcon.fromTheme("folder-remote"))
+
+
+_TRAY_ICON_CACHE: dict[str, QIcon] = {}
+
+
+def get_tray_icon(state: str = "idle") -> QIcon:
+    """
+    Returns a dynamic QIcon based on state ('idle', 'syncing', 'error').
+    Draws a crisp status badge over the base icon and caches the result.
+    """
+    if state in _TRAY_ICON_CACHE:
+        return _TRAY_ICON_CACHE[state]
+
+    base_icon = get_app_icon()
+    pixmap = base_icon.pixmap(64, 64)
+    if pixmap.isNull():
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.transparent)
+
+    if state in ("syncing", "error"):
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        badge_radius = 11
+        center_x = 64 - badge_radius - 2
+        center_y = 64 - badge_radius - 2
+
+        # Badge background with white contrast outline
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        if state == "syncing":
+            painter.setBrush(QBrush(QColor(41, 128, 185)))  # Blue syncing emblem
+        else:
+            painter.setBrush(QBrush(QColor(231, 76, 60)))   # Red alert emblem
+
+        painter.drawEllipse(center_x - badge_radius, center_y - badge_radius, badge_radius * 2, badge_radius * 2)
+
+        # Draw glyph inside badge
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.setBrush(Qt.NoBrush)
+        if state == "syncing":
+            painter.drawArc(center_x - 5, center_y - 5, 10, 10, 30 * 16, 270 * 16)
+        else:
+            painter.drawLine(center_x, center_y - 5, center_x, center_y + 1)
+            painter.drawPoint(center_x, center_y + 4)
+
+        painter.end()
+
+    icon = QIcon(pixmap)
+    _TRAY_ICON_CACHE[state] = icon
+    return icon
 
 
 class NewRemoteDialog(QDialog):
@@ -104,12 +163,13 @@ class RcloneTrayIcon(QSystemTrayIcon):
     request_exit = Signal()
 
     def __init__(self, daemon: RcloneDaemon, parent: Optional[QWidget] = None) -> None:
-        super().__init__(get_app_icon(), parent)
+        super().__init__(get_tray_icon("idle"), parent)
         self.daemon = daemon
         self.setToolTip(f"{APP_NAME}: Idle")
         self._pending_remote_name: Optional[str] = None
         self.latest_stats: Optional[StatsData] = None
         self._was_syncing = False
+        self._current_icon_state = "idle"
         
         # Initialize floating status popup panel
         self.status_popup = StatusPopup(daemon)
@@ -124,46 +184,53 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _setup_menu(self) -> None:
-        """Initializes the context menu actions."""
+        """Initializes the context menu with a rigorous 4-block professional structure."""
         self._menu.clear()
         
-        self.action_status = QAction("Status: Disconnected", self)
+        # Bloco 1 (Topo): Status atual da nuvem (desabilitado)
+        self.action_status = QAction("DucksDrive • Disconnected", self)
         self.action_status.setEnabled(False)
         self._menu.addAction(self.action_status)
         
         self._menu.addSeparator()
         
-        self.action_open = QAction("Open Drive Folder", self)
+        # Bloco 2 (Ações): Produtividade
+        self.action_open = QAction("Abrir Pasta Local", self)
         self.action_open.triggered.connect(self._open_folder)
         self._menu.addAction(self.action_open)
 
-        self.action_panel = QAction("Painel de Transferências", self)
+        self.action_panel = QAction("Abrir Painel de Transferências", self)
         self.action_panel.triggered.connect(self._show_transfer_panel)
         self._menu.addAction(self.action_panel)
-        
-        self.action_mount = QAction("Connect Drive...", self)
+
+        # Actions for mounting/unmounting (integrated into management logic)
+        self.action_mount = QAction("Conectar Nuvem...", self)
         self.action_mount.triggered.connect(self._show_mount_selector)
-        self._menu.addAction(self.action_mount)
-        
-        self.action_unmount = QAction("Disconnect Drive", self)
+        self.action_unmount = QAction("Desconectar Nuvem", self)
         self.action_unmount.triggered.connect(self.daemon.stop)
         self.action_unmount.setVisible(False)
-        self._menu.addAction(self.action_unmount)
         
         self._menu.addSeparator()
         
-        self.action_new = QAction("Configure New Cloud...", self)
+        # Bloco 3 (Gerenciamento): Manutenção e Configuração
+        # Submenu para gerenciar remotos
+        self.menu_remotes = QMenu("Gerenciar Nuvens", self)
+        self.menu_remotes.addAction(self.action_mount)
+        self.menu_remotes.addAction(self.action_unmount)
+        self.menu_remotes.addSeparator()
+        self.action_new = QAction("Configurar Nova Nuvem...", self)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
-        self._menu.addAction(self.action_new)
+        self.menu_remotes.addAction(self.action_new)
+        self._menu.addMenu(self.menu_remotes)
 
-        # Settings dialog action
-        self.action_settings = QAction("Settings...", self)
+        self.action_settings = QAction("Configurações...", self)
         self.action_settings.triggered.connect(self._show_settings_dialog)
         self._menu.addAction(self.action_settings)
         
         self._menu.addSeparator()
         
-        self.action_exit = QAction("Quit", self)
+        # Bloco 4 (Fundo): Sair
+        self.action_exit = QAction("Sair", self)
         self.action_exit.triggered.connect(self._confirm_quit)
         self._menu.addAction(self.action_exit)
 
@@ -179,6 +246,16 @@ class RcloneTrayIcon(QSystemTrayIcon):
         config["autostart"] = checked
         save_config(config)
 
+    def update_tray_icon(self, state: str) -> None:
+        """
+        Updates the tray icon dynamically based on state ('idle', 'syncing', 'error').
+        Only changes the icon if the state actually changes to avoid unnecessary repaints.
+        """
+        if getattr(self, "_current_icon_state", None) == state:
+            return
+        self._current_icon_state = state
+        self.setIcon(get_tray_icon(state))
+
     @Slot(str)
     def _on_state_changed(self, state: str) -> None:
         """Updates UI elements based on daemon state."""
@@ -188,21 +265,29 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_open.setEnabled(is_mounted)
         
         status_map = {
-            "stopped": "Disconnected",
-            "starting": "Connecting...",
-            "mounted": "Connected",
-            "unmounting": "Disconnecting...",
-            "error": "Error"
+            "stopped": "Desconectado",
+            "starting": "Conectando...",
+            "mounted": "Conectado",
+            "unmounting": "Desconectando...",
+            "error": "Erro"
         }
-        status_text = status_map.get(state, state.capitalize())
-        self.action_status.setText(f"Status: {status_text}")
-        self.setToolTip(f"{APP_NAME}: {status_text}")
+        state_label = status_map.get(state, state.capitalize())
+        remote_name = self.daemon.current_remote or "DucksDrive"
+        clean_name = remote_name.rstrip(":")
+        
+        status_header = f"{clean_name} • {state_label}"
+        self.action_status.setText(status_header)
+        self.setToolTip(status_header)
         
         if is_mounted:
-            self.showMessage(APP_NAME, "Drive mounted successfully.", QSystemTrayIcon.Information, 3000)
+            self.update_tray_icon("idle")
+            self.showMessage(APP_NAME, "Drive montado com sucesso.", QSystemTrayIcon.Information, 3000)
+        elif state in ("stopped", "unmounting", "error"):
+            self.update_tray_icon("error")
 
     @Slot(str)
     def _on_mount_error(self, error: str) -> None:
+        self.update_tray_icon("error")
         QMessageBox.critical(None, "Mount Error", error)
 
     @Slot(object)
@@ -214,6 +299,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             
             if has_active:
                 self._was_syncing = True
+                self.update_tray_icon("syncing")
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
                     name = t.get("name", "file")
@@ -226,6 +312,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     self.action_status.setText(text)
                     self.setToolTip(f"{APP_NAME}: {stats.status_text}")
             else:
+                self.update_tray_icon("idle")
                 if self._was_syncing:
                     self._was_syncing = False
                     self.showMessage(
@@ -239,6 +326,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.setToolTip(f"{APP_NAME}: {stats.status_text}")
         else:
             self._was_syncing = False
+            self.update_tray_icon("error")
             if self.daemon.state == "mounted":
                 self.action_status.setText("Status: Connection Lost")
 

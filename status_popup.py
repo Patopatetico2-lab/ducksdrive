@@ -10,7 +10,7 @@ import os
 from collections import deque
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QSize, QPoint, QUrl
+from PySide6.QtCore import Qt, QSize, QPoint, QUrl, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QVBoxLayout,
-    QWidget
+    QWidget,
+    QScrollArea
 )
 
 from rclone_daemon import RcloneDaemon
@@ -119,6 +120,28 @@ class SpeedChartWidget(QWidget):
             painter.drawPath(path)
 
 
+class TransferItem(QWidget):
+    """Small widget representing a single file transfer in the list."""
+
+    def __init__(self, name: str, percentage: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(2)
+
+        self.name_label = QLabel(name)
+        self.name_label.setStyleSheet("font-size: 9pt; color: #2c3e50;")
+        self.name_label.setWordWrap(False)
+        layout.addWidget(self.name_label)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(percentage)
+        self.progress.setFixedHeight(4)
+        self.progress.setTextVisible(False)
+        layout.addWidget(self.progress)
+
+
 class StatusPopup(QWidget):
     """
     Floating status panel acting as a native system tray popup window.
@@ -129,7 +152,12 @@ class StatusPopup(QWidget):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.daemon = daemon
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        self.setFixedWidth(320)
+        self.setFixedWidth(340)
+
+        self._last_quota_update = 0
+        self._quota_timer = QTimer(self)
+        self._quota_timer.setInterval(10 * 60 * 1000)  # 10 minutes cache
+        self._quota_timer.timeout.connect(self._fetch_quota)
 
         self._init_ui()
 
@@ -137,7 +165,7 @@ class StatusPopup(QWidget):
         """Initializes the popup layout, widgets, and styling."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(14, 14, 14, 14)
-        main_layout.setSpacing(10)
+        main_layout.setSpacing(12)
 
         # Apply clean modern card styling
         self.setStyleSheet("""
@@ -145,7 +173,7 @@ class StatusPopup(QWidget):
                 background-color: #ffffff;
                 color: #2c3e50;
                 font-family: 'Sans Serif';
-                font-size: 11pt;
+                font-size: 10pt;
                 border-radius: 10px;
             }
             QLabel {
@@ -173,23 +201,37 @@ class StatusPopup(QWidget):
                 background-color: #27ae60;
                 border-radius: 3px;
             }
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
         """)
 
-        # Header layout
+        # 1. Header (Account & Status)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         
-        title_label = QLabel("<b>DucksDrive Status</b>")
-        title_label.setStyleSheet("font-size: 12pt; color: #2c3e50;")
-        header_layout.addWidget(title_label)
-
+        self.title_label = QLabel("<b>DucksDrive</b>")
+        self.title_label.setStyleSheet("font-size: 11pt; color: #2c3e50;")
+        header_layout.addWidget(self.title_label)
         header_layout.addStretch()
-
         self.status_badge = QLabel("● Offline")
-        self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 10pt;")
+        self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
         header_layout.addWidget(self.status_badge)
-
         main_layout.addLayout(header_layout)
+
+        # 2. Quota Section
+        quota_layout = QVBoxLayout()
+        quota_layout.setSpacing(2)
+        self.quota_label = QLabel("Calculando espaço...")
+        self.quota_label.setStyleSheet("font-size: 8pt; color: #7f8c8d;")
+        self.quota_bar = QProgressBar()
+        self.quota_bar.setFixedHeight(6)
+        self.quota_bar.setTextVisible(False)
+        self.quota_bar.setStyleSheet("QProgressBar::chunk { background-color: #3498db; }")
+        quota_layout.addWidget(self.quota_label)
+        quota_layout.addWidget(self.quota_bar)
+        main_layout.addLayout(quota_layout)
 
         # Separator line
         line = QFrame()
@@ -198,89 +240,115 @@ class StatusPopup(QWidget):
         line.setStyleSheet("background-color: #ecf0f1; max-height: 1px;")
         main_layout.addWidget(line)
 
-        # File & Progress Section
-        self.file_label = QLabel("No active file")
-        self.file_label.setStyleSheet("color: #7f8c8d; font-size: 10pt;")
-        self.file_label.setWordWrap(True)
-        main_layout.addWidget(self.file_label)
+        # 3. Dynamic Transfer List (Scrollable)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setMaximumHeight(180)
+        self.scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 8, 0)
+        self.scroll_layout.setSpacing(2)
+        self.scroll_layout.addStretch()
+        self.scroll.setWidget(self.scroll_content)
+        
+        self.empty_label = QLabel("Nenhum arquivo sendo transferido")
+        self.empty_label.setStyleSheet("color: #bdc3c7; font-style: italic; padding: 20px 0;")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.scroll_layout.insertWidget(0, self.empty_label)
+        
+        main_layout.addWidget(self.scroll)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        main_layout.addWidget(self.progress_bar)
-
-        # Metrics layout (Speed & ETA)
+        # 4. Metrics & Chart
         metrics_layout = QHBoxLayout()
-        metrics_layout.setContentsMargins(0, 0, 0, 0)
-
-        speed_box = QVBoxLayout()
-        speed_box.setSpacing(2)
-        speed_title = QLabel("SPEED")
-        speed_title.setStyleSheet("font-size: 8pt; color: #95a5a6; font-weight: bold;")
         self.speed_value = QLabel("0.00 MB/s")
-        self.speed_value.setStyleSheet("font-size: 11pt; font-weight: bold; color: #2980b9;")
-        speed_box.addWidget(speed_title)
-        speed_box.addWidget(self.speed_value)
-        metrics_layout.addLayout(speed_box)
-
-        metrics_layout.addStretch()
-
-        eta_box = QVBoxLayout()
-        eta_box.setSpacing(2)
-        eta_title = QLabel("ETA")
-        eta_title.setStyleSheet("font-size: 8pt; color: #95a5a6; font-weight: bold;")
+        self.speed_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #2980b9;")
         self.eta_value = QLabel("--:--:--")
-        self.eta_value.setStyleSheet("font-size: 11pt; font-weight: bold; color: #e67e22;")
-        eta_box.addWidget(eta_title)
-        eta_box.addWidget(self.eta_value)
-        metrics_layout.addLayout(eta_box)
-
+        self.eta_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #e67e22;")
+        metrics_layout.addWidget(QLabel("Velocidade:"))
+        metrics_layout.addWidget(self.speed_value)
+        metrics_layout.addStretch()
+        metrics_layout.addWidget(QLabel("Restam:"))
+        metrics_layout.addWidget(self.eta_value)
         main_layout.addLayout(metrics_layout)
 
-        # Speed chart
         self.chart_widget = SpeedChartWidget()
         main_layout.addWidget(self.chart_widget)
 
-        # Footer Button (Open Cloud Folder)
-        self.btn_open = QPushButton("Open Cloud Folder")
+        # Footer
+        self.btn_open = QPushButton("Abrir Pasta Local")
         self.btn_open.clicked.connect(self._open_cloud_folder)
         main_layout.addWidget(self.btn_open)
+
+    def _fetch_quota(self) -> None:
+        """Asynchronously requests cloud quota info from rclone RC."""
+        if not self.daemon.is_running() or not self.daemon.rc_credentials:
+            return
+            
+        import json
+        import urllib.request
+        import base64
+
+        def run_query():
+            try:
+                creds = self.daemon.rc_credentials
+                endpoint = f"{creds.url}/operations/about"
+                auth_str = f"{creds.user}:{creds.password}"
+                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+                
+                req = urllib.request.Request(
+                    url=endpoint,
+                    data=json.dumps({"remote": self.daemon.current_remote}).encode("utf-8"),
+                    headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=3) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                    total = data.get("total", 0)
+                    used = data.get("used", 0)
+                    if total > 0:
+                        percent = int((used / total) * 100)
+                        from rclone_stats import format_bytes
+                        txt = f"Usando {format_bytes(used)} de {format_bytes(total)} ({percent}%)"
+                        self.quota_label.setText(txt)
+                        self.quota_bar.setValue(percent)
+            except Exception:
+                self.quota_label.setText("Quota indisponível")
+
+        QTimer.singleShot(0, run_query)
 
     def update_stats(self, stats: StatsData) -> None:
         """Updates UI elements and chart with new telemetry data."""
         if stats.is_online:
             self.status_badge.setText("● Online")
-            self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 10pt;")
+            self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText(stats.speed_str)
             self.eta_value.setText(stats.eta_str)
-
-            # Update chart
             self.chart_widget.add_speed_point(stats.speed_mb_s)
+            
+            clean_remote = (self.daemon.current_remote or "Drive").rstrip(":")
+            self.title_label.setText(f"<b>{clean_remote}</b>")
 
-            # Active transfers info
+            # Clear and rebuild transfer list
+            for i in reversed(range(self.scroll_layout.count())):
+                widget = self.scroll_layout.itemAt(i).widget()
+                if isinstance(widget, TransferItem):
+                    widget.deleteLater()
+            
             if stats.active_transfers:
-                current_transfer = stats.active_transfers[0]
-                filename = current_transfer.get("name", "Transferring...")
-                percentage = int(current_transfer.get("percentage", 0))
-                self.file_label.setText(filename)
-                self.progress_bar.setValue(percentage)
-                self.progress_bar.setVisible(True)
+                self.empty_label.hide()
+                for t in stats.active_transfers:
+                    item = TransferItem(t.get("name", "Arquivo"), int(t.get("percentage", 0)))
+                    self.scroll_layout.insertWidget(0, item)
             else:
-                self.file_label.setText("Synchronized / Idle")
-                self.progress_bar.setValue(0)
+                self.empty_label.show()
         else:
             self.status_badge.setText("● Offline")
-            self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 10pt;")
+            self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
-            self.file_label.setText("Drive not connected")
-            self.progress_bar.setValue(0)
             self.chart_widget.add_speed_point(0.0)
 
-        # Enable/disable open folder based on mount state
-        is_mounted = self.daemon.is_running()
-        self.btn_open.setEnabled(is_mounted)
+        self.btn_open.setEnabled(self.daemon.is_running())
 
     def _open_cloud_folder(self) -> None:
         """Opens the mount point in the file manager using QDesktopServices and closes popup."""
@@ -294,29 +362,29 @@ class StatusPopup(QWidget):
 
     def show_near_cursor(self) -> None:
         """
-        Positions the popup nicely near the mouse cursor / system tray
-        respecting screen boundaries.
+        Positions the popup nicely near the mouse cursor and triggers quota update.
         """
+        import time
+        now = time.time()
+        # Request quota only if more than 10 mins passed since last fetch or if never fetched
+        if now - self._last_quota_update > 600:
+            self._fetch_quota()
+            self._last_quota_update = now
+
         self.adjustSize()
         cursor_pos = QCursor.pos()
-        screen = QApplication.screenAt(cursor_pos)
-        if not screen:
-            screen = QApplication.primaryScreen()
+        screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
         screen_geo = screen.availableGeometry()
 
         x = cursor_pos.x() - self.width() // 2
         y = cursor_pos.y() - self.height() - 15
 
-        # Keep within screen bounds
-        if x < screen_geo.left():
-            x = screen_geo.left() + 10
-        elif x + self.width() > screen_geo.right():
-            x = screen_geo.right() - self.width() - 10
-
-        if y < screen_geo.top():
-            y = cursor_pos.y() + 20  # Pop below cursor if taskbar is at top
+        if x < screen_geo.left(): x = screen_geo.left() + 10
+        elif x + self.width() > screen_geo.right(): x = screen_geo.right() - self.width() - 10
+        if y < screen_geo.top(): y = cursor_pos.y() + 20
 
         self.move(x, y)
         self.show()
         self.raise_()
         self.activateWindow()
+
