@@ -119,6 +119,8 @@ class SpeedChartWidget(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
 
+        painter.end()
+
 
 class QuotaWorkerThread(QThread):
     """Background worker thread to fetch cloud storage quota without blocking UI."""
@@ -187,11 +189,11 @@ class TransferItem(QWidget):
 class StatusPopup(QWidget):
     """
     Floating status panel acting as a native system tray popup window.
-    Behaves as a popup (Qt.Popup) that dismisses on outside clicks.
+    Uses Qt.Tool to ensure full compatibility with Wayland and X11 compositors.
     """
 
     def __init__(self, daemon: RcloneDaemon, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.daemon = daemon
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setFixedWidth(340)
@@ -249,7 +251,7 @@ class StatusPopup(QWidget):
             }
         """)
 
-        # 1. Header (Account & Status)
+        # 1. Header (Account & Status + Close Button)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -257,9 +259,32 @@ class StatusPopup(QWidget):
         self.title_label.setStyleSheet("font-size: 11pt; color: #2c3e50;")
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
+
         self.status_badge = QLabel("● Offline")
-        self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
+        self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt; margin-right: 6px;")
         header_layout.addWidget(self.status_badge)
+
+        self.btn_close = QPushButton("✕")
+        self.btn_close.setFixedSize(22, 22)
+        self.btn_close.setToolTip("Fechar Painel (ou pressione Esc)")
+        self.btn_close.setStyleSheet("""
+            QPushButton {
+                background: #ecf0f1;
+                color: #7f8c8d;
+                border: none;
+                border-radius: 11px;
+                font-weight: bold;
+                font-size: 9pt;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background: #e74c3c;
+                color: white;
+            }
+        """)
+        self.btn_close.clicked.connect(self.close)
+        header_layout.addWidget(self.btn_close)
+
         main_layout.addLayout(header_layout)
 
         # 2. Quota Section
@@ -417,4 +442,10 @@ class StatusPopup(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def keyPressEvent(self, event: Any) -> None:
+        """Closes popup when Escape key is pressed."""
+        if event.key() == Qt.Key_Escape:
+            self.close()
+        super().keyPressEvent(event)
 
