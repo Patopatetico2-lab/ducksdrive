@@ -213,15 +213,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._menu.addSeparator()
         
         # Bloco 3 (Gerenciamento): Manutenção e Configuração
-        # Submenu para gerenciar remotos
-        self.menu_remotes = QMenu("Gerenciar Nuvens", self)
+        # Submenu para gerenciar remotos criado nativamente via QMenu.addMenu
+        self.menu_remotes = self._menu.addMenu("Gerenciar Nuvens")
         self.menu_remotes.addAction(self.action_mount)
         self.menu_remotes.addAction(self.action_unmount)
         self.menu_remotes.addSeparator()
         self.action_new = QAction("Configurar Nova Nuvem...", self)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self.menu_remotes.addAction(self.action_new)
-        self._menu.addMenu(self.menu_remotes)
 
         self.action_settings = QAction("Configurações...", self)
         self.action_settings.triggered.connect(self._show_settings_dialog)

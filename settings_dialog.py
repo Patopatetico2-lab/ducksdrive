@@ -6,6 +6,7 @@ organized into semantic QGroupBox sections for bandwidth, cache, and system pref
 """
 
 import logging
+import re
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -115,7 +116,7 @@ class SettingsDialog(QDialog):
         main_layout.addLayout(btn_layout)
 
     def _load_values(self) -> None:
-        """Populates form controls with values loaded from config."""
+        """Populates form controls with values loaded from config with proper unit parsing."""
         bwlimit_val = str(self.config.get("bwlimit", "off"))
         index = self.bwlimit_combo.findData(bwlimit_val)
         if index >= 0:
@@ -126,13 +127,28 @@ class SettingsDialog(QDialog):
         transfers_val = int(self.config.get("transfers", 4))
         self.transfers_spin.setValue(transfers_val)
 
-        cache_str = str(self.config.get("vfs_cache_max_size", "2G")).upper()
-        cache_num = 2
+        cache_str = str(self.config.get("vfs_cache_max_size", "2G")).strip().upper()
+        cache_gb = 2
         try:
-            cache_num = int(''.join(filter(str.isdigit, cache_str)) or 2)
-        except ValueError:
+            match = re.match(r"^(\d+)([KMGT]?)$", cache_str)
+            if match:
+                val, unit = match.groups()
+                num = int(val)
+                if unit == "K":
+                    cache_gb = max(1, num // (1024 * 1024))
+                elif unit == "M":
+                    cache_gb = max(1, num // 1024)
+                elif unit == "T":
+                    cache_gb = num * 1024
+                else:  # G or empty
+                    cache_gb = num
+            else:
+                digits = ''.join(filter(str.isdigit, cache_str))
+                if digits:
+                    cache_gb = int(digits)
+        except Exception:
             pass
-        self.cache_spin.setValue(cache_num)
+        self.cache_spin.setValue(max(1, min(cache_gb, 500)))
 
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
 

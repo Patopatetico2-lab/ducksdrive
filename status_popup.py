@@ -10,7 +10,7 @@ import os
 from collections import deque
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QSize, QPoint, QUrl, QTimer
+from PySide6.QtCore import Qt, QSize, QPoint, QUrl, QTimer, QThread, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -118,6 +118,48 @@ class SpeedChartWidget(QWidget):
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
+
+
+class QuotaWorkerThread(QThread):
+    """Background worker thread to fetch cloud storage quota without blocking UI."""
+    quota_fetched = Signal(int, int)  # total, used
+    quota_failed = Signal()
+
+    def __init__(self, credentials: Any, remote_name: str, parent: Optional[Any] = None) -> None:
+        super().__init__(parent)
+        self.credentials = credentials
+        self.remote_name = remote_name
+
+    def run(self) -> None:
+        import json
+        import urllib.request
+        import base64
+        try:
+            creds = self.credentials
+            endpoint = f"{creds.url}/operations/about"
+            auth_str = f"{creds.user}:{creds.password}"
+            b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+            
+            # Rclone RC /operations/about requires 'fs' parameter with colon (e.g. "gdrive:")
+            fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
+            
+            req = urllib.request.Request(
+                url=endpoint,
+                data=json.dumps({"fs": fs_arg}).encode("utf-8"),
+                headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=4) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                total = int(data.get("total", 0))
+                used = int(data.get("used", 0))
+                if total > 0:
+                    self.quota_fetched.emit(total, used)
+                else:
+                    self.quota_failed.emit()
+        except Exception as e:
+            logger.debug("Failed to fetch quota: %s", e)
+            self.quota_failed.emit()
 
 
 class TransferItem(QWidget):
@@ -280,41 +322,29 @@ class StatusPopup(QWidget):
         main_layout.addWidget(self.btn_open)
 
     def _fetch_quota(self) -> None:
-        """Asynchronously requests cloud quota info from rclone RC."""
+        """Spawns the background thread to fetch cloud quota info without blocking UI."""
         if not self.daemon.is_running() or not self.daemon.rc_credentials:
             return
-            
-        import json
-        import urllib.request
-        import base64
 
-        def run_query():
-            try:
-                creds = self.daemon.rc_credentials
-                endpoint = f"{creds.url}/operations/about"
-                auth_str = f"{creds.user}:{creds.password}"
-                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-                
-                req = urllib.request.Request(
-                    url=endpoint,
-                    data=json.dumps({"remote": self.daemon.current_remote}).encode("utf-8"),
-                    headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=3) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-                    total = data.get("total", 0)
-                    used = data.get("used", 0)
-                    if total > 0:
-                        percent = int((used / total) * 100)
-                        from rclone_stats import format_bytes
-                        txt = f"Usando {format_bytes(used)} de {format_bytes(total)} ({percent}%)"
-                        self.quota_label.setText(txt)
-                        self.quota_bar.setValue(percent)
-            except Exception:
-                self.quota_label.setText("Quota indisponível")
+        if hasattr(self, "_quota_worker") and self._quota_worker and self._quota_worker.isRunning():
+            return
 
-        QTimer.singleShot(0, run_query)
+        self._quota_worker = QuotaWorkerThread(self.daemon.rc_credentials, self.daemon.current_remote or "gdrive", self)
+        self._quota_worker.quota_fetched.connect(self._on_quota_success)
+        self._quota_worker.quota_failed.connect(self._on_quota_error)
+        self._quota_worker.start()
+
+    @Slot(int, int)
+    def _on_quota_success(self, total: int, used: int) -> None:
+        percent = int((used / total) * 100)
+        from rclone_stats import format_bytes
+        txt = f"Usando {format_bytes(used)} de {format_bytes(total)} ({percent}%)"
+        self.quota_label.setText(txt)
+        self.quota_bar.setValue(percent)
+
+    @Slot()
+    def _on_quota_error(self) -> None:
+        self.quota_label.setText("Quota indisponível")
 
     def update_stats(self, stats: StatsData) -> None:
         """Updates UI elements and chart with new telemetry data."""
