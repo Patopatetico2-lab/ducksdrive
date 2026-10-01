@@ -177,6 +177,7 @@ class RcloneDaemon(QObject):
         self.process: Optional[subprocess.Popen[str]] = None
         self.current_remote: Optional[str] = None
         self.state = "stopped"
+        self._startup_timer: Optional[QTimer] = None
 
         # Active health monitoring timer for background FUSE process
         self.health_timer = QTimer(self)
@@ -312,16 +313,17 @@ class RcloneDaemon(QObject):
 
         # Asynchronous non-blocking startup check using QTimer (avoids freezing GUI)
         self._startup_start_time = time.time()
-        self._startup_timer = QTimer(self)
-        self._startup_timer.setInterval(500)
+        startup_timer = QTimer(self)
+        self._startup_timer = startup_timer
+        startup_timer.setInterval(500)
 
         def check_startup() -> None:
             if not self.process or self.state != "starting":
-                self._startup_timer.stop()
+                startup_timer.stop()
                 return
 
             if self.process.poll() is not None:
-                self._startup_timer.stop()
+                startup_timer.stop()
                 _, stderr = self.process.communicate()
                 err = f"Rclone mount exited during startup:\n{stderr.strip()}"
                 logger.error(err)
@@ -330,12 +332,12 @@ class RcloneDaemon(QObject):
                 return
 
             if is_path_mounted(self.mount_point):
-                self._startup_timer.stop()
+                startup_timer.stop()
                 self._set_state("mounted")
                 return
 
             if time.time() - self._startup_start_time > 10.0:
-                self._startup_timer.stop()
+                startup_timer.stop()
                 err = f"Rclone mount timed out after 10s for path '{self.mount_point}'."
                 logger.error(err)
                 self.mount_error.emit(err)
@@ -343,8 +345,8 @@ class RcloneDaemon(QObject):
                 self._set_state("error")
                 return
 
-        self._startup_timer.timeout.connect(check_startup)
-        self._startup_timer.start()
+        startup_timer.timeout.connect(check_startup)
+        startup_timer.start()
         return True
 
     def stop(self) -> bool:
@@ -379,6 +381,10 @@ class RcloneDaemon(QObject):
         # 3. Final fallback unmount if still reported as mounted
         if is_path_mounted(self.mount_point):
             unmount_fuse_path(self.mount_point, lazy=True)
+
+        if hasattr(self, "_startup_timer") and self._startup_timer:
+            self._startup_timer.stop()
+            self._startup_timer = None
 
         self.process = None
         self.rc_credentials = None

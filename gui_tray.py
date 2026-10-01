@@ -115,46 +115,99 @@ def get_tray_icon(state: str = "idle") -> QIcon:
 
 
 class NewRemoteDialog(QDialog):
-    """Dialog to gather details for creating a new rclone remote with duplicate validation."""
+    """Dialog to gather details for creating a new rclone remote with conditional parameters for non-OAuth providers."""
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Configure New Cloud")
-        self.setMinimumWidth(350)
+        self.setWindowTitle("Configurar Nova Nuvem")
+        self.setMinimumWidth(400)
         
         layout = QVBoxLayout(self)
         form = QFormLayout()
         
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("e.g., my_google_drive")
+        self.name_input.setPlaceholderText("ex: meu_drive")
         
         self.type_combo = QComboBox()
         for provider in SUPPORTED_REMOTE_TYPES:
             self.type_combo.addItem(provider["label"], provider["type"])
+        self.type_combo.currentIndexChanged.connect(self._on_provider_changed)
             
-        form.addRow("Remote Name:", self.name_input)
-        form.addRow("Cloud Provider:", self.type_combo)
-        
+        form.addRow("Nome da Nuvem:", self.name_input)
+        form.addRow("Provedor:", self.type_combo)
+
+        # Conditional input container widget
+        self.conditional_container = QWidget()
+        self.conditional_layout = QFormLayout(self.conditional_container)
+        self.conditional_layout.setContentsMargins(0, 0, 0, 0)
+
+        # WebDAV URL field
+        self.webdav_url_input = QLineEdit()
+        self.webdav_url_input.setPlaceholderText("https://nextcloud.example.com/remote.php/dav/files/user/")
+        self.conditional_layout.addRow("URL WebDAV:", self.webdav_url_input)
+
+        # S3 Fields
+        self.s3_key_input = QLineEdit()
+        self.s3_key_input.setPlaceholderText("Access Key ID")
+        self.s3_secret_input = QLineEdit()
+        self.s3_secret_input.setPlaceholderText("Secret Access Key")
+        self.s3_secret_input.setEchoMode(QLineEdit.Password)
+        self.conditional_layout.addRow("S3 Access Key:", self.s3_key_input)
+        self.conditional_layout.addRow("S3 Secret Key:", self.s3_secret_input)
+
+        form.addRow(self.conditional_container)
         layout.addLayout(form)
         
-        self.btn_create = QPushButton("Start Browser Auth")
+        self.btn_create = QPushButton("Iniciar Autorização no Browser")
         self.btn_create.clicked.connect(self.accept)
         layout.addWidget(self.btn_create)
+
+        self._on_provider_changed(0)
+
+    def _on_provider_changed(self, index: int) -> None:
+        rtype = self.type_combo.currentData()
+        # Hide all conditional rows initially
+        self.webdav_url_input.parentWidget().setVisible(False)
+        self.s3_key_input.parentWidget().setVisible(False)
+        self.s3_secret_input.parentWidget().setVisible(False)
+
+        if rtype == "webdav":
+            self.webdav_url_input.parentWidget().setVisible(True)
+            self.btn_create.setText("Criar Nuvem WebDAV")
+        elif rtype == "s3":
+            self.s3_key_input.parentWidget().setVisible(True)
+            self.s3_secret_input.parentWidget().setVisible(True)
+            self.btn_create.setText("Criar Nuvem S3")
+        else:
+            self.btn_create.setText("Iniciar Autorização no Browser")
 
     def accept(self) -> None:
         name = self.name_input.text().strip()
         if not name:
-            QMessageBox.warning(self, "Input Error", "Remote name cannot be empty.")
+            QMessageBox.warning(self, "Erro de Input", "O nome da nuvem não pode estar vazio.")
             return
         
         existing_remotes = list_remote_names()
         if name in existing_remotes:
-            QMessageBox.warning(self, "Duplicate Error", f"A remote named '{name}' already exists.")
+            QMessageBox.warning(self, "Erro de Duplicado", f"Já existe uma nuvem com o nome '{name}'.")
             return
 
         super().accept()
         
-    def get_data(self) -> tuple[str, str]:
-        return self.name_input.text().strip(), self.type_combo.currentData()
+    def get_data(self) -> tuple[str, str, dict[str, str]]:
+        rtype = self.type_combo.currentData()
+        extra_params = {}
+        if rtype == "webdav":
+            url = self.webdav_url_input.text().strip()
+            if url:
+                extra_params["url"] = url
+        elif rtype == "s3":
+            key = self.s3_key_input.text().strip()
+            secret = self.s3_secret_input.text().strip()
+            if key:
+                extra_params["access_key_id"] = key
+            if secret:
+                extra_params["secret_access_key"] = secret
+        return self.name_input.text().strip(), rtype, extra_params
 
 
 class RcloneTrayIcon(QSystemTrayIcon):
@@ -239,12 +292,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.exec()
 
-    def _toggle_autostart(self, checked: bool) -> None:
-        """Enables or disables system autostart via rclone_settings."""
-        config = load_config()
-        config["autostart"] = checked
-        save_config(config)
-
     def update_tray_icon(self, state: str) -> None:
         """
         Updates the tray icon dynamically based on state ('idle', 'syncing', 'error').
@@ -281,8 +328,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if is_mounted:
             self.update_tray_icon("idle")
             self.showMessage(APP_NAME, "Drive montado com sucesso.", QSystemTrayIcon.Information, 3000)
-        elif state in ("stopped", "unmounting", "error"):
+        elif state == "error":
             self.update_tray_icon("error")
+        elif state in ("stopped", "unmounting"):
+            self.update_tray_icon("idle")
 
     @Slot(str)
     def _on_mount_error(self, error: str) -> None:
@@ -416,18 +465,19 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog.raise_()
         dialog.activateWindow()
         if dialog.exec() == QDialog.Accepted:
-            name, rtype = dialog.get_data()
+            name, rtype, extra_params = dialog.get_data()
             if not name:
                 QMessageBox.warning(None, "Input Error", "Remote name cannot be empty.")
                 return
 
             self._pending_remote_name = name
-            self._creation_thread = RemoteCreationThread(name, rtype)
+            self._creation_thread = RemoteCreationThread(name, rtype, extra_params=extra_params)
+            
+            is_oauth = rtype in ("drive", "onedrive", "dropbox", "box", "pcloud")
+            msg = f"Please complete OAuth in your browser for '{name}'..." if is_oauth else f"Configuring remote '{name}'..."
             
             # Show a progress message since this can take time
-            progress = QMessageBox(QMessageBox.Information, "Configuring", 
-                                  f"Please complete OAuth in your browser for '{name}'...",
-                                  QMessageBox.Cancel)
+            progress = QMessageBox(QMessageBox.Information, "Configuring", msg, QMessageBox.Cancel)
             progress.button(QMessageBox.Cancel).clicked.connect(self._creation_thread.cancel)
             
             self._creation_thread.finished_creation.connect(progress.close)
@@ -446,6 +496,19 @@ class RcloneTrayIcon(QSystemTrayIcon):
             if self._pending_remote_name:
                 remote_name = self._pending_remote_name
                 self._pending_remote_name = None
+
+                if self.daemon.is_running():
+                    res = QMessageBox.question(
+                        None,
+                        "Substituir Drive Ativo",
+                        f"Um drive já está conectado ({self.daemon.current_remote}). Deseja desconectá-lo e conectar ao novo remoto configurado?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    if res != QMessageBox.Yes:
+                        return
+                    self.daemon.stop()
+
                 # Add a 1-second QTimer delay to ensure rclone config file flush completes before mounting
                 QTimer.singleShot(1000, lambda: self.daemon.start(remote_name))
         else:

@@ -26,7 +26,7 @@ O **DucksDrive** é uma interface gráfica (GUI) desktop moderna, leve e robusta
 4. **Integração Nativa com Gerenciadores de Arquivos**:
    * **KDE (Dolphin) & GTK (Nautilus/Thunar/Nemo)**: Inserção automática de atalhos na barra lateral.
    * **Backup Automático**: Cria uma cópia de segurança (`user-places.xbel.bak`) antes de modificar o arquivo de favoritos do KDE.
-   * **Branding Dinâmico**: O ponto de montagem e os marcadores utilizam nomes dinâmicos baseados na nuvem conectada (ex: `~/DucksDrive_meu_drive`).
+   * **Branding Dinâmico**: O ponto de montagem e os marcadores utilizam nomes dinâmicos baseados na nuvem conectada (ex: `~/CloudDrives/{nome_do_remoto}`).
 
 5. **Engenharia e Confiabilidade**:
    * **Instância Única (`QSharedMemory`)**: Impede execuções duplicadas e conflitos na porta RC.

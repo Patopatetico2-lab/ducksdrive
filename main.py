@@ -114,8 +114,10 @@ class RcloneAppController(QObject):
                 self.stats_poller.stats_updated.connect(self.tray.update_stats)
                 self.stats_poller.start()
             
-            # Add to file manager sidebar
-            integrate_mount(self.daemon.mount_point)
+            # Add to file manager sidebar with dynamic label
+            remote_name = self.daemon.current_remote or "Drive"
+            clean_remote = remote_name.rstrip(":")
+            integrate_mount(self.daemon.mount_point, label=f"DucksDrive - {clean_remote}")
             
         elif state == "unmounting" or state == "stopped":
             # Stop polling

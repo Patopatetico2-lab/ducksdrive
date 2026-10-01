@@ -122,7 +122,9 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.bwlimit_combo.setCurrentIndex(index)
         else:
-            self.bwlimit_combo.setCurrentIndex(0)
+            # Add custom bandwidth limit dynamically if not in presets
+            self.bwlimit_combo.addItem(f"Personalizado ({bwlimit_val})", bwlimit_val)
+            self.bwlimit_combo.setCurrentIndex(self.bwlimit_combo.count() - 1)
 
         transfers_val = int(self.config.get("transfers", 4))
         self.transfers_spin.setValue(transfers_val)

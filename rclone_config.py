@@ -114,53 +114,6 @@ def list_remote_names() -> List[str]:
     return sorted(list(remotes.keys()))
 
 
-def create_remote_sync(
-    remote_name: str,
-    remote_type: str,
-    extra_params: Optional[Dict[str, str]] = None,
-    timeout: int = 300,
-) -> Tuple[bool, str]:
-    """
-    Synchronously creates an rclone remote by calling `rclone config create`.
-    Note: For OAuth providers (e.g. Google Drive), this opens a local webserver and browser.
-
-    Args:
-        remote_name: Name for the new remote.
-        remote_type: Storage provider type (e.g., 'drive', 'onedrive').
-        extra_params: Optional dictionary of key-value config parameters.
-        timeout: Maximum time in seconds to wait for configuration and OAuth approval.
-
-    Returns:
-        Tuple[bool, str]: Success boolean and status message or error details.
-    """
-    rclone_bin = get_rclone_path()
-    cmd = [rclone_bin, "config", "create", remote_name, remote_type]
-
-    # Explicitly ensure local OAuth browser flow is enabled where applicable
-    params: Dict[str, str] = {"config_is_local": "true"}
-    if extra_params:
-        params.update(extra_params)
-
-    for key, value in params.items():
-        cmd.extend([key, str(value)])
-
-    logger.info("Executing rclone config create command: %s", " ".join(cmd))
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if proc.returncode == 0:
-            return True, f"Remote '{remote_name}' successfully configured."
-        return False, f"Failed to configure remote '{remote_name}': {proc.stderr.strip() or proc.stdout.strip()}"
-    except subprocess.TimeoutExpired:
-        return False, f"Remote configuration timed out after {timeout} seconds."
-    except Exception as exc:
-        return False, f"Error configuring remote: {str(exc)}"
-
-
 class RemoteCreationThread(QThread):
     """
     Background worker thread to run `rclone config create` asynchronously,

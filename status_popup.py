@@ -202,6 +202,9 @@ class StatusPopup(QWidget):
         self._quota_timer = QTimer(self)
         self._quota_timer.setInterval(10 * 60 * 1000)  # 10 minutes cache
         self._quota_timer.timeout.connect(self._fetch_quota)
+        self._quota_timer.start()
+
+        self._quota_worker: Optional[QuotaWorkerThread] = None
 
         self._init_ui()
 
@@ -387,6 +390,7 @@ class StatusPopup(QWidget):
             for i in reversed(range(self.scroll_layout.count())):
                 widget = self.scroll_layout.itemAt(i).widget()
                 if isinstance(widget, TransferItem):
+                    self.scroll_layout.removeWidget(widget)
                     widget.deleteLater()
             
             if stats.active_transfers:
@@ -448,4 +452,11 @@ class StatusPopup(QWidget):
         if event.key() == Qt.Key_Escape:
             self.close()
         super().keyPressEvent(event)
+
+    def closeEvent(self, event: Any) -> None:
+        """Ensures background quota worker thread is safely stopped on close."""
+        if self._quota_worker and self._quota_worker.isRunning():
+            self._quota_worker.quit()
+            self._quota_worker.wait(1000)
+        super().closeEvent(event)
 
