@@ -17,10 +17,22 @@ if [ -f /etc/debian_version ]; then
 elif [ -f /etc/arch-release ]; then
     echo "Detected Arch Linux-based system."
     sudo pacman -Syu --noconfirm rclone fuse3 python-pip
+elif [ -f /etc/fedora-release ] || [ -f /etc/redhat-release ]; then
+    echo "Detected Fedora/RHEL-based system."
+    sudo dnf install -y rclone fuse3 python3-pip
+elif [ -f /etc/SuSE-release ] || grep -qi "suse" /etc/os-release 2>/dev/null; then
+    echo "Detected openSUSE-based system."
+    sudo zypper refresh && sudo zypper install -y rclone fuse3 python3-pip
 else
-    echo "Error: Unsupported Linux distribution. Automatic dependency installation is only supported on Debian/Ubuntu and Arch Linux." >&2
+    echo "Warning: Unsupported Linux distribution. Automatic dependency installation is not supported for this OS." >&2
     echo "Please ensure 'rclone', 'fuse3', 'python3-venv', and 'python3-pip' are installed manually." >&2
-    exit 1
+    read -p "Deseja tentar prosseguir com a configuração do ambiente Python mesmo assim? (s/N): " response
+    if [ "$response" = "s" ] || [ "$response" = "S" ]; then
+        echo "Prosseguindo com a instalação..."
+    else
+        echo "Instalação cancelada."
+        exit 1
+    fi
 fi
 
 mkdir -p "$INSTALL_DIR"

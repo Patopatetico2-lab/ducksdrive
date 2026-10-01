@@ -209,3 +209,29 @@ class RemoteCreationThread(QThread):
                     self._process.kill()
                 except Exception:
                     pass
+
+
+def delete_remote(remote_name: str) -> bool:
+    """
+    Safely deletes an rclone remote by calling `rclone config delete <remote_name>`.
+
+    Args:
+        remote_name: Name of the remote to delete.
+
+    Returns:
+        bool: True if deleted successfully, False otherwise.
+    """
+    try:
+        rclone_bin = get_rclone_path()
+        clean_name = remote_name.rstrip(":")
+        cmd = [rclone_bin, "config", "delete", clean_name]
+        logger.info("Executing rclone config delete: %s", " ".join(cmd))
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0:
+            logger.info("Remote '%s' deleted successfully.", clean_name)
+            return True
+        logger.error("Failed to delete remote '%s': %s", clean_name, res.stderr.strip() or res.stdout.strip())
+        return False
+    except Exception as exc:
+        logger.error("Exception deleting remote '%s': %s", remote_name, exc)
+        return False

@@ -37,7 +37,8 @@ from PySide6.QtWidgets import (
 from rclone_config import (
     SUPPORTED_REMOTE_TYPES,
     list_remote_names,
-    RemoteCreationThread
+    RemoteCreationThread,
+    delete_remote
 )
 from rclone_daemon import RcloneDaemon
 from rclone_stats import StatsData
@@ -228,6 +229,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.status_popup = StatusPopup(daemon)
         
         self._menu = QMenu()
+        self._menu.aboutToShow.connect(self._setup_menu)
         self._setup_menu()
         self.setContextMenu(self._menu)
         
@@ -237,7 +239,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _setup_menu(self) -> None:
-        """Initializes the context menu with a rigorous 4-block professional structure."""
+        """Initializes the context menu with a rigorous 4-block professional structure and dynamic remote listing."""
         self._menu.clear()
         
         # Bloco 1 (Topo): Status atual da nuvem (desabilitado)
@@ -256,24 +258,40 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_panel.triggered.connect(self._show_transfer_panel)
         self._menu.addAction(self.action_panel)
 
-        # Actions for mounting/unmounting (integrated into management logic)
-        self.action_mount = QAction("Conectar Nuvem...", self)
-        self.action_mount.triggered.connect(self._show_mount_selector)
-        self.action_unmount = QAction("Desconectar Nuvem", self)
-        self.action_unmount.triggered.connect(self.daemon.stop)
-        self.action_unmount.setVisible(False)
-        
         self._menu.addSeparator()
         
-        # Bloco 3 (Gerenciamento): Manutenção e Configuração
-        # Submenu para gerenciar remotos criado nativamente via QMenu.addMenu
+        # Bloco 3 (Gerenciamento): Submenu dinâmico de Nuvens
         self.menu_remotes = self._menu.addMenu("Gerenciar Nuvens")
-        self.menu_remotes.addAction(self.action_mount)
+        
+        remotes = list_remote_names()
+        if remotes:
+            for remote in remotes:
+                is_active = self.daemon.is_running() and self.daemon.current_remote and self.daemon.current_remote.rstrip(":") == remote.rstrip(":")
+                label = f"✓ {remote} (Ativo)" if is_active else remote
+                action = QAction(label, self)
+                if is_active:
+                    action.setEnabled(False)  # Already connected
+                action.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r))
+                self.menu_remotes.addAction(action)
+            self.menu_remotes.addSeparator()
+        else:
+            empty_action = QAction("Nenhuma nuvem configurada", self)
+            empty_action.setEnabled(False)
+            self.menu_remotes.addAction(empty_action)
+            self.menu_remotes.addSeparator()
+
+        self.action_unmount = QAction("Desconectar Atual", self)
+        self.action_unmount.triggered.connect(self.daemon.stop)
+        self.action_unmount.setEnabled(self.daemon.is_running())
         self.menu_remotes.addAction(self.action_unmount)
-        self.menu_remotes.addSeparator()
+
         self.action_new = QAction("Configurar Nova Nuvem...", self)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self.menu_remotes.addAction(self.action_new)
+
+        self.action_delete = QAction("Remover Nuvem...", self)
+        self.action_delete.triggered.connect(self._show_delete_selector)
+        self.menu_remotes.addAction(self.action_delete)
 
         self.action_settings = QAction("Configurações...", self)
         self.action_settings.triggered.connect(self._show_settings_dialog)
@@ -430,6 +448,38 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
             QMessageBox.warning(None, "Folder Missing", f"The directory {path} does not exist.")
+
+    def _show_delete_selector(self) -> None:
+        """Shows a dialog to select and securely delete a configured cloud remote."""
+        remotes = list_remote_names()
+        if not remotes:
+            QMessageBox.information(None, "Nenhuma Nuvem", "Não existem nuvens configuradas para remover.")
+            return
+
+        remote, ok = QInputDialog.getItem(
+            None, "Remover Nuvem", "Selecione a nuvem que deseja remover:", remotes, 0, False
+        )
+        if ok and remote:
+            res = QMessageBox.warning(
+                None,
+                "Confirmar Exclusão",
+                f"Tem certeza que deseja excluir as configurações de '{remote}'?\nEsta ação não pode ser desfeita.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if res != QMessageBox.Yes:
+                return
+
+            # Security logic: if active, stop daemon first
+            active_remote = self.daemon.current_remote
+            if active_remote and active_remote.rstrip(":") == remote.rstrip(":"):
+                logger.info("Active remote '%s' is being deleted. Stopping daemon...", remote)
+                self.daemon.stop()
+
+            if delete_remote(remote):
+                QMessageBox.information(None, "Nuvem Removida", f"A nuvem '{remote}' foi removida com sucesso.")
+            else:
+                QMessageBox.critical(None, "Erro", f"Falha ao remover a nuvem '{remote}'.")
 
     def _show_mount_selector(self) -> None:
         """Shows a dialog to select which remote to mount."""
