@@ -41,8 +41,6 @@ pkill -f "python3.*main.py"
 ./uninstall.sh
 ```
 
-<<<<<<< HEAD
----
 
 O primeiro comando fecha o app caso esteja aberto. O `uninstall.sh` não apaga o diretório de montagem enquanto o drive ainda estiver montado (ele checa com `mountpoint -q`), para não apagar arquivos da nuvem sem querer.
 
