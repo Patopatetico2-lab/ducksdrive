@@ -60,10 +60,3 @@ pkill -f "python3.*main.py"
 ```
 
 ---
-
-## ⚙️ Requisitos do Sistema
-
-* **Linux** com ambiente gráfico (X11 ou Wayland).
-* **Python 3.8+** com suporte a `venv`.
-* **Rclone** (instalado automaticamente pelo script).
-* **FUSE3** (`fuse3`).
