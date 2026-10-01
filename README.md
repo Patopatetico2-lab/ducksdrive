@@ -1,43 +1,29 @@
-# DucksDrive 🦆☁️
+# DucksDrive
 
-O **DucksDrive** é uma interface gráfica (GUI) desktop moderna, leve e robusta desenvolvida em **Python (PySide6/Qt)** para o gerenciamento de serviços de nuvem e unidades de rede através do ecossistema **Rclone** no Linux (compatível com KDE Plasma, GNOME, XFCE e outros ambientes).
+Interface gráfica em Python (PySide6/Qt) para montar e gerenciar nuvens e unidades de rede pelo rclone no Linux. A ideia é ter algo parecido com o cliente do Google Drive do Windows: ícone na bandeja, um painel com o andamento das transferências e a nuvem aparecendo como uma pasta normal no gerenciador de arquivos.
 
----
+Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
-## 🚀 Principais Funcionalidades
+## O que ele faz
 
-1. **Painel Flutuante de Status (Estilo Google Drive Nativo)**:
-   * Ao clicar no ícone da bandeja, uma janela flutuante exibe métricas em tempo real.
-   * **Gráfico de Velocidade**: Linha do tempo com histórico de picos de upload/download renderizada via `QPainter`.
-   * **Progresso e ETA**: Barra de progresso do arquivo atual, velocidade em MB/s e tempo estimado restante formatado em `HH:MM:SS`.
-   * **Disparo Automático**: Abre sozinho quando uma transferência (upload ou download) é iniciada.
+Clicando no ícone da bandeja, abre um painel flutuante com a transferência atual: barra de progresso do arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de upload e download, desenhado com `QPainter`. O painel também abre sozinho quando uma transferência começa.
 
-2. **Painel de Configurações Amigável (`~/.config/ducksdrive/config.json`)**:
-   * **Limite de Banda (`--bwlimit`)**: Defina tetos de velocidade (ex: `10M` ou `off`) para evitar saturar a rede ou travar jogos online.
-   * **Cache VFS Máximo (`--vfs-cache-max-size`)**: Controle o espaço no SSD reservado para arquivos temporários (ex: `2G`).
-   * **Transferências Paralelas (`--transfers`)**: Ajuste quantos arquivos são sincronizados simultaneamente (ex: `4`).
-   * **Início com o Sistema (Autostart)**: Ative/desative a inicialização automática direto pelo menu.
+A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir a montagem, o app confere por até 10 segundos se ela realmente aconteceu, sem travar. Um `QTimer` fica de olho no processo do FUSE em segundo plano, e se ele cair do nada o estado do app é atualizado. Ao fechar, o app espera até 10 segundos para o cache terminar de ser gravado na nuvem.
 
-3. **Ciclo de Vida FUSE Robusto e Seguro**:
-   * **Polling de Montagem**: Verificação ativa (até 10s) para garantir que o drive foi montado corretamente sem travar.
-   * **Monitoramento de Saúde (`QTimer`)**: Detecta quedas inesperadas do processo FUSE em background e atualiza o estado do app.
-   * **Flush Seguro de Cache**: Timeout estendido de 10 segundos no encerramento para garantir gravação íntegra na nuvem.
+Na barra lateral do Dolphin (KDE) e dos gerenciadores GTK (Nautilus, Thunar, Nemo) ele cria um atalho com o nome do remoto. No KDE, antes de mexer no arquivo de favoritos, o app salva uma cópia em `user-places.xbel.bak`.
 
-4. **Integração Nativa com Gerenciadores de Arquivos**:
-   * **KDE (Dolphin) & GTK (Nautilus/Thunar/Nemo)**: Inserção automática de atalhos na barra lateral.
-   * **Backup Automático**: Cria uma cópia de segurança (`user-places.xbel.bak`) antes de modificar o arquivo de favoritos do KDE.
-   * **Branding Dinâmico**: O ponto de montagem e os marcadores utilizam nomes dinâmicos baseados na nuvem conectada (ex: `~/CloudDrives/{nome_do_remoto}`).
+Só uma instância roda por vez (`QSharedMemory`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
 
-5. **Engenharia e Confiabilidade**:
-   * **Instância Única (`QSharedMemory`)**: Impede execuções duplicadas e conflitos na porta RC.
-   * **Logs em Disco (`RotatingFileHandler`)**: Gravação automática de eventos em `~/.local/share/ducksdrive/ducksdrive.log` (até 5MB, com rotação).
-   * **Desinstalação Segura (`uninstall.sh`)**: Validação estrita com `mountpoint -q` que impede a exclusão do diretório se o drive ainda estiver montado, evitando perda de dados na nuvem.
+## Configurações
 
----
+Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de configurações do app:
 
-## 📦 Como Instalar
+- `--bwlimit`: limite de banda, tipo `10M`, ou `off` para sem limite. Ajuda a não saturar a rede nem travar jogo online.
+- `--vfs-cache-max-size`: quanto espaço do SSD o cache pode usar, tipo `2G`.
+- `--transfers`: quantos arquivos são sincronizados ao mesmo tempo, tipo `4`.
+- Iniciar com o sistema (autostart): liga e desliga pelo mesmo menu.
 
-Certifique-se de estar na pasta raiz do repositório clonado e execute o instalador automatizado:
+## Instalação
 
 ```bash
 git clone https://github.com/Patopatetico2-lab/ducksdrive.git
@@ -46,17 +32,17 @@ chmod +x install.sh
 ./install.sh
 ```
 
-O script detecta automaticamente a sua distribuição (Debian/Ubuntu via `apt` ou Arch Linux via `pacman`), instala as dependências necessárias (`rclone`, `fuse3`), configura o ambiente virtual Python (`venv`), instala o `PySide6` e registra o atalho e o ícone no seu sistema.
+O script detecta se a distro usa `apt` (Debian/Ubuntu) ou `pacman` (Arch), instala o `rclone` e o `fuse3`, cria um venv, instala o PySide6 e registra o atalho e o ícone do app.
 
----
-
-## 🛠️ Como Desinstalar
-
-Para remover o aplicativo e todos os seus componentes de forma limpa e segura:
+## Desinstalação
 
 ```bash
 pkill -f "python3.*main.py"
 ./uninstall.sh
 ```
 
+<<<<<<< HEAD
 ---
+
+O primeiro comando fecha o app caso esteja aberto. O `uninstall.sh` não apaga o diretório de montagem enquanto o drive ainda estiver montado (ele checa com `mountpoint -q`), para não apagar arquivos da nuvem sem querer.
+
