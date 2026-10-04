@@ -42,7 +42,6 @@ from rclone_config import (
 )
 from rclone_daemon import RcloneDaemon
 from rclone_stats import StatsData
-from rclone_settings import load_config, save_config
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
 
@@ -152,8 +151,32 @@ class NewRemoteDialog(QDialog):
         self.s3_secret_input = QLineEdit()
         self.s3_secret_input.setPlaceholderText("Secret Access Key")
         self.s3_secret_input.setEchoMode(QLineEdit.Password)
+        self.s3_endpoint_input = QLineEdit()
+        self.s3_endpoint_input.setPlaceholderText("Opcional: ex: https://s3.amazonaws.com ou MinIO/Wasabi endpoint")
         self.conditional_layout.addRow("S3 Access Key:", self.s3_key_input)
         self.conditional_layout.addRow("S3 Secret Key:", self.s3_secret_input)
+        self.conditional_layout.addRow("S3 Endpoint:", self.s3_endpoint_input)
+
+        # Mega Fields
+        self.mega_user_input = QLineEdit()
+        self.mega_user_input.setPlaceholderText("email@example.com")
+        self.mega_pass_input = QLineEdit()
+        self.mega_pass_input.setPlaceholderText("Password")
+        self.mega_pass_input.setEchoMode(QLineEdit.Password)
+        self.conditional_layout.addRow("Mega Email:", self.mega_user_input)
+        self.conditional_layout.addRow("Mega Password:", self.mega_pass_input)
+
+        # FTP / SFTP Fields
+        self.ftp_host_input = QLineEdit()
+        self.ftp_host_input.setPlaceholderText("ftp.example.com ou ip")
+        self.ftp_user_input = QLineEdit()
+        self.ftp_user_input.setPlaceholderText("Username")
+        self.ftp_pass_input = QLineEdit()
+        self.ftp_pass_input.setPlaceholderText("Password")
+        self.ftp_pass_input.setEchoMode(QLineEdit.Password)
+        self.conditional_layout.addRow("Host:", self.ftp_host_input)
+        self.conditional_layout.addRow("User:", self.ftp_user_input)
+        self.conditional_layout.addRow("Password:", self.ftp_pass_input)
 
         form.addRow(self.conditional_container)
         layout.addLayout(form)
@@ -170,6 +193,12 @@ class NewRemoteDialog(QDialog):
         self.webdav_url_input.parentWidget().setVisible(False)
         self.s3_key_input.parentWidget().setVisible(False)
         self.s3_secret_input.parentWidget().setVisible(False)
+        self.s3_endpoint_input.parentWidget().setVisible(False)
+        self.mega_user_input.parentWidget().setVisible(False)
+        self.mega_pass_input.parentWidget().setVisible(False)
+        self.ftp_host_input.parentWidget().setVisible(False)
+        self.ftp_user_input.parentWidget().setVisible(False)
+        self.ftp_pass_input.parentWidget().setVisible(False)
 
         if rtype == "webdav":
             self.webdav_url_input.parentWidget().setVisible(True)
@@ -177,7 +206,17 @@ class NewRemoteDialog(QDialog):
         elif rtype == "s3":
             self.s3_key_input.parentWidget().setVisible(True)
             self.s3_secret_input.parentWidget().setVisible(True)
+            self.s3_endpoint_input.parentWidget().setVisible(True)
             self.btn_create.setText("Criar Nuvem S3")
+        elif rtype == "mega":
+            self.mega_user_input.parentWidget().setVisible(True)
+            self.mega_pass_input.parentWidget().setVisible(True)
+            self.btn_create.setText("Criar Nuvem Mega")
+        elif rtype in ("ftp", "sftp"):
+            self.ftp_host_input.parentWidget().setVisible(True)
+            self.ftp_user_input.parentWidget().setVisible(True)
+            self.ftp_pass_input.parentWidget().setVisible(True)
+            self.btn_create.setText(f"Criar Nuvem {rtype.upper()}")
         else:
             self.btn_create.setText("Iniciar Autorização no Browser")
 
@@ -204,10 +243,30 @@ class NewRemoteDialog(QDialog):
         elif rtype == "s3":
             key = self.s3_key_input.text().strip()
             secret = self.s3_secret_input.text().strip()
+            endpoint = self.s3_endpoint_input.text().strip()
             if key:
                 extra_params["access_key_id"] = key
             if secret:
                 extra_params["secret_access_key"] = secret
+            if endpoint:
+                extra_params["endpoint"] = endpoint
+        elif rtype == "mega":
+            user = self.mega_user_input.text().strip()
+            password = self.mega_pass_input.text().strip()
+            if user:
+                extra_params["user"] = user
+            if password:
+                extra_params["pass"] = password
+        elif rtype in ("ftp", "sftp"):
+            host = self.ftp_host_input.text().strip()
+            user = self.ftp_user_input.text().strip()
+            password = self.ftp_pass_input.text().strip()
+            if host:
+                extra_params["host"] = host
+            if user:
+                extra_params["user"] = user
+            if password:
+                extra_params["pass"] = password
         return self.name_input.text().strip(), rtype, extra_params
 
 
@@ -229,18 +288,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.status_popup = StatusPopup(daemon)
         
         self._menu = QMenu()
-        self._menu.aboutToShow.connect(self._setup_menu)
-        self._setup_menu()
-        self.setContextMenu(self._menu)
-        
-        self.daemon.state_changed.connect(self._on_state_changed)
-        self.daemon.mount_error.connect(self._on_mount_error)
-        
-        self.activated.connect(self._on_activated)
-
-    def _setup_menu(self) -> None:
-        """Initializes the context menu with a rigorous 4-block professional structure and dynamic remote listing."""
-        self._menu.clear()
         
         # Bloco 1 (Topo): Status atual da nuvem (desabilitado)
         self.action_status = QAction("DucksDrive • Disconnected", self)
@@ -262,6 +309,30 @@ class RcloneTrayIcon(QSystemTrayIcon):
         
         # Bloco 3 (Gerenciamento): Submenu dinâmico de Nuvens
         self.menu_remotes = self._menu.addMenu("Gerenciar Nuvens")
+        self.menu_remotes.aboutToShow.connect(self._populate_remotes_menu)
+        self._populate_remotes_menu()
+
+        self.action_settings = QAction("Configurações...", self)
+        self.action_settings.triggered.connect(self._show_settings_dialog)
+        self._menu.addAction(self.action_settings)
+        
+        self._menu.addSeparator()
+        
+        # Bloco 4 (Fundo): Sair
+        self.action_exit = QAction("Sair", self)
+        self.action_exit.triggered.connect(self._confirm_quit)
+        self._menu.addAction(self.action_exit)
+
+        self.setContextMenu(self._menu)
+        
+        self.daemon.state_changed.connect(self._on_state_changed)
+        self.daemon.mount_error.connect(self._on_mount_error)
+        
+        self.activated.connect(self._on_activated)
+
+    def _populate_remotes_menu(self) -> None:
+        """Dynamically populates the 'Gerenciar Nuvens' submenu without leaking memory."""
+        self.menu_remotes.clear()
         
         remotes = list_remote_names()
         if remotes:
@@ -293,17 +364,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_delete.triggered.connect(self._show_delete_selector)
         self.menu_remotes.addAction(self.action_delete)
 
-        self.action_settings = QAction("Configurações...", self)
-        self.action_settings.triggered.connect(self._show_settings_dialog)
-        self._menu.addAction(self.action_settings)
-        
-        self._menu.addSeparator()
-        
-        # Bloco 4 (Fundo): Sair
-        self.action_exit = QAction("Sair", self)
-        self.action_exit.triggered.connect(self._confirm_quit)
-        self._menu.addAction(self.action_exit)
-
     def _show_settings_dialog(self) -> None:
         """Opens the settings configuration dialog."""
         dialog = SettingsDialog()
@@ -324,8 +384,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _on_state_changed(self, state: str) -> None:
         """Updates UI elements based on daemon state."""
         is_mounted = state == "mounted"
-        self.action_mount.setVisible(not is_mounted)
-        self.action_unmount.setVisible(is_mounted)
         self.action_open.setEnabled(is_mounted)
         
         status_map = {

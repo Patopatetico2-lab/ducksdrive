@@ -12,7 +12,7 @@ A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir
 
 Na barra lateral do Dolphin (KDE) e dos gerenciadores GTK (Nautilus, Thunar, Nemo) ele cria um atalho com o nome do remoto. No KDE, antes de mexer no arquivo de favoritos, o app salva uma cópia em `user-places.xbel.bak`.
 
-Só uma instância roda por vez (`QSharedMemory`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
+Só uma instância roda por vez (`QLockFile`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
 
 ## Configurações
 
@@ -40,9 +40,6 @@ O script detecta se a distro usa `apt` (Debian/Ubuntu) ou `pacman` (Arch), insta
 pkill -f "python3.*main.py"
 ./uninstall.sh
 ```
-
-<<<<<<< HEAD
----
 
 O primeiro comando fecha o app caso esteja aberto. O `uninstall.sh` não apaga o diretório de montagem enquanto o drive ainda estiver montado (ele checa com `mountpoint -q`), para não apagar arquivos da nuvem sem querer.
 
