@@ -48,13 +48,21 @@ def mask_command(cmd: List[str]) -> str:
     return " ".join(masked)
 
 
+
+def get_clean_env() -> Dict[str, str]:
+    """Returns a clean environment for subprocesses to avoid AppImage LD_LIBRARY_PATH breaking browsers."""
+    env = os.environ.copy()
+    env.pop("LD_LIBRARY_PATH", None)
+    env.pop("APPDIR", None)
+    return env
+
 def get_rclone_conf_path() -> str:
     """Returns the active rclone config path (RCLONE_CONFIG, `rclone config file`, or the default)."""
     env_path = os.environ.get("RCLONE_CONFIG")
     if env_path:
         return os.path.expanduser(env_path)
     try:
-        res = subprocess.run([get_rclone_path(), "config", "file"], capture_output=True, text=True, timeout=5)
+        res = subprocess.run([get_rclone_path(), "config", "file"], capture_output=True, text=True, timeout=5, env=get_clean_env())
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.returncode == 0 and lines:
             return lines[-1]
@@ -95,6 +103,7 @@ def list_remotes() -> Dict[str, Dict[str, Any]]:
             text=True,
             check=True,
             timeout=10,
+            env=get_clean_env()
         )
         data = json.loads(result.stdout)
         if isinstance(data, dict):
@@ -110,6 +119,7 @@ def list_remotes() -> Dict[str, Dict[str, Any]]:
             text=True,
             check=True,
             timeout=10,
+            env=get_clean_env()
         )
         remotes: Dict[str, Dict[str, Any]] = {}
         for line in result.stdout.splitlines():
@@ -181,6 +191,7 @@ class RemoteCreationThread(QThread):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=get_clean_env()
             )
 
             output_lines: List[str] = []
@@ -287,7 +298,7 @@ def delete_remote(remote_name: str) -> bool:
         clean_name = remote_name.rstrip(":")
         cmd = [rclone_bin, "config", "delete", clean_name]
         logger.info("Executing rclone config delete: %s", " ".join(cmd))
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=get_clean_env())
         if res.returncode == 0:
             logger.info("Remote '%s' deleted successfully.", clean_name)
             return True

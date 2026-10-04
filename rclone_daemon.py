@@ -72,6 +72,13 @@ def get_unmount_binary() -> Optional[str]:
     return None
 
 
+
+def get_clean_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("LD_LIBRARY_PATH", None)
+    env.pop("APPDIR", None)
+    return env
+
 def unmount_fuse_path(mount_path: str, lazy: bool = False) -> bool:
     """
     Unmounts a FUSE mount path using the dynamically detected unmount tool.
@@ -105,7 +112,7 @@ def unmount_fuse_path(mount_path: str, lazy: bool = False) -> bool:
 
     logger.info("Executing unmount: %s", " ".join(cmd))
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=get_clean_env())
         if res.returncode == 0:
             logger.info("Successfully unmounted %s", mount_path)
             return True
@@ -117,7 +124,7 @@ def unmount_fuse_path(mount_path: str, lazy: bool = False) -> bool:
     if not lazy and "fusermount" in tool_name:
         logger.info("Retrying with lazy unmount (-uz)...")
         try:
-            lazy_res = subprocess.run([unmount_bin, "-uz", mount_path], capture_output=True, text=True, timeout=5)
+            lazy_res = subprocess.run([unmount_bin, "-uz", mount_path], capture_output=True, text=True, timeout=5, env=get_clean_env())
             return lazy_res.returncode == 0
         except Exception as exc:
             logger.error("Lazy unmount failed: %s", exc)
@@ -332,12 +339,15 @@ class RcloneDaemon(QObject):
             return False
 
         try:
+            clean_env = get_clean_env()
+            clean_env["RCLONE_RC_USER"] = self.rc_credentials.user
+            clean_env["RCLONE_RC_PASS"] = self.rc_credentials.password
             self.process = subprocess.Popen(
                 cmd,
                 stdout=self._log_file,
                 stderr=subprocess.STDOUT,
                 text=True,
-                env={**os.environ, "RCLONE_RC_USER": self.rc_credentials.user, "RCLONE_RC_PASS": self.rc_credentials.password},
+                env=clean_env,
             )
         except Exception as exc:
             err = f"Failed to spawn rclone mount: {exc}"
