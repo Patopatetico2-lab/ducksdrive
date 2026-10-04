@@ -63,6 +63,9 @@ jobs:
           StartupNotify=true
           DESKTOP
           
+          # Copy desktop file to AppDir root (required by appimagetool)
+          cp AppDir/usr/share/applications/ducksdrive.desktop AppDir/ducksdrive.desktop
+          
           # Create AppRun script with LD_LIBRARY_PATH
           cat << 'APPRUN' > AppDir/AppRun
           #!/bin/bash
