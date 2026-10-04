@@ -23,6 +23,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from rclone_config import list_remote_names
 from rclone_daemon import RcloneDaemon
+from rclone_settings import load_config
+from i18n import set_language
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
 from gui_tray import RcloneTrayIcon
