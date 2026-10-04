@@ -23,6 +23,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "transfers": 4,
     "vfs_cache_mode": "full",
     "autostart": True,
+    "language": "pt_BR",
 }
 
 

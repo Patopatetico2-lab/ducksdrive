@@ -11,6 +11,7 @@ import time
 from collections import deque
 from typing import Any, Optional
 
+from i18n import tr
 from PySide6.QtCore import Qt, QUrl, QTimer, QThread, Signal, Slot
 from PySide6.QtGui import (
     QColor,
@@ -341,7 +342,7 @@ class StatusPopup(QWidget):
         self.speed_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #2980b9;")
         self.eta_value = QLabel("--:--:--")
         self.eta_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #e67e22;")
-        metrics_layout.addWidget(QLabel("Velocidade:"))
+        metrics_layout.addWidget(QLabel(tr("Velocidade:")))
         metrics_layout.addWidget(self.speed_value)
         metrics_layout.addStretch()
         metrics_layout.addWidget(QLabel("Restam:"))
@@ -398,7 +399,7 @@ class StatusPopup(QWidget):
 
     @Slot()
     def _on_quota_error(self) -> None:
-        self.quota_label.setText("Quota indisponível")
+        self.quota_label.setText(tr("Quota indisponível"))
         self.quota_bar.hide()
         self._last_quota_update = time.time() - 540  # Retry after 60s (600 - 540)
 

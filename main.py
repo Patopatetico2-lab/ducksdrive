@@ -171,6 +171,11 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # Initialize language
+    cfg = load_config()
+    set_language(cfg.get("language", "pt_BR"))
+
+
     # 1. Enforce Single Instance via QLockFile
     lock_dir = os.path.expanduser("~/.config/ducksdrive")
     os.makedirs(lock_dir, exist_ok=True)

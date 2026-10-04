@@ -1,3 +1,17 @@
+# Python e Bytecode
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 venv/
+
+# PyInstaller e AppImage
+build/
+dist/
+*.spec
+AppDir/
+appimagetool
+*.AppImage
+
+# Configurações e logs locais
+*.log
+

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from rclone_settings import load_config, save_config
+from i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("DucksDrive • Configurações")
+        self.setWindowTitle(tr("Configurações do DucksDrive"))
         self.setMinimumWidth(480)
         
         self.config = load_config()
@@ -50,12 +51,12 @@ class SettingsDialog(QDialog):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(14)
 
-        title_label = QLabel("<b>Preferências de Desempenho e Sistema</b>")
+        title_label = QLabel(f"<b>{tr('Preferências de Desempenho e Sistema')}</b>")
         title_label.setStyleSheet("font-size: 13pt; color: #2c3e50;")
         main_layout.addWidget(title_label)
 
         # 1. Grupo Rede & Desempenho
-        net_group = QGroupBox("Rede e Transferência")
+        net_group = QGroupBox(tr("Rede e Transferência"))
         net_layout = QFormLayout(net_group)
         net_layout.setSpacing(10)
 
@@ -66,17 +67,17 @@ class SettingsDialog(QDialog):
         self.bwlimit_combo.addItem("10 MB/s (Rápido)", "10M")
         self.bwlimit_combo.addItem("25 MB/s (Muito Rápido)", "25M")
         self.bwlimit_combo.addItem("50 MB/s (Máximo)", "50M")
-        net_layout.addRow("Limite de Banda:", self.bwlimit_combo)
+        net_layout.addRow(tr("Largura de Banda (Upload/Download):"), self.bwlimit_combo)
 
         self.transfers_spin = QSpinBox()
         self.transfers_spin.setRange(1, 16)
         self.transfers_spin.setValue(4)
-        net_layout.addRow("Transferências Paralelas:", self.transfers_spin)
+        net_layout.addRow(tr("Transferências Paralelas:"), self.transfers_spin)
 
         main_layout.addWidget(net_group)
 
         # 2. Grupo Armazenamento & Cache
-        cache_group = QGroupBox("Armazenamento e Cache SSD")
+        cache_group = QGroupBox(tr("Armazenamento e Cache SSD"))
         cache_layout = QFormLayout(cache_group)
         cache_layout.setSpacing(10)
 
@@ -85,22 +86,30 @@ class SettingsDialog(QDialog):
         self.vfs_mode_combo.addItem("Writes", "writes")
         self.vfs_mode_combo.addItem("Minimal", "minimal")
         self.vfs_mode_combo.addItem("Off", "off")
-        cache_layout.addRow("Modo do Cache VFS:", self.vfs_mode_combo)
+        cache_layout.addRow(tr("Modo do Cache VFS:"), self.vfs_mode_combo)
 
         self.cache_spin = QSpinBox()
         self.cache_spin.setRange(1, 500)
         self.cache_spin.setSuffix(" GB")
         self.cache_spin.setValue(2)
-        cache_layout.addRow("Tamanho Máximo do Cache VFS:", self.cache_spin)
+        cache_layout.addRow(tr("Tamanho Máximo do Cache VFS:"), self.cache_spin)
 
         main_layout.addWidget(cache_group)
 
         # 3. Grupo Geral / Sistema
-        sys_group = QGroupBox("Integração com o Sistema")
+        sys_group = QGroupBox(tr("Integração com o Sistema"))
         sys_layout = QVBoxLayout(sys_group)
         
-        self.autostart_checkbox = QCheckBox("Iniciar DucksDrive automaticamente com o sistema operativo")
+        self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
         sys_layout.addWidget(self.autostart_checkbox)
+
+        # Language Selection
+        lang_layout = QFormLayout()
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem(tr("Português (Brasil)"), "pt_BR")
+        self.lang_combo.addItem(tr("Inglês (EUA)"), "en_US")
+        lang_layout.addRow(tr("Idioma / Language:"), self.lang_combo)
+        sys_layout.addLayout(lang_layout)
 
         main_layout.addWidget(sys_group)
 
@@ -108,12 +117,12 @@ class SettingsDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel = QPushButton(tr("Cancelar"))
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_cancel.setStyleSheet("padding: 6px 14px;")
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton("Guardar Configurações")
+        self.btn_save = QPushButton(tr("Guardar Configurações"))
         self.btn_save.clicked.connect(self._save_and_accept)
         self.btn_save.setStyleSheet(
             "background-color: #3498db; color: white; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold;"
@@ -166,6 +175,11 @@ class SettingsDialog(QDialog):
 
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
 
+        lang = str(self.config.get("language", "pt_BR"))
+        index = self.lang_combo.findData(lang)
+        if index >= 0:
+            self.lang_combo.setCurrentIndex(index)
+
     def _save_and_accept(self) -> None:
         """Validates controls, warns on high SSD cache size, saves to config, and closes."""
         bwlimit = self.bwlimit_combo.currentData() or "off"
@@ -194,6 +208,7 @@ class SettingsDialog(QDialog):
         self.config["transfers"] = transfers
         self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
+        self.config["language"] = self.lang_combo.currentData() or "pt_BR" 
 
         # Save to disk
         if save_config(self.config):

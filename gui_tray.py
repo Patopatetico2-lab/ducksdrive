@@ -10,6 +10,7 @@ import os
 import time
 from typing import Optional
 
+from i18n import tr
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,

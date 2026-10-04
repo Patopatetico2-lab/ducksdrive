@@ -14,6 +14,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
+from i18n import tr
 from PySide6.QtCore import QThread, Signal
 
 logger = logging.getLogger(__name__)
