@@ -364,6 +364,7 @@ class StatusPopup(QWidget):
 
     @Slot(int, int)
     def _on_quota_success(self, total: int, used: int) -> None:
+        self.quota_bar.show()
         percent = int((used / total) * 100)
         from rclone_stats import format_bytes
         txt = f"Usando {format_bytes(used)} de {format_bytes(total)} ({percent}%)"
@@ -373,6 +374,7 @@ class StatusPopup(QWidget):
     @Slot()
     def _on_quota_error(self) -> None:
         self.quota_label.setText("Quota indisponível")
+        self.quota_bar.hide()
 
     def update_stats(self, stats: StatsData) -> None:
         """Updates UI elements and chart with new telemetry data."""
