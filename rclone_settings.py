@@ -71,9 +71,13 @@ def _sync_autostart(enabled: bool) -> None:
     
     if enabled:
         os.makedirs(autostart_dir, exist_ok=True)
-        bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
-        if not os.path.exists(bin_path):
-            bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
+        appimage_path = os.environ.get("APPIMAGE")
+        if appimage_path and os.path.exists(appimage_path):
+            bin_path = appimage_path
+        else:
+            bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
+            if not os.path.exists(bin_path):
+                bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
         xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
         icon_path = os.path.join(xdg_data, "ducksdrive", "icon.svg")
         

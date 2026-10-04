@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 from rclone_config import list_remote_names
 from rclone_daemon import RcloneDaemon
 from rclone_settings import load_config
-from i18n import set_language
+from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
 from gui_tray import RcloneTrayIcon
@@ -101,8 +101,13 @@ class RcloneAppController(QObject):
             logger.info("No cloud remotes found. Triggering first-run setup dialog...")
             QTimer.singleShot(200, self.tray._show_new_remote_dialog)
         else:
-            logger.info("Auto-mounting first available remote: %s", remotes[0])
-            self.daemon.start(remotes[0])
+            cfg = load_config()
+            if cfg.get("autostart", True):
+                logger.info("Auto-mounting first available remote: %s", remotes[0])
+                # Execute in background via QTimer to avoid blocking the UI thread during startup
+                QTimer.singleShot(0, lambda: self.daemon.start(remotes[0]))
+            else:
+                logger.info("Autostart disabled. Waiting for user action.")
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
         logger.info("Signal %d received, shutting down...", sig)
@@ -189,8 +194,8 @@ def main() -> None:
     if not lock_file.tryLock(100):
         QMessageBox.critical(
             None,
-            "Already Running",
-            "An instance of DucksDrive is already running in the system tray."
+            tr("Já em Execução"),
+            tr("Uma instância do DucksDrive já está em execução na bandeja do sistema.")
         )
         sys.exit(1)
 
@@ -198,23 +203,23 @@ def main() -> None:
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(
             None,
-            "System Tray Not Found",
-            "The system tray is not available. Please ensure a desktop environment is running."
+            tr("Bandeja do Sistema Não Encontrada"),
+            tr("A bandeja do sistema não está disponível. Verifique se há um ambiente de desktop em execução.")
         )
         sys.exit(1)
 
     # 3. Version Check
     version = get_rclone_version()
     if not version:
-        QMessageBox.critical(None, "Rclone Not Found", 
-                             "Rclone is not installed or could not be found in PATH.")
+        QMessageBox.critical(None, tr("Rclone Não Encontrado"), 
+                             tr("O Rclone não está instalado ou não foi encontrado no PATH."))
         sys.exit(1)
 
     if version < REQUIRED_RCLONE_VERSION:
         v_str = ".".join(map(str, version))
         req_str = ".".join(map(str, REQUIRED_RCLONE_VERSION))
-        QMessageBox.warning(None, "Rclone Outdated", 
-                            f"Detected Rclone v{v_str}.\nVersion v{req_str} or higher is recommended.")
+        QMessageBox.warning(None, tr("Rclone Desatualizado"), 
+                            tr("Detectado Rclone v%s.\nA versão v%s ou superior é recomendada.") % (v_str, req_str))
 
     # 4. Initialize Controller
     controller = RcloneAppController(app)

@@ -120,22 +120,22 @@ class NewRemoteDialog(QDialog):
     """Dialog to gather details for creating a new rclone remote with conditional parameters for non-OAuth providers."""
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Configurar Nova Nuvem")
+        self.setWindowTitle(tr("Configurar Nova Nuvem"))
         self.setMinimumWidth(400)
         
         layout = QVBoxLayout(self)
         form = QFormLayout()
         
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("ex: meu_drive")
+        self.name_input.setPlaceholderText(tr("ex: meu_drive"))
         
         self.type_combo = QComboBox()
         for provider in SUPPORTED_REMOTE_TYPES:
             self.type_combo.addItem(provider["label"], provider["type"])
         self.type_combo.currentIndexChanged.connect(self._on_provider_changed)
             
-        form.addRow("Nome da Nuvem:", self.name_input)
-        form.addRow("Provedor:", self.type_combo)
+        form.addRow(tr("Nome da Nuvem:"), self.name_input)
+        form.addRow(tr("Provedor:"), self.type_combo)
 
         # Conditional input container widget
         self.conditional_container = QWidget()
@@ -183,7 +183,7 @@ class NewRemoteDialog(QDialog):
         form.addRow(self.conditional_container)
         layout.addLayout(form)
         
-        self.btn_create = QPushButton("Iniciar Autorização no Browser")
+        self.btn_create = QPushButton(tr("Iniciar Autorização no Browser"))
         self.btn_create.clicked.connect(self.accept)
         layout.addWidget(self.btn_create)
 
@@ -204,34 +204,34 @@ class NewRemoteDialog(QDialog):
 
         if rtype == "webdav":
             self.conditional_layout.setRowVisible(self.webdav_url_input, True)
-            self.btn_create.setText("Criar Nuvem WebDAV")
+            self.btn_create.setText(tr("Criar Nuvem WebDAV"))
         elif rtype == "s3":
             self.conditional_layout.setRowVisible(self.s3_key_input, True)
             self.conditional_layout.setRowVisible(self.s3_secret_input, True)
             self.conditional_layout.setRowVisible(self.s3_endpoint_input, True)
-            self.btn_create.setText("Criar Nuvem S3")
+            self.btn_create.setText(tr("Criar Nuvem S3"))
         elif rtype == "mega":
             self.conditional_layout.setRowVisible(self.mega_user_input, True)
             self.conditional_layout.setRowVisible(self.mega_pass_input, True)
-            self.btn_create.setText("Criar Nuvem Mega")
+            self.btn_create.setText(tr("Criar Nuvem Mega"))
         elif rtype in ("ftp", "sftp"):
             self.conditional_layout.setRowVisible(self.ftp_host_input, True)
             self.conditional_layout.setRowVisible(self.ftp_user_input, True)
             self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
-            self.btn_create.setText(f"Criar Nuvem {rtype.upper()}")
+            self.btn_create.setText(tr("Criar Nuvem %s") % rtype.upper())
         else:
-            self.btn_create.setText("Iniciar Autorização no Browser")
+            self.btn_create.setText(tr("Iniciar Autorização no Browser"))
         self.adjustSize()
 
     def accept(self) -> None:
         name = self.name_input.text().strip()
         if not name:
-            QMessageBox.warning(self, "Erro de Input", "O nome da nuvem não pode estar vazio.")
+            QMessageBox.warning(self, tr("Erro de Input"), tr("O nome da nuvem não pode estar vazio."))
             return
         
         existing_remotes = list_remote_names()
         if name in existing_remotes:
-            QMessageBox.warning(self, "Erro de Duplicado", f"Já existe uma nuvem com o nome '{name}'.")
+            QMessageBox.warning(self, tr("Erro de Duplicado"), tr("Já existe uma nuvem com o nome '%s'.") % name)
             return
 
         super().accept()
@@ -302,33 +302,33 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._menu.addSeparator()
         
         # Bloco 2 (Ações): Produtividade
-        self.action_open = QAction("Abrir Pasta Local", self)
+        self.action_open = QAction(tr("Abrir Pasta Local"), self)
         self.action_open.triggered.connect(self._open_folder)
         self._menu.addAction(self.action_open)
 
-        self.action_panel = QAction("Abrir Painel de Transferências", self)
+        self.action_panel = QAction(tr("Abrir Painel de Transferências"), self)
         self.action_panel.triggered.connect(self._show_transfer_panel)
         self._menu.addAction(self.action_panel)
 
-        self.action_connect = QAction("Conectar Nuvem...", self)
+        self.action_connect = QAction(tr("Selecionar Nuvem para Conectar..."), self)
         self.action_connect.triggered.connect(self._show_mount_selector)
         self._menu.addAction(self.action_connect)
 
         self._menu.addSeparator()
         
         # Bloco 3 (Gerenciamento): Submenu dinâmico de Nuvens
-        self.menu_remotes = self._menu.addMenu("Gerenciar Nuvens")
+        self.menu_remotes = self._menu.addMenu(tr("Gerenciar Nuvens"))
         self.menu_remotes.aboutToShow.connect(self._populate_remotes_menu)
         self._populate_remotes_menu()
 
-        self.action_settings = QAction("Configurações...", self)
+        self.action_settings = QAction(tr("Configurações..."), self)
         self.action_settings.triggered.connect(self._show_settings_dialog)
         self._menu.addAction(self.action_settings)
         
         self._menu.addSeparator()
         
         # Bloco 4 (Fundo): Sair
-        self.action_exit = QAction("Sair", self)
+        self.action_exit = QAction(tr("Sair"), self)
         self.action_exit.triggered.connect(self._confirm_quit)
         self._menu.addAction(self.action_exit)
 
@@ -347,7 +347,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if remotes:
             for remote in remotes:
                 is_active = self.daemon.is_running() and self.daemon.current_remote and self.daemon.current_remote.rstrip(":") == remote.rstrip(":")
-                label = f"✓ {remote} (Ativo)" if is_active else remote
+                label = f"✓ {remote} (" + tr("Ativo") + ")" if is_active else remote
                 action = QAction(label, self)
                 if is_active:
                     action.setEnabled(False)  # Already connected
@@ -355,21 +355,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.menu_remotes.addAction(action)
             self.menu_remotes.addSeparator()
         else:
-            empty_action = QAction("Nenhuma nuvem configurada", self)
+            empty_action = QAction(tr("Nenhuma nuvem configurada"), self)
             empty_action.setEnabled(False)
             self.menu_remotes.addAction(empty_action)
             self.menu_remotes.addSeparator()
 
-        self.action_unmount = QAction("Desconectar Atual", self)
+        self.action_unmount = QAction(tr("Desconectar Atual"), self)
         self.action_unmount.triggered.connect(self.daemon.stop)
         self.action_unmount.setEnabled(self.daemon.is_running())
         self.menu_remotes.addAction(self.action_unmount)
 
-        self.action_new = QAction("Configurar Nova Nuvem...", self)
+        self.action_new = QAction(tr("Adicionar Nova Nuvem..."), self)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self.menu_remotes.addAction(self.action_new)
 
-        self.action_delete = QAction("Remover Nuvem...", self)
+        self.action_delete = QAction(tr("Remover Nuvem..."), self)
         self.action_delete.triggered.connect(self._show_delete_selector)
         self.menu_remotes.addAction(self.action_delete)
 
@@ -396,11 +396,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_open.setEnabled(is_mounted)
         
         status_map = {
-            "stopped": "Desconectado",
-            "starting": "Conectando...",
-            "mounted": "Conectado",
-            "unmounting": "Desconectando...",
-            "error": "Erro"
+            "stopped": tr("Desconectado"),
+            "starting": tr("Conectando..."),
+            "mounted": tr("Conectado"),
+            "unmounting": tr("Desconectando..."),
+            "error": tr("Erro")
         }
         state_label = status_map.get(state, state.capitalize())
         remote_name = self.daemon.current_remote or "DucksDrive"
@@ -412,7 +412,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         
         if is_mounted:
             self.update_tray_icon("idle")
-            self.showMessage(APP_NAME, "Drive montado com sucesso.", QSystemTrayIcon.Information, 3000)
+            self.showMessage(APP_NAME, tr("Drive montado com sucesso."), QSystemTrayIcon.Information, 3000)
         elif state == "error":
             self.update_tray_icon("error")
         elif state in ("stopped", "unmounting"):
@@ -431,7 +431,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._last_error_time = now
         self._last_error_msg = error
         self.update_tray_icon("error")
-        QMessageBox.critical(None, "Mount Error", error)
+        QMessageBox.critical(None, tr("Erro de Montagem"), error)
 
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
@@ -447,11 +447,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     t = stats.active_transfers[0]
                     name = t.get("name", "file")
                     pct = int(t.get("percentage") or 0)
-                    text = f"A enviar: {name} ({pct}%) • {stats.speed_str} • ETA: {stats.eta_str}"
+                    text = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                     self.action_status.setText(text)
                     self.setToolTip(f"{APP_NAME}: {text}")
                 else:
-                    text = f"Speed: {stats.speed_str} • ETA: {stats.eta_str}"
+                    text = f"{tr('Velocidade:')} {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                     self.action_status.setText(text)
                     self.setToolTip(f"{APP_NAME}: {stats.status_text}")
             else:
@@ -460,18 +460,18 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     self._was_syncing = False
                     self.showMessage(
                         APP_NAME,
-                        "Transferências concluídas! Todos os ficheiros foram sincronizados com a nuvem.",
+                        tr("Transferências concluídas! Todos os ficheiros foram sincronizados com a nuvem."),
                         QSystemTrayIcon.Information,
                         4000
                     )
-                text = f"Speed: {stats.speed_str} • ETA: {stats.eta_str}"
+                text = f"{tr('Velocidade:')} {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                 self.action_status.setText(text)
                 self.setToolTip(f"{APP_NAME}: {stats.status_text}")
         else:
             self._was_syncing = False
             self.update_tray_icon("error")
             if self.daemon.state == "mounted":
-                self.action_status.setText("Status: Connection Lost")
+                self.action_status.setText(tr("Status: Conexão Perdida"))
 
         # Forward telemetry to floating status popup
         self.status_popup.update_stats(stats)
@@ -506,8 +506,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if self._has_active_transfer():
             res = QMessageBox.warning(
                 None,
-                "Active Transfers",
-                "File transfers are currently in progress.\nAre you sure you want to quit and interrupt them?",
+                tr("Transferências Ativas"),
+                tr("Transferências de arquivos estão em andamento.\nTem certeza que deseja sair e interrompê-las?"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -524,23 +524,23 @@ class RcloneTrayIcon(QSystemTrayIcon):
             except Exception as e:
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
-            QMessageBox.warning(None, "Folder Missing", f"The directory {path} does not exist.")
+            QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
 
     def _show_delete_selector(self) -> None:
         """Shows a dialog to select and securely delete a configured cloud remote."""
         remotes = list_remote_names()
         if not remotes:
-            QMessageBox.information(None, "Nenhuma Nuvem", "Não existem nuvens configuradas para remover.")
+            QMessageBox.information(None, tr("Nenhuma Nuvem"), tr("Não existem nuvens configuradas para remover."))
             return
 
         remote, ok = QInputDialog.getItem(
-            None, "Remover Nuvem", "Selecione a nuvem que deseja remover:", remotes, 0, False
+            None, tr("Remover Nuvem"), tr("Selecione a nuvem que deseja remover:"), remotes, 0, False
         )
         if ok and remote:
             res = QMessageBox.warning(
                 None,
-                "Confirmar Exclusão",
-                f"Tem certeza que deseja excluir as configurações de '{remote}'?\nEsta ação não pode ser desfeita.",
+                tr("Confirmar Exclusão"),
+                tr("Tem certeza que deseja excluir as configurações de '%s'?\nEsta ação não pode ser desfeita.") % remote,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -554,16 +554,16 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.daemon.stop()
 
             if delete_remote(remote):
-                QMessageBox.information(None, "Nuvem Removida", f"A nuvem '{remote}' foi removida com sucesso.")
+                QMessageBox.information(None, tr("Nuvem Removida"), tr("A nuvem '%s' foi removida com sucesso.") % remote)
             else:
-                QMessageBox.critical(None, "Erro", f"Falha ao remover a nuvem '{remote}'.")
+                QMessageBox.critical(None, tr("Erro"), tr("Falha ao remover a nuvem '%s'.") % remote)
 
     def _show_mount_selector(self) -> None:
         """Shows a dialog to select which remote to mount."""
         remotes = list_remote_names()
         if not remotes:
-            msg = "No cloud remotes configured.\nWould you like to configure one now?"
-            res = QMessageBox.question(None, "No Remotes", msg, QMessageBox.Yes | QMessageBox.No)
+            msg = tr("Nenhuma nuvem configurada.\nGostaria de configurar uma agora?")
+            res = QMessageBox.question(None, tr("Nenhuma Nuvem"), msg, QMessageBox.Yes | QMessageBox.No)
             if res == QMessageBox.Yes:
                 self._show_new_remote_dialog()
             return
@@ -571,8 +571,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if self.daemon.is_running():
             res = QMessageBox.question(
                 None,
-                "Switch Drive",
-                f"A drive is already connected ({self.daemon.current_remote}).\nWould you like to disconnect it and connect to a new one?",
+                tr("Substituir Drive Ativo"),
+                tr("Um drive já está conectado (%s). Deseja desconectá-lo e conectar ao novo remoto configurado?") % self.daemon.current_remote,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -580,7 +580,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 return
             
         remote, ok = QInputDialog.getItem(
-            None, "Connect Drive", "Select a cloud remote to mount:", remotes, 0, False
+            None, tr("Conectar Nuvem"), tr("Selecione uma nuvem para conectar:"), remotes, 0, False
         )
         if ok and remote:
             self.daemon.start(remote)
@@ -601,10 +601,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self._creation_thread = RemoteCreationThread(name, rtype, extra_params=extra_params)
             
             is_oauth = rtype in ("drive", "onedrive", "dropbox", "box", "pcloud")
-            msg = f"Please complete OAuth in your browser for '{name}'..." if is_oauth else f"Configuring remote '{name}'..."
+            msg = (tr("Por favor, complete a autorização no seu navegador para '%s'...") % name) if is_oauth else (tr("Configurando nuvem '%s'...") % name)
             
             # Show a progress message since this can take time
-            progress = QMessageBox(QMessageBox.Information, "Configuring", msg, QMessageBox.Cancel, parent=None)
+            progress = QMessageBox(QMessageBox.Information, tr("Configurando"), msg, QMessageBox.Cancel, parent=None)
             self._progress_box = progress
             # Cancel button and the window "X" both end up in rejected()
             progress.rejected.connect(self._creation_thread.cancel)
@@ -642,8 +642,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if self.daemon.is_running():
                     res = QMessageBox.question(
                         None,
-                        "Substituir Drive Ativo",
-                        f"Um drive já está conectado ({self.daemon.current_remote}). Deseja desconectá-lo e conectar ao novo remoto configurado?",
+                        tr("Substituir Drive Ativo"),
+                        tr("Um drive já está conectado (%s). Deseja desconectá-lo e conectar ao novo remoto configurado?") % self.daemon.current_remote,
                         QMessageBox.Yes | QMessageBox.No,
                         QMessageBox.No
                     )
@@ -656,4 +656,4 @@ class RcloneTrayIcon(QSystemTrayIcon):
         else:
             self._pending_remote_name = None
             if "cancelled" not in message.lower():
-                QMessageBox.critical(None, "Configuration Failed", message)
+                QMessageBox.critical(None, tr("Falha na Configuração"), message)

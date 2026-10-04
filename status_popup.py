@@ -75,7 +75,7 @@ class SpeedChartWidget(QWidget):
             # Draw subtle empty state text
             painter.setPen(QColor(150, 150, 150))
             painter.setFont(QFont("Sans Serif", 9))
-            painter.drawText(rect, Qt.AlignCenter, "No active transfer speed")
+            painter.drawText(rect, Qt.AlignCenter, tr("Sem velocidade de transferência ativa"))
             return
 
         max_speed = max(self.speed_history)
@@ -271,13 +271,13 @@ class StatusPopup(QWidget):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
-        self.status_badge = QLabel("● Offline")
+        self.status_badge = QLabel(tr("● Offline"))
         self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt; margin-right: 6px;")
         header_layout.addWidget(self.status_badge)
 
         self.btn_close = QPushButton("✕")
         self.btn_close.setFixedSize(22, 22)
-        self.btn_close.setToolTip("Fechar Painel (ou pressione Esc)")
+        self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
         self.btn_close.setStyleSheet("""
             QPushButton {
                 background: #ecf0f1;
@@ -301,7 +301,7 @@ class StatusPopup(QWidget):
         # 2. Quota Section
         quota_layout = QVBoxLayout()
         quota_layout.setSpacing(2)
-        self.quota_label = QLabel("Calculando espaço...")
+        self.quota_label = QLabel(tr("Calculando espaço..."))
         self.quota_label.setStyleSheet("font-size: 8pt; color: #7f8c8d;")
         self.quota_bar = QProgressBar()
         self.quota_bar.setFixedHeight(6)
@@ -329,7 +329,7 @@ class StatusPopup(QWidget):
         self.scroll_layout.addStretch()
         self.scroll.setWidget(self.scroll_content)
         
-        self.empty_label = QLabel("Nenhum arquivo sendo transferido")
+        self.empty_label = QLabel(tr("Nenhum arquivo sendo transferido"))
         self.empty_label.setStyleSheet("color: #bdc3c7; font-style: italic; padding: 20px 0;")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.scroll_layout.insertWidget(0, self.empty_label)
@@ -345,7 +345,7 @@ class StatusPopup(QWidget):
         metrics_layout.addWidget(QLabel(tr("Velocidade:")))
         metrics_layout.addWidget(self.speed_value)
         metrics_layout.addStretch()
-        metrics_layout.addWidget(QLabel("Restam:"))
+        metrics_layout.addWidget(QLabel(tr("Restam:")))
         metrics_layout.addWidget(self.eta_value)
         main_layout.addLayout(metrics_layout)
 
@@ -353,7 +353,7 @@ class StatusPopup(QWidget):
         main_layout.addWidget(self.chart_widget)
 
         # Footer
-        self.btn_open = QPushButton("Abrir Pasta Local")
+        self.btn_open = QPushButton(tr("Abrir Pasta Local"))
         self.btn_open.clicked.connect(self._open_cloud_folder)
         main_layout.addWidget(self.btn_open)
 
@@ -393,7 +393,7 @@ class StatusPopup(QWidget):
         self.quota_bar.show()
         percent = int((used / total) * 100)
         from rclone_stats import format_bytes
-        txt = f"Usando {format_bytes(used)} de {format_bytes(total)} ({percent}%)"
+        txt = tr("Usando %s de %s (%s%%)") % (format_bytes(used), format_bytes(total), percent)
         self.quota_label.setText(txt)
         self.quota_bar.setValue(percent)
 
@@ -414,7 +414,7 @@ class StatusPopup(QWidget):
             self.empty_label.show()
 
         if stats.is_online:
-            self.status_badge.setText("● Online")
+            self.status_badge.setText(tr("● Online"))
             self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText(stats.speed_str)
             self.eta_value.setText(stats.eta_str)
@@ -456,7 +456,7 @@ class StatusPopup(QWidget):
             else:
                 clear_transfers()
         else:
-            self.status_badge.setText("● Offline")
+            self.status_badge.setText(tr("● Offline"))
             self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
