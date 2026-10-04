@@ -169,6 +169,7 @@ class TransferItem(QWidget):
 
     def __init__(self, name: str, percentage: int, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.file_name = name
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(2)
@@ -184,6 +185,11 @@ class TransferItem(QWidget):
         self.progress.setFixedHeight(4)
         self.progress.setTextVisible(False)
         layout.addWidget(self.progress)
+
+    def update_data(self, name: str, percentage: int) -> None:
+        self.file_name = name
+        self.name_label.setText(name)
+        self.progress.setValue(percentage)
 
 
 class StatusPopup(QWidget):
@@ -202,7 +208,7 @@ class StatusPopup(QWidget):
         self._quota_timer = QTimer(self)
         self._quota_timer.setInterval(10 * 60 * 1000)  # 10 minutes cache
         self._quota_timer.timeout.connect(self._fetch_quota)
-        self._quota_timer.start()
+        # Note: quota timer is started in showEvent and stopped in hideEvent to avoid background polling when hidden
 
         self._quota_worker: Optional[QuotaWorkerThread] = None
 
@@ -349,6 +355,23 @@ class StatusPopup(QWidget):
         self.btn_open.clicked.connect(self._open_cloud_folder)
         main_layout.addWidget(self.btn_open)
 
+    def showEvent(self, event: Any) -> None:
+        """Starts quota timer when popup becomes visible."""
+        super().showEvent(event)
+        if not self._quota_timer.isActive():
+            self._quota_timer.start()
+        import time
+        now = time.time()
+        if now - self._last_quota_update > 600:
+            self._fetch_quota()
+            self._last_quota_update = now
+
+    def hideEvent(self, event: Any) -> None:
+        """Stops quota timer when popup is hidden to save resources."""
+        super().hideEvent(event)
+        if self._quota_timer.isActive():
+            self._quota_timer.stop()
+
     def _fetch_quota(self) -> None:
         """Spawns the background thread to fetch cloud quota info without blocking UI."""
         if not self.daemon.is_running() or not self.daemon.rc_credentials:
@@ -377,7 +400,15 @@ class StatusPopup(QWidget):
         self.quota_bar.hide()
 
     def update_stats(self, stats: StatsData) -> None:
-        """Updates UI elements and chart with new telemetry data."""
+        """Updates UI elements and chart with new telemetry data, reusing transfer widgets efficiently."""
+        def clear_transfers():
+            for i in reversed(range(self.scroll_layout.count())):
+                widget = self.scroll_layout.itemAt(i).widget()
+                if isinstance(widget, TransferItem):
+                    self.scroll_layout.removeWidget(widget)
+                    widget.deleteLater()
+            self.empty_label.show()
+
         if stats.is_online:
             self.status_badge.setText("● Online")
             self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
@@ -388,26 +419,39 @@ class StatusPopup(QWidget):
             clean_remote = (self.daemon.current_remote or "Drive").rstrip(":")
             self.title_label.setText(f"<b>{clean_remote}</b>")
 
-            # Clear and rebuild transfer list
-            for i in reversed(range(self.scroll_layout.count())):
-                widget = self.scroll_layout.itemAt(i).widget()
-                if isinstance(widget, TransferItem):
-                    self.scroll_layout.removeWidget(widget)
-                    widget.deleteLater()
-            
             if stats.active_transfers:
                 self.empty_label.hide()
-                for t in stats.active_transfers:
-                    item = TransferItem(t.get("name", "Arquivo"), int(t.get("percentage", 0)))
-                    self.scroll_layout.insertWidget(0, item)
+                # Gather existing TransferItems
+                existing_items = []
+                for i in range(self.scroll_layout.count()):
+                    w = self.scroll_layout.itemAt(i).widget()
+                    if isinstance(w, TransferItem):
+                        existing_items.append(w)
+
+                for idx, t in enumerate(stats.active_transfers):
+                    name = t.get("name", "Arquivo")
+                    pct = int(t.get("percentage", 0))
+                    if idx < len(existing_items):
+                        existing_items[idx].update_data(name, pct)
+                    else:
+                        item = TransferItem(name, pct)
+                        # Insert before stretch (which is at the end)
+                        self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
+
+                # Remove surplus items if active transfers shrank
+                while len(existing_items) > len(stats.active_transfers):
+                    extra = existing_items.pop()
+                    self.scroll_layout.removeWidget(extra)
+                    extra.deleteLater()
             else:
-                self.empty_label.show()
+                clear_transfers()
         else:
             self.status_badge.setText("● Offline")
             self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
             self.chart_widget.add_speed_point(0.0)
+            clear_transfers()
 
         self.btn_open.setEnabled(self.daemon.is_running())
 
@@ -423,15 +467,8 @@ class StatusPopup(QWidget):
 
     def show_near_cursor(self) -> None:
         """
-        Positions the popup nicely near the mouse cursor and triggers quota update.
+        Positions the popup nicely near the mouse cursor.
         """
-        import time
-        now = time.time()
-        # Request quota only if more than 10 mins passed since last fetch or if never fetched
-        if now - self._last_quota_update > 600:
-            self._fetch_quota()
-            self._last_quota_update = now
-
         self.adjustSize()
         cursor_pos = QCursor.pos()
         screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
@@ -456,9 +493,11 @@ class StatusPopup(QWidget):
         super().keyPressEvent(event)
 
     def closeEvent(self, event: Any) -> None:
-        """Ensures background quota worker thread is safely stopped on close."""
+        """Ensures background quota worker thread is safely stopped on close without invalid quit calls."""
         if self._quota_worker and self._quota_worker.isRunning():
-            self._quota_worker.quit()
-            self._quota_worker.wait(1000)
+            try:
+                self._quota_worker.terminate()
+                self._quota_worker.wait(500)
+            except Exception:
+                pass
         super().closeEvent(event)
-

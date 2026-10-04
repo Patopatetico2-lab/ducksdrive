@@ -6,16 +6,23 @@ Provides functions to inject and remove the virtual drive path from:
 2. GTK (GNOME/XFCE/Nautilus/Thunar) sidebars via `~/.config/gtk-3.0/bookmarks`.
 """
 
+import hashlib
 import logging
 import os
 import shutil
+import urllib.parse
 import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
 # Register XML namespaces explicitly to prevent ns0/ns1 prefix corruption in KDE xbel files
-ET.register_namespace("", "http://www.freedesktop.org/standards/shared-mime-info")
-ET.register_namespace("kbel", "http://www.kde.org/standards/kbel/1.0")
+NS_XBEL = "http://www.freedesktop.org/standards/xbel"
+NS_KBEL = "http://www.kde.org/standards/kbel/1.0"
+NS_MIME = "http://www.freedesktop.org/standards/shared-mime-info"
+
+ET.register_namespace("", NS_XBEL)
+ET.register_namespace("kbel", NS_KBEL)
+ET.register_namespace("mime", NS_MIME)
 
 APP_NAME = "DucksDrive"
 GTK_BOOKMARKS_PATH = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
@@ -28,7 +35,7 @@ def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
     Format: file:///home/user/Path Label
     """
     path = os.path.abspath(os.path.expanduser(path))
-    uri = f"file://{path}"
+    uri = f"file://{urllib.parse.quote(path)}"
     entry = f"{uri} {label}"
 
     os.makedirs(os.path.dirname(GTK_BOOKMARKS_PATH), exist_ok=True)
@@ -60,7 +67,7 @@ def remove_gtk_bookmark(path: str) -> bool:
         return True
 
     path = os.path.abspath(os.path.expanduser(path))
-    uri = f"file://{path}"
+    uri = f"file://{urllib.parse.quote(path)}"
 
     try:
         with open(GTK_BOOKMARKS_PATH, "r", encoding="utf-8") as f:
@@ -90,37 +97,39 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
         return False
 
     path = os.path.abspath(os.path.expanduser(path))
-    uri = f"file://{path}"
-
-    try:
-        # Create backup before modifying user-places.xbel
-        shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
-    except Exception as e:
-        logger.warning("Failed to create backup of user-places.xbel: %s", e)
+    uri = f"file://{urllib.parse.quote(path)}"
 
     try:
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         tree = ET.parse(KDE_PLACES_PATH, parser=parser)
         root = tree.getroot()
 
+        bookmark_tag = f"{{{NS_XBEL}}}bookmark"
         # Check for existing
-        for bookmark in root.findall("bookmark"):
+        for bookmark in root.findall(bookmark_tag):
             if bookmark.get("href") == uri:
                 logger.info("KDE place for %s already exists.", path)
                 return True
 
+        # Create backup before modifying user-places.xbel (only when actually modifying)
+        try:
+            shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
+        except Exception as e:
+            logger.warning("Failed to create backup of user-places.xbel: %s", e)
+
         # Create new bookmark element
-        new_bookmark = ET.SubElement(root, "bookmark", {"href": uri})
-        title = ET.SubElement(new_bookmark, "title")
+        new_bookmark = ET.SubElement(root, bookmark_tag, {"href": uri})
+        title = ET.SubElement(new_bookmark, f"{{{NS_XBEL}}}title")
         title.text = label
         
-        info = ET.SubElement(new_bookmark, "info")
-        metadata = ET.SubElement(info, "metadata", {"owner": "http://freedesktop.org"})
+        info = ET.SubElement(new_bookmark, f"{{{NS_XBEL}}}info")
+        metadata = ET.SubElement(info, f"{{{NS_XBEL}}}metadata", {"owner": "http://freedesktop.org"})
         
-        # Standard KDE place attributes
-        ET.SubElement(metadata, "{http://www.kde.org/standards/kbel/1.0}ID").text = str(hash(path))
-        ET.SubElement(metadata, "{http://www.kde.org/standards/kbel/1.0}isSystemItem").text = "false"
-        ET.SubElement(metadata, "{http://www.freedesktop.org/standards/shared-mime-info}icon", {"name": "folder-remote"})
+        # Standard KDE place attributes with deterministic hash
+        kde_id = hashlib.sha1(path.encode("utf-8")).hexdigest()
+        ET.SubElement(metadata, f"{{{NS_KBEL}}}ID").text = kde_id
+        ET.SubElement(metadata, f"{{{NS_KBEL}}}isSystemItem").text = "false"
+        ET.SubElement(metadata, f"{{{NS_MIME}}}icon", {"name": "folder-remote"})
 
         tree.write(KDE_PLACES_PATH, encoding="utf-8", xml_declaration=True)
         logger.info("Added KDE place: %s", label)
@@ -136,25 +145,27 @@ def remove_kde_place(path: str) -> bool:
         return True
 
     path = os.path.abspath(os.path.expanduser(path))
-    uri = f"file://{path}"
+    uri = f"file://{urllib.parse.quote(path)}"
 
     try:
-        # Create backup before modifying
-        shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
-    except Exception as e:
-        logger.warning("Failed to create backup of user-places.xbel: %s", e)
-
-    try:
-        tree = ET.parse(KDE_PLACES_PATH)
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+        tree = ET.parse(KDE_PLACES_PATH, parser=parser)
         root = tree.getroot()
 
+        bookmark_tag = f"{{{NS_XBEL}}}bookmark"
         to_remove = []
-        for bookmark in root.findall("bookmark"):
+        for bookmark in root.findall(bookmark_tag):
             if bookmark.get("href") == uri:
                 to_remove.append(bookmark)
 
         if not to_remove:
             return True
+
+        # Create backup before modifying (only when actually modifying)
+        try:
+            shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
+        except Exception as e:
+            logger.warning("Failed to create backup of user-places.xbel: %s", e)
 
         for bookmark in to_remove:
             root.remove(bookmark)

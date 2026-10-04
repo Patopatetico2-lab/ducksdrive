@@ -12,24 +12,9 @@ import shutil
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
+from PySide6.QtCore import QThread, Signal
+
 logger = logging.getLogger(__name__)
-
-# Fallback-safe PySide6 imports
-try:
-    from PySide6.QtCore import QThread, Signal
-except ImportError:  # pragma: no cover
-    QThread = object  # type: ignore
-
-    def Signal(*args: Any) -> Any:  # type: ignore
-        """Dummy signal placeholder if PySide6 is not yet installed."""
-        class _Signal:
-            def emit(self, *a: Any, **kw: Any) -> None:
-                pass
-
-            def connect(self, slot: Any) -> None:
-                pass
-        return _Signal()
-
 
 # Commonly used cloud storage providers supported by Rclone
 SUPPORTED_REMOTE_TYPES = [
@@ -41,7 +26,8 @@ SUPPORTED_REMOTE_TYPES = [
     {"type": "pcloud", "label": "pCloud"},
     {"type": "s3", "label": "Amazon S3 / S3-Compatible"},
     {"type": "webdav", "label": "Nextcloud / WebDAV"},
-    {"type": "ftp", "label": "FTP / SFTP"},
+    {"type": "ftp", "label": "FTP"},
+    {"type": "sftp", "label": "SFTP"},
 ]
 
 

@@ -119,7 +119,7 @@ class RcloneAppController(QObject):
             clean_remote = remote_name.rstrip(":")
             integrate_mount(self.daemon.mount_point, label=f"DucksDrive - {clean_remote}")
             
-        elif state == "unmounting" or state == "stopped":
+        elif state in ("unmounting", "stopped", "error"):
             # Stop polling
             if self.stats_poller:
                 self.stats_poller.stop()

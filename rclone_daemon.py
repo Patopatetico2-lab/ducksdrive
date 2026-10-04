@@ -6,7 +6,6 @@ random in-memory Remote Control (RC) credentials, and robust FUSE unmounting
 with dynamic fallback to fusermount3 or fusermount.
 """
 
-import atexit
 import logging
 import os
 import secrets
@@ -16,15 +15,14 @@ import time
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer, QCoreApplication
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MOUNT_POINT = os.path.expanduser("~/CloudDrives")
 DEFAULT_RC_HOST = "127.0.0.1"
 DEFAULT_RC_PORT = 5572
-DEFAULT_VFS_CACHE_MODE = "full"
-DEFAULT_VFS_CACHE_MAX_SIZE = "10G"
+LOG_DIR = os.path.expanduser("~/.local/share/ducksdrive")
 
 
 @dataclass(frozen=True)
@@ -125,6 +123,16 @@ def unmount_fuse_path(mount_path: str, lazy: bool = False) -> bool:
     return False
 
 
+def unescape_mount_path(p: str) -> str:
+    """Unescapes octal and special character sequences in /proc/mounts paths (e.g. \040)."""
+    return (
+        p.replace(r"\040", " ")
+         .replace(r"\011", "\t")
+         .replace(r"\012", "\n")
+         .replace(r"\\", "\\")
+    )
+
+
 def is_path_mounted(path: str) -> bool:
     """
     Checks if a given path is an active mount point.
@@ -145,8 +153,10 @@ def is_path_mounted(path: str) -> bool:
             with open("/proc/mounts", "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.split()
-                    if len(parts) >= 2 and parts[1] == path:
-                        return True
+                    if len(parts) >= 2:
+                        mount_point_in_proc = unescape_mount_path(parts[1])
+                        if mount_point_in_proc == path:
+                            return True
         except Exception:
             pass
 
@@ -178,6 +188,7 @@ class RcloneDaemon(QObject):
         self.current_remote: Optional[str] = None
         self.state = "stopped"
         self._startup_timer: Optional[QTimer] = None
+        self._log_file: Optional[Any] = None
 
         # Active health monitoring timer for background FUSE process
         self.health_timer = QTimer(self)
@@ -185,8 +196,10 @@ class RcloneDaemon(QObject):
         self.health_timer.timeout.connect(self._check_process_health)
         self.health_timer.start()
 
-        # Register exit handler for clean shutdown
-        atexit.register(self.stop)
+        # Use Qt lifecycle signal aboutToQuit instead of atexit to avoid deleted C++ object errors
+        app = QCoreApplication.instance()
+        if app:
+            app.aboutToQuit.connect(self.stop)
 
     def _set_state(self, new_state: str) -> None:
         self.state = new_state
@@ -297,17 +310,32 @@ class RcloneDaemon(QObject):
         ]
         logger.info("Starting rclone mount: %s", " ".join(masked_cmd))
 
+        # Open dedicated log file to prevent stdout/stderr pipe deadlock
+        os.makedirs(LOG_DIR, exist_ok=True)
+        log_path = os.path.join(LOG_DIR, f"rclone-{clean_remote_name}.log")
+        try:
+            self._log_file = open(log_path, "w", encoding="utf-8")
+        except Exception as exc:
+            err = f"Failed to open rclone log file '{log_path}': {exc}"
+            logger.error(err)
+            self.mount_error.emit(err)
+            self._set_state("error")
+            return False
+
         try:
             self.process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=self._log_file,
+                stderr=subprocess.STDOUT,
                 text=True,
             )
         except Exception as exc:
             err = f"Failed to spawn rclone mount: {exc}"
             logger.error(err)
             self.mount_error.emit(err)
+            if self._log_file:
+                self._log_file.close()
+                self._log_file = None
             self._set_state("error")
             return False
 
@@ -324,10 +352,18 @@ class RcloneDaemon(QObject):
 
             if self.process.poll() is not None:
                 startup_timer.stop()
-                _, stderr = self.process.communicate()
-                err = f"Rclone mount exited during startup:\n{stderr.strip()}"
+                log_content = ""
+                if self._log_file:
+                    try:
+                        self._log_file.flush()
+                        with open(log_path, "r", encoding="utf-8") as lf:
+                            log_content = lf.read()
+                    except Exception:
+                        pass
+                err = f"Rclone mount exited during startup:\n{log_content.strip()}"
                 logger.error(err)
                 self.mount_error.emit(err)
+                self.stop()
                 self._set_state("error")
                 return
 
@@ -377,6 +413,14 @@ class RcloneDaemon(QObject):
                     self.process.wait(timeout=3)
             except Exception as exc:
                 logger.warning("Error terminating rclone process: %s", exc)
+
+        # Close dedicated log file
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None
 
         # 3. Final fallback unmount if still reported as mounted
         if is_path_mounted(self.mount_point):

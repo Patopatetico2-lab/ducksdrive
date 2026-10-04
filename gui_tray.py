@@ -305,6 +305,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_panel.triggered.connect(self._show_transfer_panel)
         self._menu.addAction(self.action_panel)
 
+        self.action_connect = QAction("Conectar Nuvem...", self)
+        self.action_connect.triggered.connect(self._show_mount_selector)
+        self._menu.addAction(self.action_connect)
+
         self._menu.addSeparator()
         
         # Bloco 3 (Gerenciamento): Submenu dinâmico de Nuvens
@@ -365,8 +369,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.menu_remotes.addAction(self.action_delete)
 
     def _show_settings_dialog(self) -> None:
-        """Opens the settings configuration dialog."""
-        dialog = SettingsDialog()
+        """Opens the settings configuration dialog with proper widget parent."""
+        dialog = SettingsDialog(parent=self.status_popup)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.exec()
 
@@ -412,7 +416,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
     @Slot(str)
     def _on_mount_error(self, error: str) -> None:
         self.update_tray_icon("error")
-        QMessageBox.critical(None, "Mount Error", error)
+        QMessageBox.critical(self.status_popup, "Mount Error", error)
 
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
@@ -486,7 +490,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Confirms exit if active transfers are currently in progress."""
         if self._has_active_transfer():
             res = QMessageBox.warning(
-                None,
+                self.status_popup,
                 "Active Transfers",
                 "File transfers are currently in progress.\nAre you sure you want to quit and interrupt them?",
                 QMessageBox.Yes | QMessageBox.No,
@@ -505,21 +509,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
             except Exception as e:
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
-            QMessageBox.warning(None, "Folder Missing", f"The directory {path} does not exist.")
+            QMessageBox.warning(self.status_popup, "Folder Missing", f"The directory {path} does not exist.")
 
     def _show_delete_selector(self) -> None:
         """Shows a dialog to select and securely delete a configured cloud remote."""
         remotes = list_remote_names()
         if not remotes:
-            QMessageBox.information(None, "Nenhuma Nuvem", "Não existem nuvens configuradas para remover.")
+            QMessageBox.information(self.status_popup, "Nenhuma Nuvem", "Não existem nuvens configuradas para remover.")
             return
 
         remote, ok = QInputDialog.getItem(
-            None, "Remover Nuvem", "Selecione a nuvem que deseja remover:", remotes, 0, False
+            self.status_popup, "Remover Nuvem", "Selecione a nuvem que deseja remover:", remotes, 0, False
         )
         if ok and remote:
             res = QMessageBox.warning(
-                None,
+                self.status_popup,
                 "Confirmar Exclusão",
                 f"Tem certeza que deseja excluir as configurações de '{remote}'?\nEsta ação não pode ser desfeita.",
                 QMessageBox.Yes | QMessageBox.No,
@@ -535,23 +539,23 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.daemon.stop()
 
             if delete_remote(remote):
-                QMessageBox.information(None, "Nuvem Removida", f"A nuvem '{remote}' foi removida com sucesso.")
+                QMessageBox.information(self.status_popup, "Nuvem Removida", f"A nuvem '{remote}' foi removida com sucesso.")
             else:
-                QMessageBox.critical(None, "Erro", f"Falha ao remover a nuvem '{remote}'.")
+                QMessageBox.critical(self.status_popup, "Erro", f"Falha ao remover a nuvem '{remote}'.")
 
     def _show_mount_selector(self) -> None:
         """Shows a dialog to select which remote to mount."""
         remotes = list_remote_names()
         if not remotes:
             msg = "No cloud remotes configured.\nWould you like to configure one now?"
-            res = QMessageBox.question(None, "No Remotes", msg, QMessageBox.Yes | QMessageBox.No)
+            res = QMessageBox.question(self.status_popup, "No Remotes", msg, QMessageBox.Yes | QMessageBox.No)
             if res == QMessageBox.Yes:
                 self._show_new_remote_dialog()
             return
 
         if self.daemon.is_running():
             res = QMessageBox.question(
-                None,
+                self.status_popup,
                 "Switch Drive",
                 f"A drive is already connected ({self.daemon.current_remote}).\nWould you like to disconnect it and connect to a new one?",
                 QMessageBox.Yes | QMessageBox.No,
@@ -561,21 +565,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 return
             
         remote, ok = QInputDialog.getItem(
-            None, "Connect Drive", "Select a cloud remote to mount:", remotes, 0, False
+            self.status_popup, "Connect Drive", "Select a cloud remote to mount:", remotes, 0, False
         )
         if ok and remote:
             self.daemon.start(remote)
 
     def _show_new_remote_dialog(self) -> None:
         """Handles the flow for creating a new remote via background thread."""
-        dialog = NewRemoteDialog()
+        dialog = NewRemoteDialog(parent=self.status_popup)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.raise_()
         dialog.activateWindow()
         if dialog.exec() == QDialog.Accepted:
             name, rtype, extra_params = dialog.get_data()
             if not name:
-                QMessageBox.warning(None, "Input Error", "Remote name cannot be empty.")
+                QMessageBox.warning(self.status_popup, "Input Error", "Remote name cannot be empty.")
                 return
 
             self._pending_remote_name = name
@@ -585,7 +589,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             msg = f"Please complete OAuth in your browser for '{name}'..." if is_oauth else f"Configuring remote '{name}'..."
             
             # Show a progress message since this can take time
-            progress = QMessageBox(QMessageBox.Information, "Configuring", msg, QMessageBox.Cancel)
+            progress = QMessageBox(QMessageBox.Information, "Configuring", msg, QMessageBox.Cancel, parent=self.status_popup)
             progress.button(QMessageBox.Cancel).clicked.connect(self._creation_thread.cancel)
             
             self._creation_thread.finished_creation.connect(progress.close)
@@ -607,7 +611,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
                 if self.daemon.is_running():
                     res = QMessageBox.question(
-                        None,
+                        self.status_popup,
                         "Substituir Drive Ativo",
                         f"Um drive já está conectado ({self.daemon.current_remote}). Deseja desconectá-lo e conectar ao novo remoto configurado?",
                         QMessageBox.Yes | QMessageBox.No,
@@ -622,4 +626,4 @@ class RcloneTrayIcon(QSystemTrayIcon):
         else:
             self._pending_remote_name = None
             if "cancelled" not in message.lower():
-                QMessageBox.critical(None, "Configuration Failed", message)
+                QMessageBox.critical(self.status_popup, "Configuration Failed", message)
