@@ -6,10 +6,13 @@ organized into semantic QGroupBox sections for bandwidth, cache, and system pref
 """
 
 import logging
+import os
 import re
+import shutil
 from typing import Optional
 
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -24,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget
 )
 
-from rclone_settings import load_config, save_config
+from rclone_settings import CONFIG_DIR, load_config, save_config
 from i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -39,7 +42,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("Configurações do DucksDrive"))
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
         
         self.config = load_config()
         self._init_ui()
@@ -51,8 +54,8 @@ class SettingsDialog(QDialog):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(14)
 
-        title_label = QLabel(f"<b>{tr('Preferências de Desempenho e Sistema')}</b>")
-        title_label.setStyleSheet("font-size: 13pt; color: #2c3e50;")
+        title_label = QLabel(tr("Preferências de Desempenho e Sistema"))
+        title_label.setStyleSheet("font-size: 13pt; font-weight: bold;")
         main_layout.addWidget(title_label)
 
         # 1. Grupo Rede & Desempenho
@@ -67,7 +70,7 @@ class SettingsDialog(QDialog):
         self.bwlimit_combo.addItem("10 MB/s (Rápido)", "10M")
         self.bwlimit_combo.addItem("25 MB/s (Muito Rápido)", "25M")
         self.bwlimit_combo.addItem("50 MB/s (Máximo)", "50M")
-        net_layout.addRow(tr("Largura de Banda (Upload/Download):"), self.bwlimit_combo)
+        net_layout.addRow(tr("Limite de Banda:"), self.bwlimit_combo)
 
         self.transfers_spin = QSpinBox()
         self.transfers_spin.setRange(1, 16)
@@ -115,6 +118,14 @@ class SettingsDialog(QDialog):
 
         # Buttons layout
         btn_layout = QHBoxLayout()
+
+        self.btn_uninstall = QPushButton(tr("Desinstalar"))
+        self.btn_uninstall.clicked.connect(self._on_uninstall)
+        self.btn_uninstall.setStyleSheet(
+            "background-color: #e74c3c; color: white; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold;"
+        )
+        btn_layout.addWidget(self.btn_uninstall)
+
         btn_layout.addStretch()
 
         self.btn_cancel = QPushButton(tr("Cancelar"))
@@ -187,6 +198,8 @@ class SettingsDialog(QDialog):
         cache_gb = self.cache_spin.value()
         cache_size = f"{cache_gb}G"
         vfs_mode = self.vfs_mode_combo.currentData() or "full"
+        language = self.lang_combo.currentData() or "pt_BR"
+        language_changed = language != str(self.config.get("language", "pt_BR"))
 
         # Validate high cache size warning if >= 50 GB
         if cache_gb >= 50:
@@ -208,11 +221,48 @@ class SettingsDialog(QDialog):
         self.config["transfers"] = transfers
         self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
-        self.config["language"] = self.lang_combo.currentData() or "pt_BR" 
+        self.config["language"] = language
 
         # Save to disk
         if save_config(self.config):
             QMessageBox.information(self, "Configuração Guardada", "Preferências atualizadas com sucesso.\nAs alterações serão aplicadas na próxima conexão.")
+            if language_changed:
+                QMessageBox.information(
+                    self,
+                    tr("Reinício Necessário"),
+                    tr("O idioma foi alterado. Reinicie o DucksDrive para aplicar o novo idioma.")
+                )
             self.accept()
         else:
             QMessageBox.critical(self, "Erro", "Falha ao gravar o ficheiro de configuração.")
+
+    def _on_uninstall(self) -> None:
+        """Asks for confirmation, removes autostart entry and config directory, then quits."""
+        res = QMessageBox.question(
+            self,
+            tr("Desinstalar DucksDrive"),
+            tr("Tem a certeza de que deseja remover todas as configurações e a inicialização automática do DucksDrive?\n\nA aplicação será encerrada."),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if res != QMessageBox.Yes:
+            return
+
+        xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        autostart_file = os.path.join(xdg_config, "autostart", "ducksdrive.desktop")
+        config_dir = CONFIG_DIR
+
+        try:
+            if os.path.exists(autostart_file):
+                os.remove(autostart_file)
+                logger.info("Removed autostart file: %s", autostart_file)
+            if os.path.isdir(config_dir):
+                shutil.rmtree(config_dir)
+                logger.info("Removed config directory: %s", config_dir)
+        except Exception as e:
+            logger.error("Failed to uninstall DucksDrive: %s", e)
+            QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover os ficheiros de configuração:") + f"\n{e}")
+            return
+
+        self.reject()
+        QApplication.quit()
