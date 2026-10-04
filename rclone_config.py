@@ -8,9 +8,11 @@ in a background thread to prevent blocking the Qt event loop.
 import json
 import logging
 import os
+import select
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -29,6 +31,36 @@ SUPPORTED_REMOTE_TYPES = [
     {"type": "ftp", "label": "FTP"},
     {"type": "sftp", "label": "SFTP"},
 ]
+
+
+_SENSITIVE_PARAMS = {"pass", "password", "secret_access_key", "token", "client_secret"}
+
+
+def mask_command(cmd: List[str]) -> str:
+    """Returns the command line as a string with the value of sensitive `key value` pairs hidden."""
+    masked: List[str] = []
+    for i, arg in enumerate(cmd):
+        if i > 0 and cmd[i - 1].lower() in _SENSITIVE_PARAMS:
+            masked.append("******")
+        else:
+            masked.append(arg)
+    return " ".join(masked)
+
+
+def get_rclone_conf_path() -> str:
+    """Returns the active rclone config path (RCLONE_CONFIG, `rclone config file`, or the default)."""
+    env_path = os.environ.get("RCLONE_CONFIG")
+    if env_path:
+        return os.path.expanduser(env_path)
+    try:
+        res = subprocess.run([get_rclone_path(), "config", "file"], capture_output=True, text=True, timeout=5)
+        lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+        if res.returncode == 0 and lines:
+            return lines[-1]
+    except Exception:
+        pass
+    xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    return os.path.join(xdg, "rclone", "rclone.conf")
 
 
 def get_rclone_path() -> str:
@@ -140,7 +172,7 @@ class RemoteCreationThread(QThread):
         for key, value in params.items():
             cmd.extend([key, str(value)])
 
-        logger.info("Starting background creation: %s", " ".join(cmd))
+        logger.info("Starting background creation: %s", mask_command(cmd))
         try:
             self._process = subprocess.Popen(
                 cmd,
@@ -151,18 +183,51 @@ class RemoteCreationThread(QThread):
             )
 
             output_lines: List[str] = []
+            timed_out = False
             if self._process.stdout:
-                for line in iter(self._process.stdout.readline, ""):
+                fd = self._process.stdout.fileno()
+                os.set_blocking(fd, False)
+                deadline = time.time() + self.timeout
+                buffer = b""
+
+                while True:
                     if self._is_cancelled:
                         break
-                    stripped = line.strip()
-                    if stripped:
-                        output_lines.append(stripped)
-                        self.output_line.emit(stripped)
+                    if time.time() > deadline:
+                        timed_out = True
+                        self._process.kill()
+                        break
+                    
+                    ready, _, _ = select.select([fd], [], [], 1.0)
+                    if ready:
+                        try:
+                            chunk = os.read(fd, 4096)
+                            if not chunk:  # EOF
+                                if buffer.strip():
+                                    decoded = buffer.decode("utf-8", errors="replace").strip()
+                                    output_lines.append(decoded)
+                                    self.output_line.emit(decoded)
+                                break
+                            buffer += chunk
+                            while b"\n" in buffer:
+                                line_bytes, buffer = buffer.split(b"\n", 1)
+                                decoded = line_bytes.decode("utf-8", errors="replace").strip()
+                                if decoded:
+                                    output_lines.append(decoded)
+                                    self.output_line.emit(decoded)
+                        except BlockingIOError:
+                            pass
+                    elif self._process.poll() is not None:
+                        break
+                        
                 self._process.stdout.close()
 
-            self._process.wait(timeout=self.timeout)
+            self._process.wait(timeout=5)
             ret_code = self._process.returncode
+
+            if timed_out:
+                self.finished_creation.emit(False, f"Operation timed out after {self.timeout}s.")
+                return
 
             if self._is_cancelled:
                 self.finished_creation.emit(False, f"Creation of '{self.remote_name}' was cancelled.")
@@ -207,6 +272,15 @@ def delete_remote(remote_name: str) -> bool:
     Returns:
         bool: True if deleted successfully, False otherwise.
     """
+    conf_path = get_rclone_conf_path()
+    bak_path = conf_path + ".bak"
+    # Keep the oldest backup: never overwrite it with an already-modified copy
+    if os.path.exists(conf_path) and not os.path.exists(bak_path):
+        try:
+            shutil.copy2(conf_path, bak_path)
+        except Exception as e:
+            logger.warning("Failed to backup rclone.conf: %s", e)
+
     try:
         rclone_bin = get_rclone_path()
         clean_name = remote_name.rstrip(":")

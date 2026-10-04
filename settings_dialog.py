@@ -80,6 +80,13 @@ class SettingsDialog(QDialog):
         cache_layout = QFormLayout(cache_group)
         cache_layout.setSpacing(10)
 
+        self.vfs_mode_combo = QComboBox()
+        self.vfs_mode_combo.addItem("Full (Recomendado)", "full")
+        self.vfs_mode_combo.addItem("Writes", "writes")
+        self.vfs_mode_combo.addItem("Minimal", "minimal")
+        self.vfs_mode_combo.addItem("Off", "off")
+        cache_layout.addRow("Modo do Cache VFS:", self.vfs_mode_combo)
+
         self.cache_spin = QSpinBox()
         self.cache_spin.setRange(1, 500)
         self.cache_spin.setSuffix(" GB")
@@ -152,6 +159,11 @@ class SettingsDialog(QDialog):
             pass
         self.cache_spin.setValue(max(1, min(cache_gb, 500)))
 
+        vfs_mode = str(self.config.get("vfs_cache_mode", "full"))
+        index = self.vfs_mode_combo.findData(vfs_mode)
+        if index >= 0:
+            self.vfs_mode_combo.setCurrentIndex(index)
+
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
 
     def _save_and_accept(self) -> None:
@@ -160,6 +172,7 @@ class SettingsDialog(QDialog):
         transfers = self.transfers_spin.value()
         cache_gb = self.cache_spin.value()
         cache_size = f"{cache_gb}G"
+        vfs_mode = self.vfs_mode_combo.currentData() or "full"
 
         # Validate high cache size warning if >= 50 GB
         if cache_gb >= 50:
@@ -179,6 +192,7 @@ class SettingsDialog(QDialog):
         self.config["bwlimit"] = bwlimit
         self.config["vfs_cache_max_size"] = cache_size
         self.config["transfers"] = transfers
+        self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
 
         # Save to disk

@@ -7,14 +7,14 @@ Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
 ## O que ele faz
 
-Clicando no ícone da bandeja, abre um painel flutuante com a transferência atual: barra de progresso do arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de upload e download, desenhado com `QPainter`. O painel também abre sozinho quando uma transferência começa.
+Clicando no ícone da bandeja, abre um painel flutuante com a transferência atual: barra de progresso do arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência, desenhado com `QPainter`. O painel também abre sozinho quando uma transferência começa.
 
 A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir a montagem, o app confere por até 10 segundos se ela realmente aconteceu, sem travar. Um `QTimer` fica de olho no processo do FUSE em segundo plano, e se ele cair do nada o estado do app é atualizado. Ao fechar, o app espera até 10 segundos para o cache terminar de ser gravado na nuvem.
 
 Na barra lateral do Dolphin (KDE) e dos gerenciadores GTK (Nautilus, Thunar, Nemo) ele cria um atalho com o nome do remoto. No KDE, antes de mexer no arquivo de favoritos, o app salva uma cópia em `user-places.xbel.bak`.
 
 
-Só uma instância roda por vez (`QSharedMemory`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
+Só uma instância roda por vez (`QLockFile`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
 <img width="338" height="324" alt="b7031b58-5d46-4966-9a31-7f35d97a8aa1" src="https://github.com/user-attachments/assets/f59de122-61bb-4955-96d7-ece7503d27b0" />
 <img width="434" height="200" alt="Image" src="https://github.com/user-attachments/assets/ce46bba7-628a-41cd-b313-b273a151adce" />
 
@@ -41,6 +41,5 @@ O script detecta se a distro usa `apt` (Debian/Ubuntu) ou `pacman` (Arch), insta
 ## Desinstalação
 
 ```bash
-pkill -f "python3.*main.py"
 ./uninstall.sh
 ```

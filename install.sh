@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 APP_NAME="ducksdrive"
 INSTALL_DIR="$HOME/.local/share/$APP_NAME"
 BIN_DIR="$HOME/.local/bin"
@@ -16,7 +16,7 @@ if [ -f /etc/debian_version ]; then
     sudo apt update && sudo apt install -y rclone fuse3 python3-venv python3-pip
 elif [ -f /etc/arch-release ]; then
     echo "Detected Arch Linux-based system."
-    sudo pacman -Syu --noconfirm rclone fuse3 python-pip
+    sudo pacman -S --needed --noconfirm rclone fuse3 python-pip
 elif [ -f /etc/fedora-release ] || [ -f /etc/redhat-release ]; then
     echo "Detected Fedora/RHEL-based system."
     sudo dnf install -y rclone fuse3 python3-pip
@@ -26,8 +26,9 @@ elif [ -f /etc/SuSE-release ] || grep -qi "suse" /etc/os-release 2>/dev/null; th
 else
     echo "Warning: Unsupported Linux distribution. Automatic dependency installation is not supported for this OS." >&2
     echo "Please ensure 'rclone', 'fuse3', 'python3-venv', and 'python3-pip' are installed manually." >&2
-    read -p "Deseja tentar prosseguir com a configuração do ambiente Python mesmo assim? (s/N): " response
-    if [ "$response" = "s" ] || [ "$response" = "S" ]; then
+    response=""
+    read -p "Deseja tentar prosseguir com a configuração do ambiente Python mesmo assim? (s/N): " response || true
+    if [ "${response:-}" = "s" ] || [ "${response:-}" = "S" ]; then
         echo "Prosseguindo com a instalação..."
     else
         echo "Instalação cancelada."
@@ -36,12 +37,13 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp *.py icon.svg "$INSTALL_DIR/"
+cp *.py "$INSTALL_DIR/"
+[ -f icon.svg ] && cp icon.svg "$INSTALL_DIR/"
 
 python3 -m venv "$INSTALL_DIR/venv"
 source "$INSTALL_DIR/venv/bin/activate"
 pip install --upgrade pip
-pip install PySide6
+pip install "PySide6>=6.6,<7"
 deactivate
 
 mkdir -p "$BIN_DIR"

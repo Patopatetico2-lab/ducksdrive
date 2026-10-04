@@ -2,8 +2,10 @@
 filemanager_integration.py - Desktop integration for file manager sidebars.
 
 Provides functions to inject and remove the virtual drive path from:
-1. KDE (Dolphin) sidebars via `~/.config/user-places.xbel` (XML) with automatic .bak backup.
+1. KDE (Dolphin) sidebars via `~/.config/user-places.xbel` (XML) with a one-time .bak backup.
 2. GTK (GNOME/XFCE/Nautilus/Thunar) sidebars via `~/.config/gtk-3.0/bookmarks`.
+
+All writes are atomic (temporary file + os.replace).
 """
 
 import hashlib
@@ -15,18 +17,67 @@ import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
-# Register XML namespaces explicitly to prevent ns0/ns1 prefix corruption in KDE xbel files
-NS_XBEL = "http://www.freedesktop.org/standards/xbel"
-NS_KBEL = "http://www.kde.org/standards/kbel/1.0"
+# KDE's user-places.xbel has NO default namespace: <xbel>, <bookmark>, <title>, <info> and <metadata>
+# are plain tags. Only prefixed tags use namespaces. The prefixes below MUST be registered, otherwise
+# ElementTree rewrites existing entries (Home, Trash, ...) as ns0:/ns1: and Dolphin stops reading them.
+NS_KDEPRIV = "http://www.kde.org/kdepriv"
+NS_BOOKMARK = "http://www.freedesktop.org/standards/desktop-bookmarks"
 NS_MIME = "http://www.freedesktop.org/standards/shared-mime-info"
 
-ET.register_namespace("", NS_XBEL)
-ET.register_namespace("kbel", NS_KBEL)
+ET.register_namespace("kdepriv", NS_KDEPRIV)
+ET.register_namespace("bookmark", NS_BOOKMARK)
 ET.register_namespace("mime", NS_MIME)
 
 APP_NAME = "DucksDrive"
 GTK_BOOKMARKS_PATH = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
 KDE_PLACES_PATH = os.path.expanduser("~/.config/user-places.xbel")
+
+
+def _backup_once(path: str) -> None:
+    """Creates `<path>.bak` only if it does not exist yet, so the pristine original is never overwritten."""
+    bak = f"{path}.bak"
+    if os.path.exists(path) and not os.path.exists(bak):
+        try:
+            shutil.copy2(path, bak)
+        except Exception as e:
+            logger.warning("Failed to create backup of %s: %s", path, e)
+
+
+def _replace_atomically(tmp_path: str, target: str) -> None:
+    """Moves tmp_path over target, keeping the original permissions."""
+    if os.path.exists(target):
+        try:
+            shutil.copymode(target, tmp_path)
+        except OSError:
+            pass
+    os.replace(tmp_path, target)
+
+
+def _atomic_write_text(path: str, content: str) -> None:
+    target = os.path.realpath(path)  # follow symlinks (e.g. dotfile managers)
+    tmp_path = f"{target}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        _replace_atomically(tmp_path, target)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def _atomic_write_tree(tree: ET.ElementTree, path: str) -> None:
+    target = os.path.realpath(path)
+    tmp_path = f"{target}.tmp"
+    try:
+        if hasattr(ET, "indent"):
+            ET.indent(tree, space=" ")  # keep the file human-readable like KDE writes it
+        tree.write(tmp_path, encoding="utf-8", xml_declaration=True)
+        _replace_atomically(tmp_path, target)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
@@ -43,17 +94,15 @@ def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
     lines = []
     if os.path.exists(GTK_BOOKMARKS_PATH):
         with open(GTK_BOOKMARKS_PATH, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f.readlines()]
+            lines = [line.strip() for line in f.readlines() if line.strip()]
 
-    # Check if already exists
-    if any(line.startswith(uri) for line in lines):
+    if any(line == uri or line.startswith(uri + " ") for line in lines):
         logger.info("GTK bookmark for %s already exists.", path)
         return True
 
     lines.append(entry)
     try:
-        with open(GTK_BOOKMARKS_PATH, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+        _atomic_write_text(GTK_BOOKMARKS_PATH, "\n".join(lines) + "\n")
         logger.info("Added GTK bookmark: %s", entry)
         return True
     except Exception as e:
@@ -62,7 +111,7 @@ def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
 
 
 def remove_gtk_bookmark(path: str) -> bool:
-    """Removes any URI entry starting with the given path from GTK bookmarks."""
+    """Removes the exact URI entry (with or without label) from GTK bookmarks."""
     if not os.path.exists(GTK_BOOKMARKS_PATH):
         return True
 
@@ -73,13 +122,12 @@ def remove_gtk_bookmark(path: str) -> bool:
         with open(GTK_BOOKMARKS_PATH, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        new_lines = [line for line in lines if not line.strip().startswith(uri)]
+        new_lines = [line for line in lines if not (line.strip() == uri or line.strip().startswith(uri + " "))]
 
         if len(lines) == len(new_lines):
             return True
 
-        with open(GTK_BOOKMARKS_PATH, "w", encoding="utf-8") as f:
-            f.writelines(new_lines)
+        _atomic_write_text(GTK_BOOKMARKS_PATH, "".join(new_lines))
         logger.info("Removed GTK bookmark for %s", path)
         return True
     except Exception as e:
@@ -89,8 +137,12 @@ def remove_gtk_bookmark(path: str) -> bool:
 
 def add_kde_place(path: str, label: str = APP_NAME) -> bool:
     """
-    Adds an entry to KDE's user-places.xbel (with automatic .bak backup).
-    Injects a <bookmark> element with the appropriate metadata.
+    Adds an entry to KDE's user-places.xbel (one-time .bak backup, atomic write).
+    The structure mirrors the entries Dolphin itself writes:
+      <bookmark href><title/><info>
+        <metadata owner="http://freedesktop.org"><bookmark:icon name=.../></metadata>
+        <metadata owner="http://www.kde.org"><ID/><isSystemItem/></metadata>
+      </info></bookmark>
     """
     if not os.path.exists(KDE_PLACES_PATH):
         logger.debug("KDE places file not found at %s", KDE_PLACES_PATH)
@@ -104,34 +156,27 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
         tree = ET.parse(KDE_PLACES_PATH, parser=parser)
         root = tree.getroot()
 
-        bookmark_tag = f"{{{NS_XBEL}}}bookmark"
-        # Check for existing
-        for bookmark in root.findall(bookmark_tag):
+        for bookmark in root.findall("bookmark"):
             if bookmark.get("href") == uri:
                 logger.info("KDE place for %s already exists.", path)
                 return True
 
-        # Create backup before modifying user-places.xbel (only when actually modifying)
-        try:
-            shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
-        except Exception as e:
-            logger.warning("Failed to create backup of user-places.xbel: %s", e)
+        _backup_once(KDE_PLACES_PATH)
 
-        # Create new bookmark element
-        new_bookmark = ET.SubElement(root, bookmark_tag, {"href": uri})
-        title = ET.SubElement(new_bookmark, f"{{{NS_XBEL}}}title")
+        new_bookmark = ET.SubElement(root, "bookmark", {"href": uri})
+        title = ET.SubElement(new_bookmark, "title")
         title.text = label
-        
-        info = ET.SubElement(new_bookmark, f"{{{NS_XBEL}}}info")
-        metadata = ET.SubElement(info, f"{{{NS_XBEL}}}metadata", {"owner": "http://freedesktop.org"})
-        
-        # Standard KDE place attributes with deterministic hash
-        kde_id = hashlib.sha1(path.encode("utf-8")).hexdigest()
-        ET.SubElement(metadata, f"{{{NS_KBEL}}}ID").text = kde_id
-        ET.SubElement(metadata, f"{{{NS_KBEL}}}isSystemItem").text = "false"
-        ET.SubElement(metadata, f"{{{NS_MIME}}}icon", {"name": "folder-remote"})
 
-        tree.write(KDE_PLACES_PATH, encoding="utf-8", xml_declaration=True)
+        info = ET.SubElement(new_bookmark, "info")
+
+        meta_fd = ET.SubElement(info, "metadata", {"owner": "http://freedesktop.org"})
+        ET.SubElement(meta_fd, f"{{{NS_BOOKMARK}}}icon", {"name": "folder-remote"})
+
+        meta_kde = ET.SubElement(info, "metadata", {"owner": "http://www.kde.org"})
+        ET.SubElement(meta_kde, "ID").text = hashlib.sha1(path.encode("utf-8")).hexdigest()
+        ET.SubElement(meta_kde, "isSystemItem").text = "false"
+
+        _atomic_write_tree(tree, KDE_PLACES_PATH)
         logger.info("Added KDE place: %s", label)
         return True
     except Exception as e:
@@ -152,25 +197,16 @@ def remove_kde_place(path: str) -> bool:
         tree = ET.parse(KDE_PLACES_PATH, parser=parser)
         root = tree.getroot()
 
-        bookmark_tag = f"{{{NS_XBEL}}}bookmark"
-        to_remove = []
-        for bookmark in root.findall(bookmark_tag):
-            if bookmark.get("href") == uri:
-                to_remove.append(bookmark)
-
+        to_remove = [b for b in root.findall("bookmark") if b.get("href") == uri]
         if not to_remove:
             return True
 
-        # Create backup before modifying (only when actually modifying)
-        try:
-            shutil.copy2(KDE_PLACES_PATH, f"{KDE_PLACES_PATH}.bak")
-        except Exception as e:
-            logger.warning("Failed to create backup of user-places.xbel: %s", e)
+        _backup_once(KDE_PLACES_PATH)
 
         for bookmark in to_remove:
             root.remove(bookmark)
 
-        tree.write(KDE_PLACES_PATH, encoding="utf-8", xml_declaration=True)
+        _atomic_write_tree(tree, KDE_PLACES_PATH)
         logger.info("Removed KDE place for %s", path)
         return True
     except Exception as e:

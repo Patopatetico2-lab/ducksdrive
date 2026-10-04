@@ -28,7 +28,8 @@ from filemanager_integration import integrate_mount, clean_integration
 from gui_tray import RcloneTrayIcon
 
 # Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
-LOG_DIR = os.path.expanduser("~/.local/share/ducksdrive")
+xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+LOG_DIR = os.path.join(xdg_data, "ducksdrive")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "ducksdrive.log")
 
@@ -71,6 +72,7 @@ class RcloneAppController(QObject):
         self.daemon = RcloneDaemon()
         self.tray = RcloneTrayIcon(self.daemon)
         self.stats_poller: Optional[RcloneStatsPoller] = None
+        self._old_pollers: list[RcloneStatsPoller] = []
 
         # Connect signals
         self.daemon.state_changed.connect(self._handle_state_change)
@@ -110,8 +112,10 @@ class RcloneAppController(QObject):
         if state == "mounted":
             # Start statistics polling
             if self.daemon.rc_credentials:
+                self._stop_poller()
                 self.stats_poller = RcloneStatsPoller(self.daemon.rc_credentials)
                 self.stats_poller.stats_updated.connect(self.tray.update_stats)
+                self.stats_poller.connection_lost.connect(self._on_connection_lost)
                 self.stats_poller.start()
             
             # Add to file manager sidebar with dynamic label
@@ -120,17 +124,44 @@ class RcloneAppController(QObject):
             integrate_mount(self.daemon.mount_point, label=f"DucksDrive - {clean_remote}")
             
         elif state in ("unmounting", "stopped", "error"):
-            # Stop polling
-            if self.stats_poller:
-                self.stats_poller.stop()
-                self.stats_poller = None
-            
-            # Remove from file manager sidebar
-            clean_integration(self.daemon.mount_point)
+            # Stop polling (non-blocking, the GUI thread must not wait for the HTTP timeout)
+            self._stop_poller()
+
+            if state in ("stopped", "error"):
+                # Remove from file manager sidebar
+                clean_integration(self.daemon.mount_point)
+
+    def _stop_poller(self, wait: bool = False) -> None:
+        """Detaches and stops the current stats poller without blocking the GUI thread (unless wait=True)."""
+        poller = self.stats_poller
+        if poller is None:
+            return
+        self.stats_poller = None
+        try:
+            poller.stats_updated.disconnect(self.tray.update_stats)
+        except (RuntimeError, TypeError):
+            pass
+        poller.stop(wait=wait)
+        if poller.isRunning():
+            # Keep a reference until the thread really finishes to avoid "Destroyed while thread is running"
+            self._old_pollers.append(poller)
+            poller.finished.connect(self._reap_pollers)
+
+    @Slot()
+    def _reap_pollers(self) -> None:
+        self._old_pollers = [p for p in self._old_pollers if p.isRunning()]
+
+    @Slot()
+    def _on_connection_lost(self) -> None:
+        logger.warning("Lost connection to the rclone RC API.")
 
     def shutdown(self) -> None:
         """Graceful shutdown: unmount and exit."""
         logger.info("Shutting down application...")
+        self._stop_poller(wait=True)
+        for poller in self._old_pollers:
+            poller.wait(2000)
+        self.tray.status_popup.shutdown_workers()
         self.daemon.stop()  # This also calls clean_integration via signal handler
         self.app.quit()
 
@@ -147,7 +178,7 @@ def main() -> None:
     
     # Retain lock_file reference in main scope
     lock_file = QLockFile(lock_file_path)
-    lock_file.setStaleLockTime(3000)
+    lock_file.setStaleLockTime(0)  # 0 = never consider a live lock stale by age
     if not lock_file.tryLock(100):
         QMessageBox.critical(
             None,

@@ -7,10 +7,11 @@ progress bars, active file info, a rolling speed history chart, and quick action
 
 import logging
 import os
+import time
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QSize, QPoint, QUrl, QTimer, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QUrl, QTimer, QThread, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -153,8 +154,8 @@ class QuotaWorkerThread(QThread):
             )
             with urllib.request.urlopen(req, timeout=4) as response:
                 data = json.loads(response.read().decode("utf-8"))
-                total = int(data.get("total", 0))
-                used = int(data.get("used", 0))
+                total = int(data.get("total") or 0)
+                used = int(data.get("used") or 0)
                 if total > 0:
                     self.quota_fetched.emit(total, used)
                 else:
@@ -360,11 +361,9 @@ class StatusPopup(QWidget):
         super().showEvent(event)
         if not self._quota_timer.isActive():
             self._quota_timer.start()
-        import time
         now = time.time()
         if now - self._last_quota_update > 600:
             self._fetch_quota()
-            self._last_quota_update = now
 
     def hideEvent(self, event: Any) -> None:
         """Stops quota timer when popup is hidden to save resources."""
@@ -377,13 +376,16 @@ class StatusPopup(QWidget):
         if not self.daemon.is_running() or not self.daemon.rc_credentials:
             return
 
-        if hasattr(self, "_quota_worker") and self._quota_worker and self._quota_worker.isRunning():
-            return
+        if hasattr(self, "_quota_worker") and self._quota_worker:
+            if self._quota_worker.isRunning():
+                return
+            self._quota_worker.deleteLater()
 
         self._quota_worker = QuotaWorkerThread(self.daemon.rc_credentials, self.daemon.current_remote or "gdrive", self)
         self._quota_worker.quota_fetched.connect(self._on_quota_success)
         self._quota_worker.quota_failed.connect(self._on_quota_error)
         self._quota_worker.start()
+        self._last_quota_update = time.time()
 
     @Slot(int, int)
     def _on_quota_success(self, total: int, used: int) -> None:
@@ -398,6 +400,7 @@ class StatusPopup(QWidget):
     def _on_quota_error(self) -> None:
         self.quota_label.setText("Quota indisponível")
         self.quota_bar.hide()
+        self._last_quota_update = time.time() - 540  # Retry after 60s (600 - 540)
 
     def update_stats(self, stats: StatsData) -> None:
         """Updates UI elements and chart with new telemetry data, reusing transfer widgets efficiently."""
@@ -419,30 +422,36 @@ class StatusPopup(QWidget):
             clean_remote = (self.daemon.current_remote or "Drive").rstrip(":")
             self.title_label.setText(f"<b>{clean_remote}</b>")
 
+            if self.isVisible() and self._last_quota_update == 0:
+                self._fetch_quota()
+
             if stats.active_transfers:
                 self.empty_label.hide()
-                # Gather existing TransferItems
-                existing_items = []
-                for i in range(self.scroll_layout.count()):
+                # Use a dictionary to match TransferItems by name
+                existing_items = {}
+                for i in reversed(range(self.scroll_layout.count())):
                     w = self.scroll_layout.itemAt(i).widget()
                     if isinstance(w, TransferItem):
-                        existing_items.append(w)
+                        existing_items[w.file_name] = w
 
-                for idx, t in enumerate(stats.active_transfers):
+                active_names = set()
+                for t in stats.active_transfers:
                     name = t.get("name", "Arquivo")
-                    pct = int(t.get("percentage", 0))
-                    if idx < len(existing_items):
-                        existing_items[idx].update_data(name, pct)
+                    pct = int(t.get("percentage") or 0)
+                    active_names.add(name)
+                    
+                    if name in existing_items:
+                        existing_items[name].update_data(name, pct)
                     else:
                         item = TransferItem(name, pct)
-                        # Insert before stretch (which is at the end)
                         self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
+                        existing_items[name] = item
 
-                # Remove surplus items if active transfers shrank
-                while len(existing_items) > len(stats.active_transfers):
-                    extra = existing_items.pop()
-                    self.scroll_layout.removeWidget(extra)
-                    extra.deleteLater()
+                # Remove items that are no longer active
+                for name, w in existing_items.items():
+                    if name not in active_names:
+                        self.scroll_layout.removeWidget(w)
+                        w.deleteLater()
             else:
                 clear_transfers()
         else:
@@ -451,6 +460,7 @@ class StatusPopup(QWidget):
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
             self.chart_widget.add_speed_point(0.0)
+            self._last_quota_update = 0
             clear_transfers()
 
         self.btn_open.setEnabled(self.daemon.is_running())
@@ -492,12 +502,15 @@ class StatusPopup(QWidget):
             self.close()
         super().keyPressEvent(event)
 
-    def closeEvent(self, event: Any) -> None:
-        """Ensures background quota worker thread is safely stopped on close without invalid quit calls."""
-        if self._quota_worker and self._quota_worker.isRunning():
+    def shutdown_workers(self) -> None:
+        """Waits for the background quota worker (HTTP timeout is 4s). Call only when the app is exiting."""
+        if self._quota_worker:
             try:
-                self._quota_worker.terminate()
-                self._quota_worker.wait(500)
-            except Exception:
-                pass
+                if self._quota_worker.isRunning():
+                    self._quota_worker.wait(4500)
+            except RuntimeError:
+                pass  # C++ object already deleted
+
+    def closeEvent(self, event: Any) -> None:
+        """Closing the popup never blocks the GUI thread; the quota worker finishes on its own."""
         super().closeEvent(event)

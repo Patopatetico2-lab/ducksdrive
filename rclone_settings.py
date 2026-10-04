@@ -13,7 +13,8 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = os.path.expanduser("~/.config/ducksdrive")
+xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+CONFIG_DIR = os.path.join(xdg_config, "ducksdrive")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -63,7 +64,8 @@ def save_config(config: Dict[str, Any]) -> bool:
 
 def _sync_autostart(enabled: bool) -> None:
     """Creates or removes the autostart .desktop file."""
-    autostart_dir = os.path.expanduser("~/.config/autostart")
+    xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    autostart_dir = os.path.join(xdg_config, "autostart")
     autostart_file = os.path.join(autostart_dir, "ducksdrive.desktop")
     
     if enabled:
@@ -71,7 +73,8 @@ def _sync_autostart(enabled: bool) -> None:
         bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
         if not os.path.exists(bin_path):
             bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
-        icon_path = os.path.expanduser("~/.local/share/ducksdrive/icon.svg")
+        xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+        icon_path = os.path.join(xdg_data, "ducksdrive", "icon.svg")
         
         content = f"""[Desktop Entry]
 Name=DucksDrive

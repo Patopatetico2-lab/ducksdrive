@@ -204,8 +204,8 @@ class RcloneStatsPoller(QThread):
 
         logger.info("Stopped stats polling thread.")
 
-    def stop(self) -> None:
-        """Stops the polling loop and waits for thread termination."""
+    def stop(self, wait: bool = True) -> None:
+        """Stops the polling loop; optionally waits (up to 2s) for thread termination."""
         self._running = False
-        if hasattr(self, "wait"):
-            self.wait(timeout=2000)
+        if wait:
+            self.wait(2000)

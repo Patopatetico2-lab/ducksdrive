@@ -7,6 +7,7 @@ context menus, status notifications, and dialogs for remote management.
 
 import logging
 import os
+import time
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
@@ -152,7 +153,7 @@ class NewRemoteDialog(QDialog):
         self.s3_secret_input.setPlaceholderText("Secret Access Key")
         self.s3_secret_input.setEchoMode(QLineEdit.Password)
         self.s3_endpoint_input = QLineEdit()
-        self.s3_endpoint_input.setPlaceholderText("Opcional: ex: https://s3.amazonaws.com ou MinIO/Wasabi endpoint")
+        self.s3_endpoint_input.setPlaceholderText("Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc.")
         self.conditional_layout.addRow("S3 Access Key:", self.s3_key_input)
         self.conditional_layout.addRow("S3 Secret Key:", self.s3_secret_input)
         self.conditional_layout.addRow("S3 Endpoint:", self.s3_endpoint_input)
@@ -190,35 +191,36 @@ class NewRemoteDialog(QDialog):
     def _on_provider_changed(self, index: int) -> None:
         rtype = self.type_combo.currentData()
         # Hide all conditional rows initially
-        self.webdav_url_input.parentWidget().setVisible(False)
-        self.s3_key_input.parentWidget().setVisible(False)
-        self.s3_secret_input.parentWidget().setVisible(False)
-        self.s3_endpoint_input.parentWidget().setVisible(False)
-        self.mega_user_input.parentWidget().setVisible(False)
-        self.mega_pass_input.parentWidget().setVisible(False)
-        self.ftp_host_input.parentWidget().setVisible(False)
-        self.ftp_user_input.parentWidget().setVisible(False)
-        self.ftp_pass_input.parentWidget().setVisible(False)
+        self.conditional_layout.setRowVisible(self.webdav_url_input, False)
+        self.conditional_layout.setRowVisible(self.s3_key_input, False)
+        self.conditional_layout.setRowVisible(self.s3_secret_input, False)
+        self.conditional_layout.setRowVisible(self.s3_endpoint_input, False)
+        self.conditional_layout.setRowVisible(self.mega_user_input, False)
+        self.conditional_layout.setRowVisible(self.mega_pass_input, False)
+        self.conditional_layout.setRowVisible(self.ftp_host_input, False)
+        self.conditional_layout.setRowVisible(self.ftp_user_input, False)
+        self.conditional_layout.setRowVisible(self.ftp_pass_input, False)
 
         if rtype == "webdav":
-            self.webdav_url_input.parentWidget().setVisible(True)
+            self.conditional_layout.setRowVisible(self.webdav_url_input, True)
             self.btn_create.setText("Criar Nuvem WebDAV")
         elif rtype == "s3":
-            self.s3_key_input.parentWidget().setVisible(True)
-            self.s3_secret_input.parentWidget().setVisible(True)
-            self.s3_endpoint_input.parentWidget().setVisible(True)
+            self.conditional_layout.setRowVisible(self.s3_key_input, True)
+            self.conditional_layout.setRowVisible(self.s3_secret_input, True)
+            self.conditional_layout.setRowVisible(self.s3_endpoint_input, True)
             self.btn_create.setText("Criar Nuvem S3")
         elif rtype == "mega":
-            self.mega_user_input.parentWidget().setVisible(True)
-            self.mega_pass_input.parentWidget().setVisible(True)
+            self.conditional_layout.setRowVisible(self.mega_user_input, True)
+            self.conditional_layout.setRowVisible(self.mega_pass_input, True)
             self.btn_create.setText("Criar Nuvem Mega")
         elif rtype in ("ftp", "sftp"):
-            self.ftp_host_input.parentWidget().setVisible(True)
-            self.ftp_user_input.parentWidget().setVisible(True)
-            self.ftp_pass_input.parentWidget().setVisible(True)
+            self.conditional_layout.setRowVisible(self.ftp_host_input, True)
+            self.conditional_layout.setRowVisible(self.ftp_user_input, True)
+            self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
             self.btn_create.setText(f"Criar Nuvem {rtype.upper()}")
         else:
             self.btn_create.setText("Iniciar Autorização no Browser")
+        self.adjustSize()
 
     def accept(self) -> None:
         name = self.name_input.text().strip()
@@ -242,8 +244,10 @@ class NewRemoteDialog(QDialog):
                 extra_params["url"] = url
         elif rtype == "s3":
             key = self.s3_key_input.text().strip()
-            secret = self.s3_secret_input.text().strip()
+            secret = self.s3_secret_input.text()  # secrets are never stripped
             endpoint = self.s3_endpoint_input.text().strip()
+            # A custom endpoint needs provider "Other"; without one, plain Amazon S3
+            extra_params["provider"] = "Other" if endpoint else "AWS"
             if key:
                 extra_params["access_key_id"] = key
             if secret:
@@ -252,7 +256,7 @@ class NewRemoteDialog(QDialog):
                 extra_params["endpoint"] = endpoint
         elif rtype == "mega":
             user = self.mega_user_input.text().strip()
-            password = self.mega_pass_input.text().strip()
+            password = self.mega_pass_input.text()
             if user:
                 extra_params["user"] = user
             if password:
@@ -260,7 +264,7 @@ class NewRemoteDialog(QDialog):
         elif rtype in ("ftp", "sftp"):
             host = self.ftp_host_input.text().strip()
             user = self.ftp_user_input.text().strip()
-            password = self.ftp_pass_input.text().strip()
+            password = self.ftp_pass_input.text()
             if host:
                 extra_params["host"] = host
             if user:
@@ -370,7 +374,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _show_settings_dialog(self) -> None:
         """Opens the settings configuration dialog with proper widget parent."""
-        dialog = SettingsDialog(parent=self.status_popup)
+        dialog = SettingsDialog(parent=None)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.exec()
 
@@ -415,8 +419,18 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     @Slot(str)
     def _on_mount_error(self, error: str) -> None:
+        now = time.time()
+        
+        last_time = getattr(self, "_last_error_time", 0)
+        last_msg = getattr(self, "_last_error_msg", "")
+        
+        if error == last_msg and now - last_time < 2:
+            return
+            
+        self._last_error_time = now
+        self._last_error_msg = error
         self.update_tray_icon("error")
-        QMessageBox.critical(self.status_popup, "Mount Error", error)
+        QMessageBox.critical(None, "Mount Error", error)
 
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
@@ -431,7 +445,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
                     name = t.get("name", "file")
-                    pct = int(t.get("percentage", 0))
+                    pct = int(t.get("percentage") or 0)
                     text = f"A enviar: {name} ({pct}%) • {stats.speed_str} • ETA: {stats.eta_str}"
                     self.action_status.setText(text)
                     self.setToolTip(f"{APP_NAME}: {text}")
@@ -490,7 +504,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Confirms exit if active transfers are currently in progress."""
         if self._has_active_transfer():
             res = QMessageBox.warning(
-                self.status_popup,
+                None,
                 "Active Transfers",
                 "File transfers are currently in progress.\nAre you sure you want to quit and interrupt them?",
                 QMessageBox.Yes | QMessageBox.No,
@@ -509,21 +523,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
             except Exception as e:
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
-            QMessageBox.warning(self.status_popup, "Folder Missing", f"The directory {path} does not exist.")
+            QMessageBox.warning(None, "Folder Missing", f"The directory {path} does not exist.")
 
     def _show_delete_selector(self) -> None:
         """Shows a dialog to select and securely delete a configured cloud remote."""
         remotes = list_remote_names()
         if not remotes:
-            QMessageBox.information(self.status_popup, "Nenhuma Nuvem", "Não existem nuvens configuradas para remover.")
+            QMessageBox.information(None, "Nenhuma Nuvem", "Não existem nuvens configuradas para remover.")
             return
 
         remote, ok = QInputDialog.getItem(
-            self.status_popup, "Remover Nuvem", "Selecione a nuvem que deseja remover:", remotes, 0, False
+            None, "Remover Nuvem", "Selecione a nuvem que deseja remover:", remotes, 0, False
         )
         if ok and remote:
             res = QMessageBox.warning(
-                self.status_popup,
+                None,
                 "Confirmar Exclusão",
                 f"Tem certeza que deseja excluir as configurações de '{remote}'?\nEsta ação não pode ser desfeita.",
                 QMessageBox.Yes | QMessageBox.No,
@@ -539,23 +553,23 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.daemon.stop()
 
             if delete_remote(remote):
-                QMessageBox.information(self.status_popup, "Nuvem Removida", f"A nuvem '{remote}' foi removida com sucesso.")
+                QMessageBox.information(None, "Nuvem Removida", f"A nuvem '{remote}' foi removida com sucesso.")
             else:
-                QMessageBox.critical(self.status_popup, "Erro", f"Falha ao remover a nuvem '{remote}'.")
+                QMessageBox.critical(None, "Erro", f"Falha ao remover a nuvem '{remote}'.")
 
     def _show_mount_selector(self) -> None:
         """Shows a dialog to select which remote to mount."""
         remotes = list_remote_names()
         if not remotes:
             msg = "No cloud remotes configured.\nWould you like to configure one now?"
-            res = QMessageBox.question(self.status_popup, "No Remotes", msg, QMessageBox.Yes | QMessageBox.No)
+            res = QMessageBox.question(None, "No Remotes", msg, QMessageBox.Yes | QMessageBox.No)
             if res == QMessageBox.Yes:
                 self._show_new_remote_dialog()
             return
 
         if self.daemon.is_running():
             res = QMessageBox.question(
-                self.status_popup,
+                None,
                 "Switch Drive",
                 f"A drive is already connected ({self.daemon.current_remote}).\nWould you like to disconnect it and connect to a new one?",
                 QMessageBox.Yes | QMessageBox.No,
@@ -565,21 +579,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 return
             
         remote, ok = QInputDialog.getItem(
-            self.status_popup, "Connect Drive", "Select a cloud remote to mount:", remotes, 0, False
+            None, "Connect Drive", "Select a cloud remote to mount:", remotes, 0, False
         )
         if ok and remote:
             self.daemon.start(remote)
 
     def _show_new_remote_dialog(self) -> None:
         """Handles the flow for creating a new remote via background thread."""
-        dialog = NewRemoteDialog(parent=self.status_popup)
+        dialog = NewRemoteDialog(parent=None)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.raise_()
         dialog.activateWindow()
         if dialog.exec() == QDialog.Accepted:
             name, rtype, extra_params = dialog.get_data()
             if not name:
-                QMessageBox.warning(self.status_popup, "Input Error", "Remote name cannot be empty.")
+                QMessageBox.warning(None, "Input Error", "Remote name cannot be empty.")
                 return
 
             self._pending_remote_name = name
@@ -589,14 +603,29 @@ class RcloneTrayIcon(QSystemTrayIcon):
             msg = f"Please complete OAuth in your browser for '{name}'..." if is_oauth else f"Configuring remote '{name}'..."
             
             # Show a progress message since this can take time
-            progress = QMessageBox(QMessageBox.Information, "Configuring", msg, QMessageBox.Cancel, parent=self.status_popup)
-            progress.button(QMessageBox.Cancel).clicked.connect(self._creation_thread.cancel)
+            progress = QMessageBox(QMessageBox.Information, "Configuring", msg, QMessageBox.Cancel, parent=None)
+            self._progress_box = progress
+            # Cancel button and the window "X" both end up in rejected()
+            progress.rejected.connect(self._creation_thread.cancel)
             
-            self._creation_thread.finished_creation.connect(progress.close)
+            self._creation_thread.finished_creation.connect(self._close_progress)
             self._creation_thread.finished_creation.connect(self._on_creation_finished)
             
             self._creation_thread.start()
             progress.exec()
+
+    @Slot(bool, str)
+    def _close_progress(self, success: bool, message: str) -> None:
+        """Closes the progress box without letting close() trigger rejected() -> cancel()."""
+        progress = getattr(self, "_progress_box", None)
+        if progress is None:
+            return
+        self._progress_box = None
+        try:
+            progress.rejected.disconnect(self._creation_thread.cancel)
+        except (RuntimeError, TypeError):
+            pass
+        progress.close()
 
     def _on_creation_finished(self, success: bool, message: str) -> None:
         """
@@ -611,7 +640,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
                 if self.daemon.is_running():
                     res = QMessageBox.question(
-                        self.status_popup,
+                        None,
                         "Substituir Drive Ativo",
                         f"Um drive já está conectado ({self.daemon.current_remote}). Deseja desconectá-lo e conectar ao novo remoto configurado?",
                         QMessageBox.Yes | QMessageBox.No,
@@ -626,4 +655,4 @@ class RcloneTrayIcon(QSystemTrayIcon):
         else:
             self._pending_remote_name = None
             if "cancelled" not in message.lower():
-                QMessageBox.critical(self.status_popup, "Configuration Failed", message)
+                QMessageBox.critical(None, "Configuration Failed", message)
