@@ -1,0 +1,92 @@
+name: Build and Release AppImage
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse libfuse2 desktop-file-utils curl unzip
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller "PySide6>=6.6,<7" requests
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." main.py
+
+      - name: Create AppDir Structure
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+          
+          # Copy PyInstaller binary output
+          cp -r dist/ducksdrive/* AppDir/usr/bin/
+
+          # Download and bundle rclone
+          curl -O https://downloads.rclone.org/v1.66.0/rclone-v1.66.0-linux-amd64.zip
+          unzip -j rclone-v1.66.0-linux-amd64.zip rclone-v1.66.0-linux-amd64/rclone -d AppDir/usr/bin/
+          rm rclone-v1.66.0-linux-amd64.zip
+          chmod +x AppDir/usr/bin/rclone
+
+          # Copy icon
+          cp icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/ducksdrive.svg
+          cp icon.svg AppDir/ducksdrive.svg
+
+          # Create desktop file
+          cat << 'DESKTOP' > AppDir/usr/share/applications/ducksdrive.desktop
+          [Desktop Entry]
+          Name=DucksDrive
+          Comment=Manage cloud drives with Rclone
+          Exec=ducksdrive
+          Icon=ducksdrive
+          Terminal=false
+          Type=Application
+          Categories=Network;Utility;
+          StartupNotify=true
+          DESKTOP
+          
+          # Create AppRun script with LD_LIBRARY_PATH
+          cat << 'APPRUN' > AppDir/AppRun
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
+          exec "${HERE}/usr/bin/ducksdrive" "$@"
+          APPRUN
+          chmod +x AppDir/AppRun
+
+      - name: Download and Setup appimagetool
+        run: |
+          curl -L -O https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+
+      - name: Build AppImage
+        run: |
+          # The appimagetool itself is an AppImage. In a headless CI environment,
+          # it requires --appimage-extract-and-run to execute correctly.
+          ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir DucksDrive-x86_64.AppImage
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DucksDrive-x86_64.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
