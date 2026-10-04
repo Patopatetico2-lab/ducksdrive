@@ -241,7 +241,7 @@ class SettingsDialog(QDialog):
         res = QMessageBox.question(
             self,
             tr("Desinstalar DucksDrive"),
-            tr("Tem a certeza de que deseja remover todas as configurações e a inicialização automática do DucksDrive?\n\nA aplicação será encerrada."),
+            tr("Tem a certeza de que deseja remover todas as configurações, montagens, atalhos e ficheiros da aplicação do DucksDrive?\n\nA aplicação será encerrada e desinstalada."),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -249,8 +249,55 @@ class SettingsDialog(QDialog):
             return
 
         xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+        
         autostart_file = os.path.join(xdg_config, "autostart", "ducksdrive.desktop")
         config_dir = CONFIG_DIR
+        app_share_dir = os.path.join(xdg_data, "ducksdrive")
+        desktop_file = os.path.join(xdg_data, "applications", "ducksdrive.desktop")
+        bin_file = os.path.expanduser("~/.local/bin/ducksdrive")
+        appimage_path = os.environ.get("APPIMAGE")
+        import subprocess
+        cloud_drives_base = os.path.expanduser("~/CloudDrives")
+        if os.path.isdir(cloud_drives_base):
+            for item in os.listdir(cloud_drives_base):
+                mp = os.path.join(cloud_drives_base, item)
+                if os.path.isdir(mp):
+                    subprocess.run(["fusermount3", "-uz", mp], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    subprocess.run(["fusermount", "-uz", mp], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    subprocess.run(["umount", "-l", mp], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    try:
+                        os.rmdir(mp)
+                    except OSError:
+                        pass
+            try:
+                os.rmdir(cloud_drives_base)
+            except OSError:
+                pass
+
+        # Remove orphaned GUI bookmarks
+        for p in [os.path.expanduser("~/.local/share/user-places.xbel"), os.path.expanduser("~/.config/user-places.xbel")]:
+            if os.path.exists(p):
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        s = f.read()
+                    s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>', '', s, flags=re.DOTALL)
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(s)
+                except Exception:
+                    pass
+
+        gtk_bookmarks = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
+        if os.path.exists(gtk_bookmarks):
+            try:
+                with open(gtk_bookmarks, encoding="utf-8") as f:
+                    lines = f.readlines()
+                with open(gtk_bookmarks, "w", encoding="utf-8") as f:
+                    for line in lines:
+                        if "CloudDrives" not in line and "GoogleDrive" not in line:
+                            f.write(line)
+            except Exception:
+                pass
 
         try:
             if os.path.exists(autostart_file):
@@ -259,9 +306,22 @@ class SettingsDialog(QDialog):
             if os.path.isdir(config_dir):
                 shutil.rmtree(config_dir)
                 logger.info("Removed config directory: %s", config_dir)
+            if os.path.isdir(app_share_dir):
+                shutil.rmtree(app_share_dir)
+                logger.info("Removed app share directory: %s", app_share_dir)
+            if os.path.exists(desktop_file):
+                os.remove(desktop_file)
+                subprocess.run(["update-desktop-database", os.path.dirname(desktop_file)], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                logger.info("Removed desktop file: %s", desktop_file)
+            if os.path.exists(bin_file):
+                os.remove(bin_file)
+                logger.info("Removed bin file: %s", bin_file)
+            if appimage_path and os.path.exists(appimage_path):
+                os.remove(appimage_path)
+                logger.info("Removed AppImage: %s", appimage_path)
         except Exception as e:
             logger.error("Failed to uninstall DucksDrive: %s", e)
-            QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover os ficheiros de configuração:") + f"\n{e}")
+            QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover alguns ficheiros:") + f"\n{e}")
             return
 
         self.reject()
