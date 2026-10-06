@@ -126,7 +126,7 @@ class SpeedChartWidget(QWidget):
 
 class QuotaWorkerThread(QThread):
     """Background worker thread to fetch cloud storage quota without blocking UI."""
-    quota_fetched = Signal(int, int)  # total, used
+    quota_fetched = Signal(int, int, float)  # total, used, speed
     quota_failed = Signal()
 
     def __init__(self, credentials: Any, remote_name: str, parent: Optional[Any] = None) -> None:
@@ -140,26 +140,45 @@ class QuotaWorkerThread(QThread):
         import base64
         try:
             creds = self.credentials
-            endpoint = f"{creds.url}/operations/about"
             auth_str = f"{creds.user}:{creds.password}"
             b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+            headers = {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
             
+            # Request 1: Operations About
+            endpoint_about = f"{creds.url}/operations/about"
             fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
-            
-            req = urllib.request.Request(
-                url=endpoint,
+            req_about = urllib.request.Request(
+                url=endpoint_about,
                 data=json.dumps({"fs": fs_arg}).encode("utf-8"),
-                headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
+                headers=headers,
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=10) as response:
+            
+            with urllib.request.urlopen(req_about, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
                 total = int(data.get("total") or 0)
                 used = int(data.get("used") or 0)
-                if total > 0 or used > 0:
-                    self.quota_fetched.emit(total, used)
-                else:
-                    self.quota_failed.emit()
+
+            # Request 2: Core Stats
+            speed = 0.0
+            try:
+                endpoint_stats = f"{creds.url}/core/stats"
+                req_stats = urllib.request.Request(
+                    url=endpoint_stats,
+                    data=json.dumps({}).encode("utf-8"),
+                    headers=headers,
+                    method="POST"
+                )
+                with urllib.request.urlopen(req_stats, timeout=5) as response_stats:
+                    stats_data = json.loads(response_stats.read().decode("utf-8"))
+                    speed = float(stats_data.get("speed") or 0.0)
+            except Exception:
+                speed = 0.0
+                
+            if total > 0 or used > 0:
+                self.quota_fetched.emit(total, used, speed)
+            else:
+                self.quota_failed.emit()
         except Exception as e:
             logger.debug("Failed to fetch quota: %s", e)
             self.quota_failed.emit()
@@ -309,6 +328,13 @@ class StatusPopup(QWidget):
         self.quota_bar.setStyleSheet("QProgressBar::chunk { background-color: #3498db; }")
         quota_layout.addWidget(self.quota_label)
         quota_layout.addWidget(self.quota_bar)
+        
+        # Speed label
+        self.speed_label = QLabel(tr("Velocidade: 0 B/s"))
+        self.speed_label.setAlignment(Qt.AlignCenter)
+        self.speed_label.setStyleSheet("font-size: 8pt; color: #95a5a6; margin-top: 2px;")
+        quota_layout.addWidget(self.speed_label)
+        
         main_layout.addLayout(quota_layout)
         
         # Pause button
@@ -476,9 +502,13 @@ class StatusPopup(QWidget):
                 }
             """)
 
-    @Slot(int, int)
-    def _on_quota_success(self, total: int, used: int) -> None:
+    @Slot(int, int, float)
+    def _on_quota_success(self, total: int, used: int, speed: float) -> None:
         from rclone_stats import format_bytes
+        
+        # Update Speed Label
+        self.speed_label.setText(f"{tr('Velocidade:')} {format_bytes(speed)}/s")
+        
         if total > 0:
             self.quota_bar.show()
             percent = int((used / total) * 100)
