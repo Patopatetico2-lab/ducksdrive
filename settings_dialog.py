@@ -205,8 +205,8 @@ class SettingsDialog(QDialog):
         if cache_gb >= 50:
             res = QMessageBox.warning(
                 self,
-                "Aviso de Cache Elevado",
-                f"Atenção: Um tamanho de cache VFS de {cache_gb} GB é muito elevado e corre o risco de esgotar o espaço do seu SSD!\n\nDeseja prosseguir?",
+                tr("Aviso de Cache Elevado"),
+                tr("Atenção: Um tamanho de cache VFS de %s GB é muito elevado e corre o risco de esgotar o espaço do seu SSD!\n\nDeseja prosseguir?") % cache_gb,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -225,7 +225,7 @@ class SettingsDialog(QDialog):
 
         # Save to disk
         if save_config(self.config):
-            QMessageBox.information(self, "Configuração Guardada", "Preferências atualizadas com sucesso.\nAs alterações serão aplicadas na próxima conexão.")
+            QMessageBox.information(self, tr("Configuração Guardada"), tr("Preferências atualizadas com sucesso.\nAs alterações serão aplicadas na próxima conexão."))
             if language_changed:
                 QMessageBox.information(
                     self,
@@ -234,7 +234,7 @@ class SettingsDialog(QDialog):
                 )
             self.accept()
         else:
-            QMessageBox.critical(self, "Erro", "Falha ao gravar o ficheiro de configuração.")
+            QMessageBox.critical(self, tr("Erro"), tr("Falha ao gravar o ficheiro de configuração."))
 
     def _on_uninstall(self) -> None:
         """Asks for confirmation, removes autostart entry and config directory, then quits."""

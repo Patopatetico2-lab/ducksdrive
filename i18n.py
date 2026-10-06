@@ -134,7 +134,26 @@ _TRANSLATIONS = {
         "Rclone Não Encontrado": "Rclone Not Found",
         "O Rclone não está instalado ou não foi encontrado no PATH.": "Rclone is not installed or could not be found in PATH.",
         "Rclone Desatualizado": "Rclone Outdated",
-        "Detectado Rclone v%s.\nA versão v%s ou superior é recomendada.": "Detected Rclone v%s.\nVersion v%s or higher is recommended."
+        "Detectado Rclone v%s.\nA versão v%s ou superior é recomendada.": "Detected Rclone v%s.\nVersion v%s or higher is recommended.",
+        "Criar Nuvem %s": "Create %s Cloud",
+        "Limite de Banda:": "Bandwidth Limit:",
+        "Desinstalar": "Uninstall",
+        "Reinício Necessário": "Restart Required",
+        "O idioma foi alterado. Reinicie o DucksDrive para aplicar o novo idioma.": "Language changed. Restart DucksDrive to apply the new language.",
+        "Desinstalar DucksDrive": "Uninstall DucksDrive",
+        "Tem a certeza de que deseja remover todas as configurações, montagens, atalhos e ficheiros da aplicação do DucksDrive?\n\nA aplicação será encerrada e desinstalada.": "Are you sure you want to remove all settings, mounts, shortcuts and application files of DucksDrive?\n\nThe application will be closed and uninstalled.",
+        "Falha ao remover alguns ficheiros:": "Failed to remove some files:",
+        "Usado: %s (Total Ilimitado/Desconhecido)": "Used: %s (Total Unlimited/Unknown)",
+        "Aviso de Cache Elevado": "High Cache Warning",
+        "Atenção: Um tamanho de cache VFS de %s GB é muito elevado e corre o risco de esgotar o espaço do seu SSD!\n\nDeseja prosseguir?": "Warning: A VFS cache size of %s GB is very high and risks exhausting your SSD space!\n\nDo you wish to proceed?",
+        "Configuração Guardada": "Settings Saved",
+        "Preferências atualizadas com sucesso.\nAs alterações serão aplicadas na próxima conexão.": "Preferences updated successfully.\nChanges will be applied on the next connection.",
+        "Falha ao gravar o ficheiro de configuração.": "Failed to save the configuration file.",
+        "Arquivo": "File",
+        "Rclone mount process died unexpectedly.": "Rclone mount process died unexpectedly.",
+        "Montar (Somente Leitura)": "Mount (Read-Only)",
+        "Pausar Transferências": "Pause Transfers",
+        "Retomar Transferências": "Resume Transfers"
     }
 }
 

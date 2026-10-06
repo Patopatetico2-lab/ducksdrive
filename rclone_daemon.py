@@ -238,14 +238,14 @@ class RcloneDaemon(QObject):
                 self._set_state("error")
                 self.mount_error.emit("Rclone mount process died unexpectedly.")
 
-    def start(self, remote_name: str, extra_args: Optional[List[str]] = None) -> bool:
+    def start(self, remote_name: str, extra_args: Optional[List[str]] = None, read_only: bool = False) -> bool:
         """
         Starts the `rclone mount` process for the specified remote.
 
         Args:
             remote_name: Name of the remote (e.g., 'gdrive' or 'gdrive:').
             extra_args: Optional additional CLI flags for rclone.
-
+            read_only: If True, mounts the remote in read-only mode.
         Returns:
             bool: True if mount started successfully, False otherwise.
         """
@@ -318,6 +318,9 @@ class RcloneDaemon(QObject):
             "--rc-addr",
             f"{self.rc_credentials.host}:{self.rc_credentials.port}",
         ])
+        
+        if read_only:
+            cmd.append("--read-only")
 
         if extra_args:
             cmd.extend(extra_args)

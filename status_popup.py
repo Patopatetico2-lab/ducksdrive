@@ -144,7 +144,6 @@ class QuotaWorkerThread(QThread):
             auth_str = f"{creds.user}:{creds.password}"
             b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
             
-            # Rclone RC /operations/about requires 'fs' parameter with colon (e.g. "gdrive:")
             fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
             
             req = urllib.request.Request(
@@ -153,11 +152,11 @@ class QuotaWorkerThread(QThread):
                 headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=4) as response:
+            with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
                 total = int(data.get("total") or 0)
                 used = int(data.get("used") or 0)
-                if total > 0:
+                if total > 0 or used > 0:
                     self.quota_fetched.emit(total, used)
                 else:
                     self.quota_failed.emit()
@@ -205,6 +204,7 @@ class StatusPopup(QWidget):
         self.daemon = daemon
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setFixedWidth(340)
+        self.is_paused = False
 
         self._last_quota_update = 0
         self._quota_timer = QTimer(self)
@@ -310,6 +310,25 @@ class StatusPopup(QWidget):
         quota_layout.addWidget(self.quota_label)
         quota_layout.addWidget(self.quota_bar)
         main_layout.addLayout(quota_layout)
+        
+        # Pause button
+        self.btn_pause = QPushButton(tr("Pausar Transferências"))
+        self.btn_pause.setStyleSheet("""
+            QPushButton {
+                background-color: #f39c12;
+                color: white;
+                border: none;
+                padding: 6px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 9pt;
+            }
+            QPushButton:hover {
+                background-color: #e67e22;
+            }
+        """)
+        self.btn_pause.clicked.connect(self._toggle_pause)
+        main_layout.addWidget(self.btn_pause)
 
         # Separator line
         line = QFrame()
@@ -388,14 +407,88 @@ class StatusPopup(QWidget):
         self._quota_worker.start()
         self._last_quota_update = time.time()
 
+    def _toggle_pause(self) -> None:
+        import urllib.request
+        import json
+        import base64
+        import threading
+        from rclone_settings import load_config
+        
+        def do_request():
+            try:
+                creds = self.daemon.rc_credentials
+                if not creds: return
+                endpoint = f"{creds.url}/core/bwlimit"
+                auth_str = f"{creds.user}:{creds.password}"
+                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+                
+                original_limit = str(load_config().get("bwlimit", "off"))
+                limit_val = "1" if not self.is_paused else original_limit
+                
+                req = urllib.request.Request(
+                    url=endpoint,
+                    data=json.dumps({"bwlimit": limit_val}).encode("utf-8"),
+                    headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+            except Exception as e:
+                import logging
+                logging.getLogger("ducksdrive").debug("Failed to set bwlimit via RC: %s", e)
+
+        if not self.daemon.is_running(): return
+        
+        threading.Thread(target=do_request, daemon=True).start()
+
+        if not self.is_paused:
+            self.is_paused = True
+            self.btn_pause.setText(tr("Retomar Transferências"))
+            self.btn_pause.setStyleSheet("""
+                QPushButton {
+                    background-color: #27ae60;
+                    color: white;
+                    border: none;
+                    padding: 6px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                }
+                QPushButton:hover {
+                    background-color: #2ecc71;
+                }
+            """)
+        else:
+            self.is_paused = False
+            self.btn_pause.setText(tr("Pausar Transferências"))
+            self.btn_pause.setStyleSheet("""
+                QPushButton {
+                    background-color: #f39c12;
+                    color: white;
+                    border: none;
+                    padding: 6px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                }
+                QPushButton:hover {
+                    background-color: #e67e22;
+                }
+            """)
+
     @Slot(int, int)
     def _on_quota_success(self, total: int, used: int) -> None:
-        self.quota_bar.show()
-        percent = int((used / total) * 100)
         from rclone_stats import format_bytes
-        txt = tr("Usando %s de %s (%s%%)") % (format_bytes(used), format_bytes(total), percent)
-        self.quota_label.setText(txt)
-        self.quota_bar.setValue(percent)
+        if total > 0:
+            self.quota_bar.show()
+            percent = int((used / total) * 100)
+            txt = tr("Usando %s de %s (%s%%)") % (format_bytes(used), format_bytes(total), percent)
+            self.quota_label.setText(txt)
+            self.quota_bar.setValue(percent)
+        else:
+            self.quota_bar.hide()
+            txt = tr("Usado: %s (Total Ilimitado/Desconhecido)") % format_bytes(used)
+            self.quota_label.setText(txt)
 
     @Slot()
     def _on_quota_error(self) -> None:
@@ -437,7 +530,7 @@ class StatusPopup(QWidget):
 
                 active_names = set()
                 for t in stats.active_transfers:
-                    name = t.get("name", "Arquivo")
+                    name = t.get("name", tr("Arquivo"))
                     pct = int(t.get("percentage") or 0)
                     active_names.add(name)
                     

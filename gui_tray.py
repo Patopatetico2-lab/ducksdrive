@@ -295,7 +295,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._menu = QMenu()
         
         # Bloco 1 (Topo): Status atual da nuvem (desabilitado)
-        self.action_status = QAction("DucksDrive • Disconnected", self)
+        self.action_status = QAction(f"DucksDrive • {tr('Desconectado')}", self)
         self.action_status.setEnabled(False)
         self._menu.addAction(self.action_status)
         
@@ -348,11 +348,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
             for remote in remotes:
                 is_active = self.daemon.is_running() and self.daemon.current_remote and self.daemon.current_remote.rstrip(":") == remote.rstrip(":")
                 label = f"✓ {remote} (" + tr("Ativo") + ")" if is_active else remote
-                action = QAction(label, self)
+                remote_menu = QMenu(label, self.menu_remotes)
                 if is_active:
-                    action.setEnabled(False)  # Already connected
-                action.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r))
-                self.menu_remotes.addAction(action)
+                    action_unmount_local = QAction(tr("Desmontar"), self)
+                    action_unmount_local.triggered.connect(self.daemon.stop)
+                    remote_menu.addAction(action_unmount_local)
+                else:
+                    action_mount = QAction(tr("Montar"), self)
+                    action_mount.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=False))
+                    remote_menu.addAction(action_mount)
+
+                    action_mount_ro = QAction(tr("Montar (Somente Leitura)"), self)
+                    action_mount_ro.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=True))
+                    remote_menu.addAction(action_mount_ro)
+                
+                self.menu_remotes.addMenu(remote_menu)
             self.menu_remotes.addSeparator()
         else:
             empty_action = QAction(tr("Nenhuma nuvem configurada"), self)
@@ -431,7 +441,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._last_error_time = now
         self._last_error_msg = error
         self.update_tray_icon("error")
-        QMessageBox.critical(None, tr("Erro de Montagem"), error)
+        QMessageBox.critical(None, tr("Erro de Montagem"), tr(error))
 
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
@@ -445,7 +455,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.update_tray_icon("syncing")
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
-                    name = t.get("name", "file")
+                    name = t.get("name", tr("Arquivo"))
                     pct = int(t.get("percentage") or 0)
                     text = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                     self.action_status.setText(text)
@@ -594,7 +604,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if dialog.exec() == QDialog.Accepted:
             name, rtype, extra_params = dialog.get_data()
             if not name:
-                QMessageBox.warning(None, "Input Error", "Remote name cannot be empty.")
+                QMessageBox.warning(None, tr("Erro de Input"), tr("O nome da nuvem não pode estar vazio."))
                 return
 
             self._pending_remote_name = name
