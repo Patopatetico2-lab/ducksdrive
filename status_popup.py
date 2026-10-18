@@ -126,7 +126,7 @@ class SpeedChartWidget(QWidget):
 
 class QuotaWorkerThread(QThread):
     """Background worker thread to fetch cloud storage quota without blocking UI."""
-    quota_fetched = Signal(int, int, float)  # total, used, speed
+    quota_fetched = Signal(object, object)  # total, used
     quota_failed = Signal()
 
     def __init__(self, credentials: Any, remote_name: str, parent: Optional[Any] = None) -> None:
@@ -144,7 +144,6 @@ class QuotaWorkerThread(QThread):
             b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
             headers = {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
             
-            # Request 1: Operations About
             endpoint_about = f"{creds.url}/operations/about"
             fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
             req_about = urllib.request.Request(
@@ -159,24 +158,8 @@ class QuotaWorkerThread(QThread):
                 total = int(data.get("total") or 0)
                 used = int(data.get("used") or 0)
 
-            # Request 2: Core Stats
-            speed = 0.0
-            try:
-                endpoint_stats = f"{creds.url}/core/stats"
-                req_stats = urllib.request.Request(
-                    url=endpoint_stats,
-                    data=json.dumps({}).encode("utf-8"),
-                    headers=headers,
-                    method="POST"
-                )
-                with urllib.request.urlopen(req_stats, timeout=5) as response_stats:
-                    stats_data = json.loads(response_stats.read().decode("utf-8"))
-                    speed = float(stats_data.get("speed") or 0.0)
-            except Exception:
-                speed = 0.0
-                
             if total > 0 or used > 0:
-                self.quota_fetched.emit(total, used, speed)
+                self.quota_fetched.emit(total, used)
             else:
                 self.quota_failed.emit()
         except Exception as e:
@@ -329,12 +312,6 @@ class StatusPopup(QWidget):
         quota_layout.addWidget(self.quota_label)
         quota_layout.addWidget(self.quota_bar)
         
-        # Speed label
-        self.speed_label = QLabel(tr("Velocidade: 0 B/s"))
-        self.speed_label.setAlignment(Qt.AlignCenter)
-        self.speed_label.setStyleSheet("font-size: 8pt; color: #95a5a6; margin-top: 2px;")
-        quota_layout.addWidget(self.speed_label)
-        
         main_layout.addLayout(quota_layout)
         
         # Pause button
@@ -448,12 +425,12 @@ class StatusPopup(QWidget):
                 auth_str = f"{creds.user}:{creds.password}"
                 b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
                 
-                original_limit = str(load_config().get("bwlimit", "off"))
-                limit_val = "1" if not self.is_paused else original_limit
+                original_limit = str(load_config().get("bwlimit") or "off")
+                limit_val = "1B" if not self.is_paused else original_limit
                 
                 req = urllib.request.Request(
                     url=endpoint,
-                    data=json.dumps({"bwlimit": limit_val}).encode("utf-8"),
+                    data=json.dumps({"rate": limit_val}).encode("utf-8"),
                     headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
                     method="POST"
                 )
@@ -502,12 +479,9 @@ class StatusPopup(QWidget):
                 }
             """)
 
-    @Slot(int, int, float)
-    def _on_quota_success(self, total: int, used: int, speed: float) -> None:
+    @Slot(object, object)
+    def _on_quota_success(self, total: int, used: int) -> None:
         from rclone_stats import format_bytes
-        
-        # Update Speed Label
-        self.speed_label.setText(f"{tr('Velocidade:')} {format_bytes(speed)}/s")
         
         if total > 0:
             self.quota_bar.show()

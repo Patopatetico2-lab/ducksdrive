@@ -175,10 +175,11 @@ class RcloneAppController(QObject):
 
 def main() -> None:
     """Main entrypoint function."""
+    sys.argv[0] = "ducksdrive"
     app = QApplication(sys.argv)
     app.setApplicationName("DucksDrive")
     app.setApplicationDisplayName("DucksDrive")
-    app.setDesktopFileName("ducksdrive.desktop")
+    app.setDesktopFileName("ducksdrive")
     app.setQuitOnLastWindowClosed(False)
 
     # Initialize language

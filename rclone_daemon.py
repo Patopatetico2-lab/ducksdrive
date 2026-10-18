@@ -231,6 +231,10 @@ class RcloneDaemon(QObject):
         """Actively monitors if the rclone mount process died unexpectedly in background."""
         if self.state == "mounted" and self.process is not None:
             if self.process.poll() is not None:
+                if self.process.returncode == 0 and not is_path_mounted(self.mount_point):
+                    logger.info("Mount point unmounted externally (clean exit). Updating state to stopped.")
+                    self.stop()
+                    return
                 logger.error("Rclone mount process died unexpectedly in background!")
                 # Update state BEFORE emitting: the error slot opens a modal dialog whose nested
                 # event loop would otherwise keep re-triggering this health check.
@@ -265,6 +269,11 @@ class RcloneDaemon(QObject):
         clean_remote_name = remote_name.rstrip(":")
         self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_remote_name}"))
 
+        # Ensure directory is unmounted before mounting
+        if is_path_mounted(self.mount_point):
+            logger.info("Mount point is currently busy, attempting pre-mount unmount...")
+            unmount_fuse_path(self.mount_point, lazy=True)
+
         # Prepare target mount folder
         try:
             os.makedirs(self.mount_point, exist_ok=True)
@@ -274,11 +283,6 @@ class RcloneDaemon(QObject):
             self.mount_error.emit(err)
             self._set_state("error")
             return False
-
-        # Ensure directory is unmounted before mounting
-        if is_path_mounted(self.mount_point):
-            logger.info("Mount point is currently busy, attempting pre-mount unmount...")
-            unmount_fuse_path(self.mount_point, lazy=True)
 
         # Generate fresh in-memory RC credentials
         self.rc_credentials = generate_rc_credentials(self.rc_host, self.rc_port)

@@ -37,7 +37,7 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp *.py "$INSTALL_DIR/"
+cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py "$INSTALL_DIR/"
 [ -f icon.svg ] && cp icon.svg "$INSTALL_DIR/"
 
 python3 -m venv "$INSTALL_DIR/venv"
@@ -65,6 +65,7 @@ Terminal=false
 Type=Application
 Categories=Network;Utility;
 StartupNotify=true
+StartupWMClass=ducksdrive
 EOF
 
 update-desktop-database ~/.local/share/applications/ 2>/dev/null || true

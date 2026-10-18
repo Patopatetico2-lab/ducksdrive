@@ -41,6 +41,11 @@ def load_config() -> Dict[str, Any]:
                     config.update(data)
         except Exception as e:
             logger.error("Failed to load config file: %s. Using defaults.", e)
+
+    autostart_file = os.path.join(xdg_config, "autostart", "ducksdrive.desktop")
+    if bool(config.get("autostart", True)) != os.path.exists(autostart_file):
+        _sync_autostart(bool(config.get("autostart", True)))
+
     return config
 
 
