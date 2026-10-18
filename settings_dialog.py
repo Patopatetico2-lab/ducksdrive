@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import shutil
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,8 +39,9 @@ class SettingsDialog(QDialog):
     and system integration preferences using safe controls instead of free text inputs.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None, daemon: Optional[Any] = None) -> None:
         super().__init__(parent)
+        self.daemon = daemon
         self.setWindowTitle(tr("Configurações do DucksDrive"))
         self.setMinimumWidth(520)
         
@@ -237,7 +238,7 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, tr("Erro"), tr("Falha ao gravar o ficheiro de configuração."))
 
     def _on_uninstall(self) -> None:
-        """Asks for confirmation, removes autostart entry and config directory, then quits."""
+        """Asks for confirmation, stops active mounts, removes all app/rclone configs, caches, shortcuts, and quits."""
         res = QMessageBox.question(
             self,
             tr("Desinstalar DucksDrive"),
@@ -248,46 +249,73 @@ class SettingsDialog(QDialog):
         if res != QMessageBox.Yes:
             return
 
+        import subprocess
+        from rclone_daemon import unmount_fuse_path, is_path_mounted
+        from rclone_config import get_rclone_conf_path
+
+        # 1. Cleanly stop the running daemon first so rclone exits and releases mount points and log files
+        if self.daemon is not None:
+            try:
+                if hasattr(self.daemon, "health_timer") and self.daemon.health_timer:
+                    self.daemon.health_timer.stop()
+                self.daemon.stop()
+            except Exception:
+                pass
+
         xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
         xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-        
+        xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+
         autostart_file = os.path.join(xdg_config, "autostart", "ducksdrive.desktop")
         config_dir = CONFIG_DIR
+        rclone_config_dir = os.path.join(xdg_config, "rclone")
+        rclone_conf_file = get_rclone_conf_path()
+        rclone_cache_dir = os.path.join(xdg_cache, "rclone")
         app_share_dir = os.path.join(xdg_data, "ducksdrive")
         desktop_file = os.path.join(xdg_data, "applications", "ducksdrive.desktop")
         bin_file = os.path.expanduser("~/.local/bin/ducksdrive")
         appimage_path = os.environ.get("APPIMAGE")
-        import subprocess
+
+        # 2. Unmount and remove all directories under ~/CloudDrives
         cloud_drives_base = os.path.expanduser("~/CloudDrives")
         if os.path.isdir(cloud_drives_base):
             for item in os.listdir(cloud_drives_base):
                 mp = os.path.join(cloud_drives_base, item)
                 if os.path.isdir(mp):
-                    subprocess.run(["fusermount3", "-uz", mp], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-                    subprocess.run(["fusermount", "-uz", mp], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-                    subprocess.run(["umount", "-l", mp], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-                    try:
-                        os.rmdir(mp)
-                    except OSError:
-                        pass
+                    unmount_fuse_path(mp, lazy=True)
+                    if not is_path_mounted(mp):
+                        try:
+                            os.rmdir(mp)
+                        except OSError:
+                            pass
             try:
                 os.rmdir(cloud_drives_base)
             except OSError:
                 pass
 
-        # Remove orphaned GUI bookmarks
-        for p in [os.path.expanduser("~/.local/share/user-places.xbel"), os.path.expanduser("~/.config/user-places.xbel")]:
+        # 3. Remove orphaned GUI bookmarks and .bak files
+        for p in [
+            os.path.join(xdg_data, "user-places.xbel"),
+            os.path.join(xdg_config, "user-places.xbel"),
+        ]:
             if os.path.exists(p):
                 try:
                     with open(p, encoding="utf-8") as f:
                         s = f.read()
-                    s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>', '', s, flags=re.DOTALL)
+                    s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
+                    s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', s, flags=re.DOTALL)
                     with open(p, "w", encoding="utf-8") as f:
                         f.write(s)
                 except Exception:
                     pass
+            bak_p = f"{p}.bak"
+            if os.path.exists(bak_p):
+                try:
+                    os.remove(bak_p)
+                except OSError:
+                    pass
 
-        gtk_bookmarks = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
+        gtk_bookmarks = os.path.join(xdg_config, "gtk-3.0", "bookmarks")
         if os.path.exists(gtk_bookmarks):
             try:
                 with open(gtk_bookmarks, encoding="utf-8") as f:
@@ -299,28 +327,45 @@ class SettingsDialog(QDialog):
             except Exception:
                 pass
 
+        # 4. Detach and close file logging handlers before deleting app_share_dir
+        for log_name in (None, "ducksdrive"):
+            lg = logging.getLogger(log_name)
+            for handler in list(lg.handlers):
+                if isinstance(handler, logging.FileHandler):
+                    lg.removeHandler(handler)
+                    try:
+                        handler.close()
+                    except Exception:
+                        pass
+
+        # 5. Remove all application, configuration, and cache files
         try:
             if os.path.exists(autostart_file):
                 os.remove(autostart_file)
-                logger.info("Removed autostart file: %s", autostart_file)
             if os.path.isdir(config_dir):
                 shutil.rmtree(config_dir)
-                logger.info("Removed config directory: %s", config_dir)
+            for rc_file in (rclone_conf_file, f"{rclone_conf_file}.bak"):
+                if rc_file and os.path.exists(rc_file):
+                    try:
+                        os.remove(rc_file)
+                    except OSError:
+                        pass
+            if os.path.isdir(rclone_config_dir):
+                shutil.rmtree(rclone_config_dir, ignore_errors=True)
+            if os.path.isdir(rclone_cache_dir):
+                shutil.rmtree(rclone_cache_dir, ignore_errors=True)
             if os.path.isdir(app_share_dir):
                 shutil.rmtree(app_share_dir)
-                logger.info("Removed app share directory: %s", app_share_dir)
             if os.path.exists(desktop_file):
                 os.remove(desktop_file)
-                subprocess.run(["update-desktop-database", os.path.dirname(desktop_file)], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-                logger.info("Removed desktop file: %s", desktop_file)
+                update_db_bin = shutil.which("update-desktop-database")
+                if update_db_bin:
+                    subprocess.run([update_db_bin, os.path.dirname(desktop_file)], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             if os.path.exists(bin_file):
                 os.remove(bin_file)
-                logger.info("Removed bin file: %s", bin_file)
             if appimage_path and os.path.exists(appimage_path):
                 os.remove(appimage_path)
-                logger.info("Removed AppImage: %s", appimage_path)
         except Exception as e:
-            logger.error("Failed to uninstall DucksDrive: %s", e)
             QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover alguns ficheiros:") + f"\n{e}")
             return
 

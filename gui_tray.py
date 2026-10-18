@@ -385,7 +385,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _show_settings_dialog(self) -> None:
         """Opens the settings configuration dialog with proper widget parent."""
-        dialog = SettingsDialog(parent=None)
+        dialog = SettingsDialog(parent=None, daemon=self.daemon)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.exec()
 

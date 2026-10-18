@@ -30,7 +30,18 @@ ET.register_namespace("mime", NS_MIME)
 
 APP_NAME = "DucksDrive"
 GTK_BOOKMARKS_PATH = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
-KDE_PLACES_PATH = os.path.expanduser("~/.config/user-places.xbel")
+
+
+def _get_kde_places_path() -> str:
+    xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    primary = os.path.join(xdg_data, "user-places.xbel")
+    fallback = os.path.expanduser("~/.config/user-places.xbel")
+    if os.path.exists(primary) or not os.path.exists(fallback):
+        return primary
+    return fallback
+
+
+KDE_PLACES_PATH = _get_kde_places_path()
 
 
 def _backup_once(path: str) -> None:

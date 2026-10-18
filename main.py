@@ -79,6 +79,7 @@ class RcloneAppController(QObject):
         # Connect signals
         self.daemon.state_changed.connect(self._handle_state_change)
         self.tray.request_exit.connect(self.shutdown)
+        self.app.aboutToQuit.connect(self._cleanup_threads)
 
         # Setup OS signal handling for clean FUSE unmount
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -162,13 +163,17 @@ class RcloneAppController(QObject):
     def _on_connection_lost(self) -> None:
         logger.warning("Lost connection to the rclone RC API.")
 
-    def shutdown(self) -> None:
-        """Graceful shutdown: unmount and exit."""
-        logger.info("Shutting down application...")
+    def _cleanup_threads(self) -> None:
+        """Stops all background worker threads cleanly."""
         self._stop_poller(wait=True)
         for poller in self._old_pollers:
             poller.wait(2000)
         self.tray.status_popup.shutdown_workers()
+
+    def shutdown(self) -> None:
+        """Graceful shutdown: unmount and exit."""
+        logger.info("Shutting down application...")
+        self._cleanup_threads()
         self.daemon.stop()  # This also calls clean_integration via signal handler
         self.app.quit()
 

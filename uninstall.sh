@@ -63,8 +63,12 @@ import os, re
 for p in [os.path.expanduser("~/.local/share/user-places.xbel"), os.path.expanduser("~/.config/user-places.xbel")]:
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f: s = f.read()
-        s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>', '', s, flags=re.DOTALL)
+        s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
+        s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', s, flags=re.DOTALL)
         with open(p, "w", encoding="utf-8") as f: f.write(s)
+    bak = p + ".bak"
+    if os.path.exists(bak):
+        os.remove(bak)
 PYEOF
 
 GTK_BOOKMARKS="$HOME/.config/gtk-3.0/bookmarks"
@@ -76,6 +80,8 @@ fi
 
 
 echo "Removing application files and configuration..."
-rm -rf "$INSTALL_DIR" "$BIN_FILE" "$DESKTOP_FILE" "$AUTOSTART_FILE" "$CONFIG_DIR"
+RCLONE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclone"
+RCLONE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/rclone"
+rm -rf "$INSTALL_DIR" "$BIN_FILE" "$DESKTOP_FILE" "$AUTOSTART_FILE" "$CONFIG_DIR" "$RCLONE_CONFIG_DIR" "$RCLONE_CACHE_DIR"
 update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
 echo "=== Uninstallation Complete ==="
