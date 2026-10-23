@@ -21,9 +21,9 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, Slot, QTimer, QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from rclone_config import list_remote_names
+from rclone_config import get_clean_env, list_remote_names
 from rclone_daemon import RcloneDaemon
-from rclone_settings import load_config
+from rclone_settings import _sync_autostart, load_config
 from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
@@ -54,7 +54,14 @@ def get_rclone_version() -> Optional[tuple[int, int, int]]:
     ignoring pre-release or development suffixes (e.g. 1.73.5-beta, 1.74.0-DEV).
     """
     try:
-        result = subprocess.run(["rclone", "version"], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["rclone", "version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+            env=get_clean_env()
+        )
         match = re.search(r"rclone v?(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9.-]+)?", result.stdout)
         if match:
             return tuple(map(int, match.groups()))
@@ -75,6 +82,7 @@ class RcloneAppController(QObject):
         self.tray = RcloneTrayIcon(self.daemon)
         self.stats_poller: Optional[RcloneStatsPoller] = None
         self._old_pollers: list[RcloneStatsPoller] = []
+        self._is_shutting_down = False
 
         # Connect signals
         self.daemon.state_changed.connect(self._handle_state_change)
@@ -102,17 +110,13 @@ class RcloneAppController(QObject):
             logger.info("No cloud remotes found. Triggering first-run setup dialog...")
             QTimer.singleShot(200, self.tray._show_new_remote_dialog)
         else:
-            cfg = load_config()
-            if cfg.get("autostart", True):
-                logger.info("Auto-mounting first available remote: %s", remotes[0])
-                # Execute in background via QTimer to avoid blocking the UI thread during startup
-                QTimer.singleShot(0, lambda: self.daemon.start(remotes[0]))
-            else:
-                logger.info("Autostart disabled. Waiting for user action.")
+            logger.info("Auto-mounting first available remote: %s", remotes[0])
+            # Execute in background via QTimer to avoid blocking the UI thread during startup
+            QTimer.singleShot(0, lambda: self.daemon.start(remotes[0]))
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
         logger.info("Signal %d received, shutting down...", sig)
-        self.shutdown()
+        QTimer.singleShot(0, self.shutdown)
 
     @Slot(str)
     def _handle_state_change(self, state: str) -> None:
@@ -172,6 +176,9 @@ class RcloneAppController(QObject):
 
     def shutdown(self) -> None:
         """Graceful shutdown: unmount and exit."""
+        if self._is_shutting_down:
+            return
+        self._is_shutting_down = True
         logger.info("Shutting down application...")
         self._cleanup_threads()
         self.daemon.stop()  # This also calls clean_integration via signal handler
@@ -187,9 +194,10 @@ def main() -> None:
     app.setDesktopFileName("ducksdrive")
     app.setQuitOnLastWindowClosed(False)
 
-    # Initialize language
+    # Initialize language and synchronize autostart once
     cfg = load_config()
     set_language(cfg.get("language", "pt_BR"))
+    _sync_autostart(bool(cfg.get("autostart", True)))
 
 
     # 1. Enforce Single Instance via QLockFile

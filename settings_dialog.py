@@ -65,12 +65,12 @@ class SettingsDialog(QDialog):
         net_layout.setSpacing(10)
 
         self.bwlimit_combo = QComboBox()
-        self.bwlimit_combo.addItem("Ilimitado (Sem teto de banda)", "off")
-        self.bwlimit_combo.addItem("2 MB/s (Modesto)", "2M")
-        self.bwlimit_combo.addItem("5 MB/s (Equilibrado)", "5M")
-        self.bwlimit_combo.addItem("10 MB/s (Rápido)", "10M")
-        self.bwlimit_combo.addItem("25 MB/s (Muito Rápido)", "25M")
-        self.bwlimit_combo.addItem("50 MB/s (Máximo)", "50M")
+        self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
+        self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
+        self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
+        self.bwlimit_combo.addItem(tr("10 MB/s (Rápido)"), "10M")
+        self.bwlimit_combo.addItem(tr("25 MB/s (Muito Rápido)"), "25M")
+        self.bwlimit_combo.addItem(tr("50 MB/s (Máximo)"), "50M")
         net_layout.addRow(tr("Limite de Banda:"), self.bwlimit_combo)
 
         self.transfers_spin = QSpinBox()
@@ -86,10 +86,10 @@ class SettingsDialog(QDialog):
         cache_layout.setSpacing(10)
 
         self.vfs_mode_combo = QComboBox()
-        self.vfs_mode_combo.addItem("Full (Recomendado)", "full")
-        self.vfs_mode_combo.addItem("Writes", "writes")
-        self.vfs_mode_combo.addItem("Minimal", "minimal")
-        self.vfs_mode_combo.addItem("Off", "off")
+        self.vfs_mode_combo.addItem(tr("Full (Recomendado)"), "full")
+        self.vfs_mode_combo.addItem(tr("Writes"), "writes")
+        self.vfs_mode_combo.addItem(tr("Minimal"), "minimal")
+        self.vfs_mode_combo.addItem(tr("Off"), "off")
         cache_layout.addRow(tr("Modo do Cache VFS:"), self.vfs_mode_combo)
 
         self.cache_spin = QSpinBox()
@@ -151,10 +151,13 @@ class SettingsDialog(QDialog):
             self.bwlimit_combo.setCurrentIndex(index)
         else:
             # Add custom bandwidth limit dynamically if not in presets
-            self.bwlimit_combo.addItem(f"Personalizado ({bwlimit_val})", bwlimit_val)
+            self.bwlimit_combo.addItem(tr("Personalizado (%s)") % bwlimit_val, bwlimit_val)
             self.bwlimit_combo.setCurrentIndex(self.bwlimit_combo.count() - 1)
 
-        transfers_val = int(self.config.get("transfers", 4))
+        try:
+            transfers_val = int(self.config.get("transfers", 4))
+        except (ValueError, TypeError):
+            transfers_val = 4
         self.transfers_spin.setValue(transfers_val)
 
         cache_str = str(self.config.get("vfs_cache_max_size", "2G")).strip().upper()

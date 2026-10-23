@@ -27,9 +27,9 @@ cp -r dist/ducksdrive/* AppDir/usr/bin/
 
 # Copy rclone statically to the AppDir so it runs anywhere
 echo "Downloading rclone static binary for AppImage..."
-curl -O https://downloads.rclone.org/v1.66.0/rclone-v1.66.0-linux-amd64.zip
-unzip -j rclone-v1.66.0-linux-amd64.zip rclone-v1.66.0-linux-amd64/rclone -d AppDir/usr/bin/
-rm rclone-v1.66.0-linux-amd64.zip
+curl -O https://downloads.rclone.org/v1.73.5/rclone-v1.73.5-linux-amd64.zip
+unzip -j rclone-v1.73.5-linux-amd64.zip rclone-v1.73.5-linux-amd64/rclone -d AppDir/usr/bin/
+rm rclone-v1.73.5-linux-amd64.zip
 chmod +x AppDir/usr/bin/rclone
 
 # Copy icon

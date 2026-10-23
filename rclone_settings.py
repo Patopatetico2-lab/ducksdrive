@@ -42,10 +42,6 @@ def load_config() -> Dict[str, Any]:
         except Exception as e:
             logger.error("Failed to load config file: %s. Using defaults.", e)
 
-    autostart_file = os.path.join(xdg_config, "autostart", "ducksdrive.desktop")
-    if bool(config.get("autostart", True)) != os.path.exists(autostart_file):
-        _sync_autostart(bool(config.get("autostart", True)))
-
     return config
 
 
@@ -85,11 +81,21 @@ def _sync_autostart(enabled: bool) -> None:
                 bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
         xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
         icon_path = os.path.join(xdg_data, "ducksdrive", "icon.svg")
+        if not os.path.exists(icon_path):
+            bundled_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg")
+            if os.path.exists(bundled_icon):
+                try:
+                    os.makedirs(os.path.dirname(icon_path), exist_ok=True)
+                    shutil.copy2(bundled_icon, icon_path)
+                except Exception:
+                    icon_path = "ducksdrive"
+            else:
+                icon_path = "ducksdrive"
         
         content = f"""[Desktop Entry]
 Name=DucksDrive
 Comment=Manage cloud drives with Rclone
-Exec={bin_path}
+Exec="{bin_path}"
 Icon={icon_path}
 Terminal=false
 Type=Application

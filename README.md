@@ -7,7 +7,7 @@ Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
 ## O que ele faz
 
-Clicando no ícone da bandeja, abre um painel flutuante com a transferência atual: barra de progresso do arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência, desenhado com `QPainter`. O painel também abre sozinho quando uma transferência começa.
+Clicando no ícone da bandeja, abre um painel flutuante com a transferência atual: barra de progresso do arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência, desenhado com `QPainter`.
 
 A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir a montagem, o app confere por até 10 segundos se ela realmente aconteceu, sem travar. Um `QTimer` fica de olho no processo do FUSE em segundo plano, e se ele cair do nada o estado do app é atualizado. Ao fechar, o app espera até 10 segundos para o cache terminar de ser gravado na nuvem.
 
@@ -37,7 +37,7 @@ cd ducksdrive
 chmod +x install.sh
 ./install.sh
 ```
-O script detecta se a distro usa `apt` (Debian/Ubuntu) ou `pacman` (Arch), instala o `rclone` e o `fuse3`, cria um venv, instala o PySide6 e registra o atalho e o ícone do app.
+O script detecta se a distro usa `apt` (Debian/Ubuntu), `pacman` (Arch), `dnf` (Fedora/RHEL) ou `zypper` (openSUSE), instala o `rclone` e o `fuse3`, cria um venv, instala o PySide6 e registra o atalho e o ícone do app.
 ## Desinstalação
 
 ```bash

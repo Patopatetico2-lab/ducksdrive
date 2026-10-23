@@ -1,6 +1,3 @@
-import os
-from PySide6.QtCore import QObject
-
 _TRANSLATIONS = {
     "en_US": {
         "Configurar Novo Drive": "Configure New Drive",
@@ -151,19 +148,36 @@ _TRANSLATIONS = {
         "Falha ao gravar o ficheiro de configuração.": "Failed to save the configuration file.",
         "Arquivo": "File",
         "Rclone mount process died unexpectedly.": "Rclone mount process died unexpectedly.",
+        "O processo de montagem do Rclone encerrou inesperadamente.": "Rclone mount process died unexpectedly.",
+        "Rclone executable not found in PATH.": "Rclone executable not found in PATH.",
         "Montar (Somente Leitura)": "Mount (Read-Only)",
         "Pausar Transferências": "Pause Transfers",
-        "Retomar Transferências": "Resume Transfers"
+        "Retomar Transferências": "Resume Transfers",
+        "O nome da nuvem só pode conter letras, números, '-' e '_'.": "The cloud name can only contain letters, numbers, '-' and '_'.",
+        "Por favor, preencha todos os campos obrigatórios do provedor selecionado.": "Please fill in all required fields for the selected provider.",
+        "Ilimitado (Sem teto de banda)": "Unlimited (No bandwidth cap)",
+        "2 MB/s (Modesto)": "2 MB/s (Modest)",
+        "5 MB/s (Equilibrado)": "5 MB/s (Balanced)",
+        "10 MB/s (Rápido)": "10 MB/s (Fast)",
+        "25 MB/s (Muito Rápido)": "25 MB/s (Very Fast)",
+        "50 MB/s (Máximo)": "50 MB/s (Maximum)",
+        "Personalizado (%s)": "Custom (%s)",
+        "Full (Recomendado)": "Full (Recommended)",
+        "Writes": "Writes",
+        "Minimal": "Minimal",
+        "Off": "Off"
+    },
+    "pt_BR": {
+        "Rclone mount process died unexpectedly.": "O processo de montagem do Rclone encerrou inesperadamente.",
+        "Rclone executable not found in PATH.": "Executável do Rclone não encontrado no PATH."
     }
 }
 
 _current_lang = "pt_BR"
 
-def set_language(lang: str):
+def set_language(lang: str) -> None:
     global _current_lang
     _current_lang = lang
 
 def tr(text: str) -> str:
-    if _current_lang == "pt_BR":
-        return text
     return _TRANSLATIONS.get(_current_lang, {}).get(text, text)

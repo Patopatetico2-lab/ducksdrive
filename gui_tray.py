@@ -7,6 +7,7 @@ context menus, status notifications, and dialogs for remote management.
 
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -145,7 +146,7 @@ class NewRemoteDialog(QDialog):
         # WebDAV URL field
         self.webdav_url_input = QLineEdit()
         self.webdav_url_input.setPlaceholderText("https://nextcloud.example.com/remote.php/dav/files/user/")
-        self.conditional_layout.addRow("URL WebDAV:", self.webdav_url_input)
+        self.conditional_layout.addRow(tr("URL WebDAV:"), self.webdav_url_input)
 
         # S3 Fields
         self.s3_key_input = QLineEdit()
@@ -155,9 +156,9 @@ class NewRemoteDialog(QDialog):
         self.s3_secret_input.setEchoMode(QLineEdit.Password)
         self.s3_endpoint_input = QLineEdit()
         self.s3_endpoint_input.setPlaceholderText("Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc.")
-        self.conditional_layout.addRow("S3 Access Key:", self.s3_key_input)
-        self.conditional_layout.addRow("S3 Secret Key:", self.s3_secret_input)
-        self.conditional_layout.addRow("S3 Endpoint:", self.s3_endpoint_input)
+        self.conditional_layout.addRow(tr("S3 Access Key:"), self.s3_key_input)
+        self.conditional_layout.addRow(tr("S3 Secret Key:"), self.s3_secret_input)
+        self.conditional_layout.addRow(tr("S3 Endpoint:"), self.s3_endpoint_input)
 
         # Mega Fields
         self.mega_user_input = QLineEdit()
@@ -165,8 +166,8 @@ class NewRemoteDialog(QDialog):
         self.mega_pass_input = QLineEdit()
         self.mega_pass_input.setPlaceholderText("Password")
         self.mega_pass_input.setEchoMode(QLineEdit.Password)
-        self.conditional_layout.addRow("Mega Email:", self.mega_user_input)
-        self.conditional_layout.addRow("Mega Password:", self.mega_pass_input)
+        self.conditional_layout.addRow(tr("Mega Email:"), self.mega_user_input)
+        self.conditional_layout.addRow(tr("Mega Password:"), self.mega_pass_input)
 
         # FTP / SFTP Fields
         self.ftp_host_input = QLineEdit()
@@ -176,9 +177,9 @@ class NewRemoteDialog(QDialog):
         self.ftp_pass_input = QLineEdit()
         self.ftp_pass_input.setPlaceholderText("Password")
         self.ftp_pass_input.setEchoMode(QLineEdit.Password)
-        self.conditional_layout.addRow("Host:", self.ftp_host_input)
-        self.conditional_layout.addRow("User:", self.ftp_user_input)
-        self.conditional_layout.addRow("Password:", self.ftp_pass_input)
+        self.conditional_layout.addRow(tr("Host:"), self.ftp_host_input)
+        self.conditional_layout.addRow(tr("User:"), self.ftp_user_input)
+        self.conditional_layout.addRow(tr("Password:"), self.ftp_pass_input)
 
         form.addRow(self.conditional_container)
         layout.addLayout(form)
@@ -204,6 +205,8 @@ class NewRemoteDialog(QDialog):
 
         if rtype == "webdav":
             self.conditional_layout.setRowVisible(self.webdav_url_input, True)
+            self.conditional_layout.setRowVisible(self.ftp_user_input, True)
+            self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
             self.btn_create.setText(tr("Criar Nuvem WebDAV"))
         elif rtype == "s3":
             self.conditional_layout.setRowVisible(self.s3_key_input, True)
@@ -224,15 +227,41 @@ class NewRemoteDialog(QDialog):
         self.adjustSize()
 
     def accept(self) -> None:
-        name = self.name_input.text().strip()
+        name = self.name_input.text().strip().rstrip(":")
         if not name:
             QMessageBox.warning(self, tr("Erro de Input"), tr("O nome da nuvem não pode estar vazio."))
+            return
+
+        if not re.match(r"^[A-Za-z0-9_-]+$", name):
+            QMessageBox.warning(
+                self,
+                tr("Erro de Input"),
+                tr("O nome da nuvem só pode conter letras, números, '-' e '_'.")
+            )
             return
         
         existing_remotes = list_remote_names()
         if name in existing_remotes:
             QMessageBox.warning(self, tr("Erro de Duplicado"), tr("Já existe uma nuvem com o nome '%s'.") % name)
             return
+
+        rtype = self.type_combo.currentData()
+        if rtype == "webdav":
+            if not (self.webdav_url_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text()):
+                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
+                return
+        elif rtype == "s3":
+            if not (self.s3_key_input.text().strip() and self.s3_secret_input.text()):
+                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
+                return
+        elif rtype == "mega":
+            if not (self.mega_user_input.text().strip() and self.mega_pass_input.text()):
+                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
+                return
+        elif rtype in ("ftp", "sftp"):
+            if not (self.ftp_host_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text()):
+                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
+                return
 
         super().accept()
         
@@ -241,8 +270,15 @@ class NewRemoteDialog(QDialog):
         extra_params = {}
         if rtype == "webdav":
             url = self.webdav_url_input.text().strip()
+            user = self.ftp_user_input.text().strip()
+            password = self.ftp_pass_input.text()
+            extra_params["vendor"] = "other"
             if url:
                 extra_params["url"] = url
+            if user:
+                extra_params["user"] = user
+            if password:
+                extra_params["pass"] = password
         elif rtype == "s3":
             key = self.s3_key_input.text().strip()
             secret = self.s3_secret_input.text()  # secrets are never stripped
@@ -272,7 +308,7 @@ class NewRemoteDialog(QDialog):
                 extra_params["user"] = user
             if password:
                 extra_params["pass"] = password
-        return self.name_input.text().strip(), rtype, extra_params
+        return self.name_input.text().strip().rstrip(":"), rtype, extra_params
 
 
 class RcloneTrayIcon(QSystemTrayIcon):
@@ -303,6 +339,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         
         # Bloco 2 (Ações): Produtividade
         self.action_open = QAction(tr("Abrir Pasta Local"), self)
+        self.action_open.setEnabled(False)
         self.action_open.triggered.connect(self._open_folder)
         self._menu.addAction(self.action_open)
 
@@ -341,6 +378,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _populate_remotes_menu(self) -> None:
         """Dynamically populates the 'Gerenciar Nuvens' submenu without leaking memory."""
+        for act in self.menu_remotes.actions():
+            if act.menu():
+                act.menu().deleteLater()
+            act.deleteLater()
         self.menu_remotes.clear()
         
         remotes = list_remote_names()
@@ -350,36 +391,36 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 label = f"✓ {remote} (" + tr("Ativo") + ")" if is_active else remote
                 remote_menu = QMenu(label, self.menu_remotes)
                 if is_active:
-                    action_unmount_local = QAction(tr("Desmontar"), self)
+                    action_unmount_local = QAction(tr("Desmontar"), remote_menu)
                     action_unmount_local.triggered.connect(self.daemon.stop)
                     remote_menu.addAction(action_unmount_local)
                 else:
-                    action_mount = QAction(tr("Montar"), self)
+                    action_mount = QAction(tr("Montar"), remote_menu)
                     action_mount.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=False))
                     remote_menu.addAction(action_mount)
 
-                    action_mount_ro = QAction(tr("Montar (Somente Leitura)"), self)
+                    action_mount_ro = QAction(tr("Montar (Somente Leitura)"), remote_menu)
                     action_mount_ro.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=True))
                     remote_menu.addAction(action_mount_ro)
                 
                 self.menu_remotes.addMenu(remote_menu)
             self.menu_remotes.addSeparator()
         else:
-            empty_action = QAction(tr("Nenhuma nuvem configurada"), self)
+            empty_action = QAction(tr("Nenhuma nuvem configurada"), self.menu_remotes)
             empty_action.setEnabled(False)
             self.menu_remotes.addAction(empty_action)
             self.menu_remotes.addSeparator()
 
-        self.action_unmount = QAction(tr("Desconectar Atual"), self)
+        self.action_unmount = QAction(tr("Desconectar Atual"), self.menu_remotes)
         self.action_unmount.triggered.connect(self.daemon.stop)
         self.action_unmount.setEnabled(self.daemon.is_running())
         self.menu_remotes.addAction(self.action_unmount)
 
-        self.action_new = QAction(tr("Adicionar Nova Nuvem..."), self)
+        self.action_new = QAction(tr("Adicionar Nova Nuvem..."), self.menu_remotes)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self.menu_remotes.addAction(self.action_new)
 
-        self.action_delete = QAction(tr("Remover Nuvem..."), self)
+        self.action_delete = QAction(tr("Remover Nuvem..."), self.menu_remotes)
         self.action_delete.triggered.connect(self._show_delete_selector)
         self.menu_remotes.addAction(self.action_delete)
 
@@ -474,7 +515,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
                         QSystemTrayIcon.Information,
                         4000
                     )
-                text = f"{tr('Velocidade:')} {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
+                remote_name = self.daemon.current_remote or "DucksDrive"
+                clean_name = remote_name.rstrip(":")
+                text = f"{clean_name} • {tr('Conectado')} ({stats.speed_str})"
                 self.action_status.setText(text)
                 self.setToolTip(f"{APP_NAME}: {stats.status_text}")
         else:
@@ -578,7 +621,16 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self._show_new_remote_dialog()
             return
 
+        remote, ok = QInputDialog.getItem(
+            None, tr("Conectar Nuvem"), tr("Selecione uma nuvem para conectar:"), remotes, 0, False
+        )
+        if not ok or not remote:
+            return
+
         if self.daemon.is_running():
+            active_remote = (self.daemon.current_remote or "").rstrip(":")
+            if active_remote == remote.rstrip(":"):
+                return
             res = QMessageBox.question(
                 None,
                 tr("Substituir Drive Ativo"),
@@ -588,12 +640,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
             )
             if res != QMessageBox.Yes:
                 return
-            
-        remote, ok = QInputDialog.getItem(
-            None, tr("Conectar Nuvem"), tr("Selecione uma nuvem para conectar:"), remotes, 0, False
-        )
-        if ok and remote:
-            self.daemon.start(remote)
+
+        self.daemon.start(remote)
 
     def _show_new_remote_dialog(self) -> None:
         """Handles the flow for creating a new remote via background thread."""

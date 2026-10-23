@@ -56,7 +56,6 @@ if mountpoint -q "$LEGACY_MOUNT" 2>/dev/null || [ -d "$LEGACY_MOUNT" ]; then
 fi
 
 echo "Removing orphaned GUI bookmarks..."
-GTK_BOOKMARKS="$HOME/.config/gtk-3.0/bookmarks"
 
 python3 - <<'PYEOF' 2>/dev/null || true
 import os, re

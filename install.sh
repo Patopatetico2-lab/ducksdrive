@@ -59,7 +59,7 @@ cat <<EOF> "$DESKTOP_FILE"
 [Desktop Entry]
 Name=DucksDrive
 Comment=Manage cloud drives with Rclone
-Exec=$BIN_DIR/$APP_NAME
+Exec="$BIN_DIR/$APP_NAME"
 Icon=$INSTALL_DIR/icon.svg
 Terminal=false
 Type=Application
@@ -68,7 +68,7 @@ StartupNotify=true
 StartupWMClass=ducksdrive
 EOF
 
-update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
+update-desktop-database "$(dirname "$DESKTOP_FILE")" 2>/dev/null || true
 echo "=== Installation Complete ==="
 echo "You can now run the app by typing '$APP_NAME' in your terminal or searching for 'DucksDrive' in your application menu."
 echo "Note: If '$BIN_DIR' is not in your PATH, add 'export PATH=\$PATH:$BIN_DIR' to your .bashrc or .zshrc."

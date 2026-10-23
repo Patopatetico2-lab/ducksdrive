@@ -11,6 +11,7 @@ import logging
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import time
 from dataclasses import dataclass
@@ -55,6 +56,19 @@ def generate_rc_credentials(host: str = DEFAULT_RC_HOST, port: int = DEFAULT_RC_
     user = f"rc_user_{secrets.token_hex(4)}"
     password = secrets.token_urlsafe(24)
     return RCCredentials(user=user, password=password, host=host, port=port)
+
+
+def get_available_rc_port(host: str = DEFAULT_RC_HOST, preferred_port: int = DEFAULT_RC_PORT) -> int:
+    """Checks if preferred_port is free on host; if in use, selects an available localhost port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, preferred_port))
+            return preferred_port
+        except OSError:
+            pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return int(s.getsockname()[1])
 
 
 def get_unmount_binary() -> Optional[str]:
@@ -238,7 +252,9 @@ class RcloneDaemon(QObject):
                 logger.error("Rclone mount process died unexpectedly in background!")
                 # Update state BEFORE emitting: the error slot opens a modal dialog whose nested
                 # event loop would otherwise keep re-triggering this health check.
+                failed_remote = self.current_remote
                 self.stop()
+                self.current_remote = failed_remote
                 self._set_state("error")
                 self.mount_error.emit("Rclone mount process died unexpectedly.")
 
@@ -256,6 +272,17 @@ class RcloneDaemon(QObject):
         if self.is_running():
             logger.info("Another mount is active. Stopping current mount before starting '%s'", remote_name)
             self.stop()
+
+        if hasattr(self, "_startup_timer") and self._startup_timer:
+            self._startup_timer.stop()
+            self._startup_timer = None
+
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None
 
         rclone_bin = shutil.which("rclone")
         if not rclone_bin:
@@ -284,8 +311,9 @@ class RcloneDaemon(QObject):
             self._set_state("error")
             return False
 
-        # Generate fresh in-memory RC credentials
-        self.rc_credentials = generate_rc_credentials(self.rc_host, self.rc_port)
+        # Generate fresh in-memory RC credentials on an available port
+        active_port = get_available_rc_port(self.rc_host, self.rc_port)
+        self.rc_credentials = generate_rc_credentials(self.rc_host, active_port)
         self.current_remote = remote_name
 
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
@@ -389,7 +417,9 @@ class RcloneDaemon(QObject):
                         pass
                 err = f"Rclone mount exited during startup:\n{log_content.strip()}"
                 logger.error(err)
+                failed_remote = self.current_remote
                 self.stop()
+                self.current_remote = failed_remote
                 self._set_state("error")
                 self.mount_error.emit(err)
                 return
@@ -403,7 +433,9 @@ class RcloneDaemon(QObject):
                 startup_timer.stop()
                 err = f"Rclone mount timed out after 10s for path '{self.mount_point}'."
                 logger.error(err)
+                failed_remote = self.current_remote
                 self.stop()
+                self.current_remote = failed_remote
                 self._set_state("error")
                 self.mount_error.emit(err)
                 return

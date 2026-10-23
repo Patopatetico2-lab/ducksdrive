@@ -14,7 +14,6 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
-from i18n import tr
 from PySide6.QtCore import QThread, Signal
 
 logger = logging.getLogger(__name__)
@@ -178,15 +177,21 @@ class RemoteCreationThread(QThread):
             return
 
         cmd = [rclone_bin, "config", "create", self.remote_name, self.remote_type]
-        params = {"config_is_local": "true"}
+        params: Dict[str, str] = {}
+        if self.remote_type in ("drive", "onedrive", "dropbox", "box", "pcloud"):
+            params["config_is_local"] = "true"
         params.update(self.extra_params)
         for key, value in params.items():
             cmd.extend([key, str(value)])
+        cmd.append("--non-interactive")
+        if self.remote_type in ("mega", "ftp", "sftp", "webdav"):
+            cmd.append("--obscure")
 
         logger.info("Starting background creation: %s", mask_command(cmd))
         try:
             self._process = subprocess.Popen(
                 cmd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -266,12 +271,8 @@ class RemoteCreationThread(QThread):
         if self._process and self._process.poll() is None:
             try:
                 self._process.terminate()
-                self._process.wait(timeout=2)
             except Exception:
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
+                pass
 
 
 def delete_remote(remote_name: str) -> bool:

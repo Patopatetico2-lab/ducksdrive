@@ -1,7 +1,7 @@
 """
 status_popup.py - Native-like floating status panel for DucksDrive.
 
-Provides a frameless popup window (Qt.Popup) displaying real-time transfer metrics,
+Provides a frameless popup window (Qt.Tool) displaying real-time transfer metrics,
 progress bars, active file info, a rolling speed history chart, and quick actions.
 """
 
@@ -153,7 +153,7 @@ class QuotaWorkerThread(QThread):
                 method="POST"
             )
             
-            with urllib.request.urlopen(req_about, timeout=10) as response:
+            with urllib.request.urlopen(req_about, timeout=4) as response:
                 data = json.loads(response.read().decode("utf-8"))
                 total = int(data.get("total") or 0)
                 used = int(data.get("used") or 0)
@@ -209,6 +209,7 @@ class StatusPopup(QWidget):
         self.is_paused = False
 
         self._last_quota_update = 0
+        self._quota_remote: Optional[str] = None
         self._quota_timer = QTimer(self)
         self._quota_timer.setInterval(10 * 60 * 1000)  # 10 minutes cache
         self._quota_timer.timeout.connect(self._fetch_quota)
@@ -217,6 +218,7 @@ class StatusPopup(QWidget):
         self._quota_worker: Optional[QuotaWorkerThread] = None
 
         self._init_ui()
+        self.daemon.state_changed.connect(self._on_daemon_state_changed)
 
     def _init_ui(self) -> None:
         """Initializes the popup layout, widgets, and styling."""
@@ -376,8 +378,38 @@ class StatusPopup(QWidget):
 
         # Footer
         self.btn_open = QPushButton(tr("Abrir Pasta Local"))
+        self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_cloud_folder)
         main_layout.addWidget(self.btn_open)
+
+    @Slot(str)
+    def _on_daemon_state_changed(self, state: str) -> None:
+        """Resets pause state and quota cache when unmounting or switching cloud remotes."""
+        if state in ("stopped", "unmounting", "starting", "error") or self.daemon.current_remote != self._quota_remote:
+            self.is_paused = False
+            self.btn_pause.setText(tr("Pausar Transferências"))
+            self.btn_pause.setStyleSheet("""
+                QPushButton {
+                    background-color: #f39c12;
+                    color: white;
+                    border: none;
+                    padding: 6px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                }
+                QPushButton:hover {
+                    background-color: #e67e22;
+                }
+            """)
+            self._last_quota_update = 0
+            self.quota_label.setText(tr("Calculando espaço..."))
+            if state in ("stopped", "unmounting", "starting", "error"):
+                self._quota_remote = None
+            else:
+                self._quota_remote = self.daemon.current_remote
+                if self.isVisible():
+                    self._fetch_quota()
 
     def showEvent(self, event: Any) -> None:
         """Starts quota timer when popup becomes visible."""
@@ -404,6 +436,7 @@ class StatusPopup(QWidget):
                 return
             self._quota_worker.deleteLater()
 
+        self._quota_remote = self.daemon.current_remote
         self._quota_worker = QuotaWorkerThread(self.daemon.rc_credentials, self.daemon.current_remote or "gdrive", self)
         self._quota_worker.quota_fetched.connect(self._on_quota_success)
         self._quota_worker.quota_failed.connect(self._on_quota_error)
@@ -416,18 +449,25 @@ class StatusPopup(QWidget):
         import base64
         import threading
         from rclone_settings import load_config
-        
-        def do_request():
+
+        if not self.daemon.is_running():
+            return
+
+        target_pause = not self.is_paused
+        self.is_paused = target_pause
+
+        def do_request(pause_state: bool) -> None:
             try:
                 creds = self.daemon.rc_credentials
-                if not creds: return
+                if not creds:
+                    return
                 endpoint = f"{creds.url}/core/bwlimit"
                 auth_str = f"{creds.user}:{creds.password}"
                 b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-                
+
                 original_limit = str(load_config().get("bwlimit") or "off")
-                limit_val = "1B" if not self.is_paused else original_limit
-                
+                limit_val = "1B" if pause_state else original_limit
+
                 req = urllib.request.Request(
                     url=endpoint,
                     data=json.dumps({"rate": limit_val}).encode("utf-8"),
@@ -440,12 +480,9 @@ class StatusPopup(QWidget):
                 import logging
                 logging.getLogger("ducksdrive").debug("Failed to set bwlimit via RC: %s", e)
 
-        if not self.daemon.is_running(): return
-        
-        threading.Thread(target=do_request, daemon=True).start()
+        threading.Thread(target=do_request, args=(target_pause,), daemon=True).start()
 
-        if not self.is_paused:
-            self.is_paused = True
+        if self.is_paused:
             self.btn_pause.setText(tr("Retomar Transferências"))
             self.btn_pause.setStyleSheet("""
                 QPushButton {
@@ -462,7 +499,6 @@ class StatusPopup(QWidget):
                 }
             """)
         else:
-            self.is_paused = False
             self.btn_pause.setText(tr("Pausar Transferências"))
             self.btn_pause.setStyleSheet("""
                 QPushButton {

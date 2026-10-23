@@ -119,7 +119,7 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 1.5) -> StatsData:
                 eta_str = format_eta(eta_seconds)
 
                 transfers = int(data.get("transfers", 0))
-                active_transfers = data.get("transferring", [])
+                active_transfers = data.get("transferring") or []
                 total_bytes = int(data.get("bytes", 0))
                 errors = int(data.get("errors", 0))
 
@@ -183,17 +183,21 @@ class RcloneStatsPoller(QThread):
         logger.info("Started stats polling thread for %s", self.credentials.url)
 
         was_online = False
+        consecutive_failures = 0
         while self._running:
             stats = fetch_rclone_stats(self.credentials, timeout=1.5)
 
             if stats.is_online:
+                consecutive_failures = 0
                 was_online = True
                 self.stats_updated.emit(stats)
             else:
-                if was_online:
-                    self.connection_lost.emit()
-                    was_online = False
-                self.stats_updated.emit(stats)
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    if was_online:
+                        self.connection_lost.emit()
+                        was_online = False
+                    self.stats_updated.emit(stats)
 
             # Sleep in small increments for responsive thread termination
             steps = int(self.poll_interval / 0.1)
