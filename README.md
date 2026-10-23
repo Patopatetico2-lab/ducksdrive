@@ -7,6 +7,8 @@ Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
 [Página do projeto](https://patopatetico2-lab.github.io/ducksdrive/) • [Releases (AppImage)](https://github.com/Patopatetico2-lab/ducksdrive/releases)
 
+<img width="780" alt="Demonstração do DucksDrive" src="docs/assets/demo.gif" />
+
 ## O que ele faz
 
 Clicando no ícone da bandeja, abre um painel flutuante com o uso de espaço da nuvem (quota), um botão para pausar ou retomar os envios na hora e a lista de transferências ativas: barra de progresso por arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência, desenhado com `QPainter`.

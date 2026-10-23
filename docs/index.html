@@ -728,12 +728,25 @@
       <!-- Interactive Screenshots Showcase -->
       <div class="showcase-wrapper">
         <div class="showcase-tabs">
-          <button class="tab-btn active" data-tab="tab-tray" data-i18n="tab_tray">Painel Flutuante, Quota e Gráfico</button>
+          <button class="tab-btn active" data-tab="tab-demo" data-i18n="tab_demo">Demonstração ao Vivo (GIF)</button>
+          <button class="tab-btn" data-tab="tab-tray" data-i18n="tab_tray">Painel Flutuante, Quota e Gráfico</button>
           <button class="tab-btn" data-tab="tab-clouds" data-i18n="tab_clouds">Configurador Multi-Nuvem</button>
           <button class="tab-btn" data-tab="tab-settings" data-i18n="tab_settings">Configurações, Cache VFS e Idioma</button>
         </div>
 
-        <div class="showcase-content active" id="tab-tray">
+        <div class="showcase-content active" id="tab-demo">
+          <img
+            class="showcase-img"
+            style="max-width: 780px;"
+            src="assets/demo.gif"
+            alt="Demonstração animada do DucksDrive abrindo o painel da bandeja, a pasta no Dolphin e pausando transferências"
+          />
+          <p class="showcase-caption" data-i18n="caption_demo">
+            Clique no ícone da bandeja para ver o progresso em tempo real, abrir a pasta montada no gerenciador de arquivos ou pausar os envios na hora.
+          </p>
+        </div>
+
+        <div class="showcase-content" id="tab-tray">
           <div class="showcase-images-row">
             <img
               class="showcase-img"
@@ -983,6 +996,8 @@
         cta_install: 'Instalar no Linux',
         cta_appimage: 'Baixar AppImage',
         cta_github: 'Ver Código no GitHub',
+        tab_demo: 'Demonstração ao Vivo (GIF)',
+        caption_demo: 'Clique no ícone da bandeja para ver o progresso em tempo real, abrir a pasta montada no gerenciador de arquivos ou pausar os envios na hora.',
         tab_tray: 'Painel Flutuante, Quota e Gráfico',
         tab_clouds: 'Configurador Multi-Nuvem',
         tab_settings: 'Configurações, Cache VFS e Idioma',
@@ -1022,6 +1037,8 @@
         cta_install: 'Install on Linux',
         cta_appimage: 'Download AppImage',
         cta_github: 'View Source on GitHub',
+        tab_demo: 'Live Demo (GIF)',
+        caption_demo: 'Click the system tray icon to inspect live transfer progress, open the mounted folder in your file manager, or pause uploads anytime.',
         tab_tray: 'Floating Panel, Quota & Chart',
         tab_clouds: 'Multi-Cloud Setup',
         tab_settings: 'Settings, VFS Cache & Language',
