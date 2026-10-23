@@ -5,12 +5,11 @@ Interface gráfica em Python (PySide6/Qt) para montar e gerenciar nuvens e unida
 
 Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
+[Página do projeto](https://patopatetico2-lab.github.io/ducksdrive/) • [Releases (AppImage)](https://github.com/Patopatetico2-lab/ducksdrive/releases)
+
 ## O que ele faz
 
-Clicando no ícone da bandeja, abre um painel flutuante com:
-- **Quota de armazenamento da nuvem** em tempo real (`Usando X GB de Y GB`) com barra de ocupação;
-- **Botão para Pausar / Retomar transferências** com 1 clique via API RC do rclone;
-- **Lista rolável de transferências ativas**, com barra de progresso individual por arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência desenhado com `QPainter`.
+Clicando no ícone da bandeja, abre um painel flutuante com o uso de espaço da nuvem (quota), um botão para pausar ou retomar os envios na hora e a lista de transferências ativas: barra de progresso por arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência, desenhado com `QPainter`.
 
 A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir a montagem, o app confere por até 10 segundos se ela realmente aconteceu, sem travar. Um `QTimer` fica de olho no processo do FUSE em segundo plano, e se ele cair do nada o estado do app é atualizado. Ao fechar, o app espera até 10 segundos para o cache terminar de ser gravado na nuvem.
 
@@ -18,37 +17,31 @@ Na barra lateral do Dolphin (KDE) e dos gerenciadores GTK (Nautilus, Thunar, Nem
 
 Só uma instância roda por vez (`QLockFile`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
 
-<p align="center">
-  <img width="380" alt="Painel Flutuante com Transferências Ativas" src="docs/assets/status-popup-active.png" />
-  <img width="380" alt="Painel Flutuante Conectado" src="docs/assets/status-popup-idle.png" />
-</p>
+<img width="360" alt="Painel em transferência" src="docs/assets/status-popup-active.png" /> <img width="360" alt="Painel conectado" src="docs/assets/status-popup-idle.png" />
 
-## Provedores Suportados
+## Como configurar uma nuvem
 
-Pelo menu **Gerenciar Nuvens → Adicionar Nova Nuvem...**, você pode configurar tanto provedores com login no navegador (OAuth) quanto servidores próprios:
-- **OAuth (1 clique no navegador):** Google Drive, Microsoft OneDrive, Dropbox, Box, pCloud
-- **Credenciais diretas na interface:** Amazon S3 / S3-Compatible (MinIO, Wasabi, Cloudflare R2), Nextcloud / WebDAV, Mega, FTP e SFTP
+Pelo menu do ícone na bandeja, vá em **Gerenciar Nuvens → Adicionar Nova Nuvem...**. Dá para adicionar tanto serviços que fazem login pelo navegador (Google Drive, OneDrive, Dropbox, Box e pCloud) quanto servidores com credenciais diretas na janela (Amazon S3 / compatíveis como MinIO e Wasabi, Nextcloud / WebDAV, Mega, FTP e SFTP).
 
-<p align="center">
-  <img width="410" alt="Configurar Nuvem OAuth" src="docs/assets/new-remote-oauth.png" />
-  <img width="410" alt="Configurar Nuvem S3 / WebDAV / SFTP" src="docs/assets/new-remote-s3.png" />
-</p>
+Depois de criada, é só escolher a nuvem no menu para montar.
+
+<img width="400" alt="Nova nuvem OAuth" src="docs/assets/new-remote-oauth.png" /> <img width="400" alt="Nova nuvem S3" src="docs/assets/new-remote-s3.png" />
 
 ## Configurações
 
 Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de configurações do app:
 
-- `--bwlimit`: limite de banda (ex: `10 MB/s`) ou ilimitado (`off`). Ajuda a não saturar a rede nem travar jogo online.
-- `--vfs-cache-mode` e `--vfs-cache-max-size`: modo do cache (`Full`, `Writes`, `Minimal`, `Off`) e quanto espaço do SSD o cache pode usar (ex: `10 GB`).
-- `--transfers`: quantos arquivos são sincronizados ao mesmo tempo (1 a 16).
-- **Idioma / Language:** Português (Brasil) e Inglês (EUA).
-- **Iniciar com o sistema (autostart)** e botão de **Desinstalação completa** direto na interface.
+- `--bwlimit`: limite de banda, tipo `10M`, ou `off` para sem limite. Ajuda a não saturar a rede nem travar jogo online.
+- `--vfs-cache-mode` e `--vfs-cache-max-size`: modo do cache (`full`, `writes`, `minimal` ou `off`) e quanto espaço do SSD o cache pode usar, tipo `10G`.
+- `--transfers`: quantos arquivos são sincronizados ao mesmo tempo, tipo `4`.
+- Idioma: Português (Brasil) ou Inglês (EUA).
+- Iniciar com o sistema (autostart): liga e desliga pelo mesmo menu.
 
-<p align="center">
-  <img width="560" alt="Configurações do DucksDrive" src="docs/assets/settings-dialog.png" />
-</p>
+<img width="540" alt="Tela de configurações" src="docs/assets/settings-dialog.png" />
 
 ## Instalação
+
+### Pelo script (instala no sistema)
 ```bash
 git clone https://github.com/Patopatetico2-lab/ducksdrive.git
 cd ducksdrive
@@ -56,8 +49,32 @@ chmod +x install.sh
 ./install.sh
 ```
 O script detecta se a distro usa `apt` (Debian/Ubuntu), `pacman` (Arch), `dnf` (Fedora/RHEL) ou `zypper` (openSUSE), instala o `rclone` e o `fuse3`, cria um venv, instala o PySide6 e registra o atalho e o ícone do app.
+
+### Pelo AppImage (portátil)
+Você também pode baixar o `.AppImage` direto na aba de [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases) (ele já traz o binário do `rclone` junto) ou gerar um localmente rodando `./build_appimage.sh`.
+
 ## Desinstalação
+
+Dá para desinstalar clicando no botão **Desinstalar** dentro da tela de configurações do próprio app (ele desmonta as nuvens, limpa os atalhos e apaga os arquivos), ou rodando o script na pasta do projeto:
 
 ```bash
 ./uninstall.sh
 ```
+
+---
+
+<details>
+<summary>English summary</summary>
+
+### About
+A Python (PySide6/Qt) GUI for mounting and managing cloud drives via `rclone` and FUSE on Linux, similar to the Windows Google Drive client. Works on KDE Plasma, GNOME, XFCE, and other desktop environments.
+
+### Features
+- Floating tray panel with cloud storage quota, a pause/resume transfers button, per-file progress bars, transfer speed (MB/s), ETA, and a live speed history graph drawn with `QPainter`.
+- Mounts remotes in `~/CloudDrives/{remote_name}` and automatically adds sidebar shortcuts in Dolphin (backing up `user-places.xbel.bak`), Nautilus, Thunar, and Nemo.
+- Built-in setup dialog for OAuth clouds (Google Drive, OneDrive, Dropbox, Box, pCloud) and direct-credential providers (S3, Nextcloud/WebDAV, Mega, FTP, SFTP).
+- GUI settings for `--bwlimit`, `--vfs-cache-mode`, `--vfs-cache-max-size`, `--transfers`, language (PT-BR / EN-US), and autostart.
+
+### Install
+Run `./install.sh` (supports `apt`, `pacman`, `dnf`, `zypper`) or grab the portable `.AppImage` from [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases).
+</details>
