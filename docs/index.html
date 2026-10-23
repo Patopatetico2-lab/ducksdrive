@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DucksDrive — Suas Nuvens no Linux como Pastas Locais</title>
+  <meta name="description" content="Interface gráfica em Python (PySide6/Qt) para montar e gerenciar Google Drive, OneDrive, Dropbox, Mega, S3 e WebDAV pelo rclone no Linux com ícone na bandeja e gráfico em tempo real." />
+  <meta name="keywords" content="DucksDrive, rclone gui linux, google drive linux, onedrive linux, pyside6, kde dolphin cloud, gnome nautilus cloud, fuse3" />
+  <meta name="author" content="Patopatetico2-lab" />
+
+  <!-- Open Graph / Social -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="DucksDrive — Cliente de Nuvem para Linux (GUI Rclone)" />
+  <meta property="og:description" content="Ícone na bandeja, painel flutuante com gráfico de velocidade em tempo real e integração automática com Dolphin, Nautilus, Thunar e Nemo." />
+  <meta property="og:image" content="https://github.com/user-attachments/assets/2f297300-14e3-42ca-aa62-cba54b874846" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <!-- Inline SVG Favicon from icon.svg -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='18' cy='48' r='8' fill='%232980b9'/%3E%3Ccircle cx='28' cy='40' r='12' fill='%232980b9'/%3E%3Ccircle cx='44' cy='44' r='10' fill='%232980b9'/%3E%3Ccircle cx='54' cy='48' r='8' fill='%232980b9'/%3E%3Crect x='18' y='44' width='36' height='12' fill='%232980b9'/%3E%3Cellipse cx='18' cy='38' rx='5' ry='10' fill='%23f39c12' transform='rotate(30 18 38)'/%3E%3Cellipse cx='46' cy='38' rx='5' ry='10' fill='%23f39c12' transform='rotate(-30 46 38)'/%3E%3Ccircle cx='32' cy='36' r='15' fill='%23f1c40f'/%3E%3Ccircle cx='32' cy='24' r='14' fill='%23f1c40f'/%3E%3Cpath d='M 32 11 C 32 4 25 4 25 8 C 25 11 30 12 32 12' fill='%23f39c12'/%3E%3Cpath d='M 32 11 C 32 2 39 3 39 7 C 39 10 34 11 32 12' fill='%23f39c12'/%3E%3Ccircle cx='26' cy='22' r='2.5' fill='%232c3e50'/%3E%3Ccircle cx='38' cy='22' r='2.5' fill='%232c3e50'/%3E%3Ccircle cx='25' cy='21' r='1' fill='%23ffffff'/%3E%3Ccircle cx='37' cy='21' r='1' fill='%23ffffff'/%3E%3Ccircle cx='21' cy='26' r='3' fill='%23e74c3c' opacity='0.3'/%3E%3Ccircle cx='43' cy='26' r='3' fill='%23e74c3c' opacity='0.3'/%3E%3Crect x='27' y='24' width='10' height='6' rx='3' fill='%23e67e22'/%3E%3Crect x='28' y='25' width='4' height='1.5' rx='0.75' fill='%23ffffff' opacity='0.4'/%3E%3Ccircle cx='16' cy='50' r='10' fill='%233498db'/%3E%3Ccircle cx='28' cy='42' r='14' fill='%233498db'/%3E%3Ccircle cx='42' cy='46' r='12' fill='%233498db'/%3E%3Ccircle cx='52' cy='52' r='8' fill='%233498db'/%3E%3Crect x='16' y='46' width='36' height='14' fill='%233498db'/%3E%3C/svg%3E" />
+
+  <style>
+    :root {
+      --bg-primary: #0b0f17;
+      --bg-secondary: #111827;
+      --bg-card: rgba(22, 31, 48, 0.75);
+      --bg-card-hover: rgba(30, 42, 64, 0.9);
+      --text-primary: #f3f6fa;
+      --text-secondary: #9ca8bc;
+      --text-muted: #64748b;
+      --accent-blue: #3498db;
+      --accent-blue-dark: #2980b9;
+      --accent-gold: #f1c40f;
+      --accent-orange: #f39c12;
+      --accent-green: #2ecc71;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-highlight: rgba(52, 152, 219, 0.4);
+      --radius-md: 12px;
+      --radius-lg: 18px;
+      --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.55);
+      --max-width: 1140px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+      background-color: var(--bg-primary);
+      background-image:
+        radial-gradient(circle at 15% 10%, rgba(52, 152, 219, 0.14), transparent 35%),
+        radial-gradient(circle at 85% 15%, rgba(241, 196, 15, 0.09), transparent 30%),
+        radial-gradient(circle at 50% 80%, rgba(41, 128, 185, 0.1), transparent 40%);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .container {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Navbar */
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(11, 15, 23, 0.8);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .navbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 70px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      font-size: 1.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand svg {
+      width: 38px;
+      height: 38px;
+      filter: drop-shadow(0 4px 10px rgba(52, 152, 219, 0.35));
+      transition: transform 0.25s ease;
+    }
+
+    .brand:hover svg {
+      transform: translateY(-2px) rotate(-4deg);
+    }
+
+    .brand-text span {
+      color: var(--accent-gold);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+    }
+
+    .lang-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .lang-btn:hover {
+      border-color: var(--accent-blue);
+      background: rgba(52, 152, 219, 0.15);
+    }
+
+    /* Hero */
+    .hero {
+      padding: 72px 0 56px;
+      text-align: center;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(52, 152, 219, 0.12);
+      border: 1px solid rgba(52, 152, 219, 0.3);
+      color: #7cc4fa;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+
+    .hero-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+
+    .hero-logo-banner {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .hero-logo-banner svg {
+      width: 74px;
+      height: 74px;
+      animation: floatDuck 4s ease-in-out infinite;
+    }
+
+    @keyframes floatDuck {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-7px); }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.6rem);
+      font-weight: 850;
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+      max-width: 820px;
+      margin: 0 auto 20px;
+    }
+
+    .hero h1 .gradient-text {
+      background: linear-gradient(135deg, #5dade2 0%, #f1c40f 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p.subtitle {
+      font-size: clamp(1.05rem, 2vw, 1.22rem);
+      color: var(--text-secondary);
+      max-width: 680px;
+      margin: 0 auto 34px;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 48px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 13px 24px;
+      border-radius: var(--radius-md);
+      font-weight: 700;
+      font-size: 0.98rem;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-blue-dark) 100%);
+      color: #fff;
+      box-shadow: 0 8px 25px rgba(52, 152, 219, 0.35);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 30px rgba(52, 152, 219, 0.5);
+    }
+
+    .btn-gold {
+      background: rgba(241, 196, 15, 0.14);
+      border-color: rgba(241, 196, 15, 0.4);
+      color: var(--accent-gold);
+    }
+
+    .btn-gold:hover {
+      background: rgba(241, 196, 15, 0.24);
+      transform: translateY(-2px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border-subtle);
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: translateY(-2px);
+    }
+
+    /* Interactive Preview Showcase */
+    .showcase-wrapper {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      box-shadow: var(--shadow-lg);
+      max-width: 980px;
+      margin: 0 auto;
+    }
+
+    .showcase-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .tab-btn {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      padding: 9px 18px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn.active,
+    .tab-btn:hover {
+      background: rgba(52, 152, 219, 0.18);
+      border-color: var(--accent-blue);
+      color: var(--text-primary);
+    }
+
+    .showcase-content {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 360px;
+    }
+
+    .showcase-content.active {
+      display: flex;
+    }
+
+    .showcase-images-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+    }
+
+    .showcase-img {
+      max-width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      transition: transform 0.25s ease;
+    }
+
+    .showcase-img:hover {
+      transform: scale(1.02);
+    }
+
+    .showcase-caption {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    /* Clouds Bar */
+    .clouds-section {
+      padding: 42px 0;
+      border-top: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      margin-top: 64px;
+      background: rgba(17, 24, 39, 0.5);
+    }
+
+    .clouds-title {
+      text-align: center;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+      font-weight: 700;
+    }
+
+    .clouds-pills {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .cloud-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      transition: all 0.2s ease;
+    }
+
+    .cloud-pill:hover {
+      border-color: var(--border-highlight);
+      background: rgba(52, 152, 219, 0.1);
+      transform: translateY(-2px);
+    }
+
+    /* Section Headings */
+    .section {
+      padding: 80px 0;
+    }
+
+    .section-header {
+      text-align: center;
+      max-width: 680px;
+      margin: 0 auto 52px;
+    }
+
+    .section-header h2 {
+      font-size: clamp(1.8rem, 3.5vw, 2.4rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+
+    .section-header p {
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+    }
+
+    /* Features Grid */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 22px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 28px;
+      transition: all 0.25s ease;
+    }
+
+    .feature-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-highlight);
+      transform: translateY(-4px);
+    }
+
+    .feature-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 12px;
+      background: rgba(52, 152, 219, 0.14);
+      border: 1px solid rgba(52, 152, 219, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.35rem;
+      margin-bottom: 18px;
+    }
+
+    .feature-card h3 {
+      font-size: 1.18rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    .feature-card code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 5px;
+      font-size: 0.85em;
+      color: #93c5fd;
+    }
+
+    /* Installation Section */
+    .install-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 28px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 860px) {
+      .install-grid {
+        grid-template-columns: 1fr;
+      }
+      .nav-links a.hide-mobile {
+        display: none;
+      }
+    }
+
+    .terminal-card {
+      background: #090d14;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .terminal-header {
+      background: #141c2b;
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .terminal-dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .terminal-dots span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dots .red { background: #ef4444; }
+    .terminal-dots .yellow { background: #f59e0b; }
+    .terminal-dots .green { background: #10b981; }
+
+    .terminal-title {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    .copy-btn {
+      background: rgba(52, 152, 219, 0.18);
+      border: 1px solid rgba(52, 152, 219, 0.4);
+      color: #93c5fd;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .copy-btn:hover {
+      background: var(--accent-blue);
+      color: #fff;
+    }
+
+    .terminal-body {
+      padding: 22px;
+      font-family: "JetBrains Mono", "Fira Code", "Ubuntu Mono", monospace;
+      font-size: 0.92rem;
+      line-height: 1.75;
+      color: #e2e8f0;
+      overflow-x: auto;
+      flex: 1;
+    }
+
+    .terminal-body .comment {
+      color: #64748b;
+      user-select: none;
+    }
+
+    .terminal-body .prompt {
+      color: var(--accent-gold);
+      user-select: none;
+      margin-right: 8px;
+    }
+
+    .distro-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+      padding: 0 22px 20px;
+    }
+
+    .distro-tag {
+      font-size: 0.78rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+    }
+
+    .appimage-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .appimage-card h3 {
+      font-size: 1.25rem;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .appimage-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      margin-bottom: 20px;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border-subtle);
+      padding: 40px 0;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    footer a {
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="container navbar-inner">
+      <a href="#" class="brand">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">
+          <circle cx="18" cy="48" r="8" fill="#2980b9"/>
+          <circle cx="28" cy="40" r="12" fill="#2980b9"/>
+          <circle cx="44" cy="44" r="10" fill="#2980b9"/>
+          <circle cx="54" cy="48" r="8" fill="#2980b9"/>
+          <rect x="18" y="44" width="36" height="12" fill="#2980b9"/>
+          <ellipse cx="18" cy="38" rx="5" ry="10" fill="#f39c12" transform="rotate(30 18 38)"/>
+          <ellipse cx="46" cy="38" rx="5" ry="10" fill="#f39c12" transform="rotate(-30 46 38)"/>
+          <circle cx="32" cy="36" r="15" fill="#f1c40f"/>
+          <circle cx="32" cy="24" r="14" fill="#f1c40f"/>
+          <path d="M 32 11 C 32 4 25 4 25 8 C 25 11 30 12 32 12" fill="#f39c12"/>
+          <path d="M 32 11 C 32 2 39 3 39 7 C 39 10 34 11 32 12" fill="#f39c12"/>
+          <circle cx="26" cy="22" r="2.5" fill="#2c3e50"/>
+          <circle cx="38" cy="22" r="2.5" fill="#2c3e50"/>
+          <circle cx="25" cy="21" r="1" fill="#ffffff"/>
+          <circle cx="37" cy="21" r="1" fill="#ffffff"/>
+          <circle cx="21" cy="26" r="3" fill="#e74c3c" opacity="0.3"/>
+          <circle cx="43" cy="26" r="3" fill="#e74c3c" opacity="0.3"/>
+          <rect x="27" y="24" width="10" height="6" rx="3" fill="#e67e22"/>
+          <rect x="28" y="25" width="4" height="1.5" rx="0.75" fill="#ffffff" opacity="0.4"/>
+          <circle cx="16" cy="50" r="10" fill="#3498db"/>
+          <circle cx="28" cy="42" r="14" fill="#3498db"/>
+          <circle cx="42" cy="46" r="12" fill="#3498db"/>
+          <circle cx="52" cy="52" r="8" fill="#3498db"/>
+          <rect x="16" y="46" width="36" height="14" fill="#3498db"/>
+        </svg>
+        <div class="brand-text">Ducks<span>Drive</span></div>
+      </a>
+
+      <nav class="nav-links">
+        <a href="#features" class="hide-mobile" data-i18n="nav_features">Recursos</a>
+        <a href="#install" class="hide-mobile" data-i18n="nav_install">Instalação</a>
+        <a href="https://github.com/Patopatetico2-lab/ducksdrive" target="_blank" rel="noopener">GitHub ↗</a>
+        <button class="lang-btn" id="langToggle" type="button" aria-label="Alternar idioma">EN / PT</button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        <span data-i18n="hero_badge">Open Source • PySide6 (Qt6) + Rclone + FUSE3</span>
+      </div>
+
+      <div class="hero-logo-banner">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-label="Mascote DucksDrive">
+          <circle cx="18" cy="48" r="8" fill="#2980b9"/>
+          <circle cx="28" cy="40" r="12" fill="#2980b9"/>
+          <circle cx="44" cy="44" r="10" fill="#2980b9"/>
+          <circle cx="54" cy="48" r="8" fill="#2980b9"/>
+          <rect x="18" y="44" width="36" height="12" fill="#2980b9"/>
+          <ellipse cx="18" cy="38" rx="5" ry="10" fill="#f39c12" transform="rotate(30 18 38)"/>
+          <ellipse cx="46" cy="38" rx="5" ry="10" fill="#f39c12" transform="rotate(-30 46 38)"/>
+          <circle cx="32" cy="36" r="15" fill="#f1c40f"/>
+          <circle cx="32" cy="24" r="14" fill="#f1c40f"/>
+          <path d="M 32 11 C 32 4 25 4 25 8 C 25 11 30 12 32 12" fill="#f39c12"/>
+          <path d="M 32 11 C 32 2 39 3 39 7 C 39 10 34 11 32 12" fill="#f39c12"/>
+          <circle cx="26" cy="22" r="2.5" fill="#2c3e50"/>
+          <circle cx="38" cy="22" r="2.5" fill="#2c3e50"/>
+          <circle cx="25" cy="21" r="1" fill="#ffffff"/>
+          <circle cx="37" cy="21" r="1" fill="#ffffff"/>
+          <circle cx="21" cy="26" r="3" fill="#e74c3c" opacity="0.3"/>
+          <circle cx="43" cy="26" r="3" fill="#e74c3c" opacity="0.3"/>
+          <rect x="27" y="24" width="10" height="6" rx="3" fill="#e67e22"/>
+          <rect x="28" y="25" width="4" height="1.5" rx="0.75" fill="#ffffff" opacity="0.4"/>
+          <circle cx="16" cy="50" r="10" fill="#3498db"/>
+          <circle cx="28" cy="42" r="14" fill="#3498db"/>
+          <circle cx="42" cy="46" r="12" fill="#3498db"/>
+          <circle cx="52" cy="52" r="8" fill="#3498db"/>
+          <rect x="16" y="46" width="36" height="14" fill="#3498db"/>
+        </svg>
+      </div>
+
+      <h1 data-i18n="hero_title">
+        Suas nuvens no Linux como <span class="gradient-text">pastas nativas</span>.
+      </h1>
+
+      <p class="subtitle" data-i18n="hero_subtitle">
+        A experiência do cliente do Google Drive do Windows no seu Linux: ícone na bandeja do sistema, painel flutuante com gráfico de velocidade em tempo real e atalho automático no Dolphin, Nautilus, Thunar e Nemo.
+      </p>
+
+      <div class="hero-actions">
+        <a href="#install" class="btn btn-primary">
+          <span>⚡</span>
+          <span data-i18n="cta_install">Instalar no Linux</span>
+        </a>
+        <a href="https://github.com/Patopatetico2-lab/ducksdrive/releases" target="_blank" rel="noopener" class="btn btn-gold">
+          <span>📦</span>
+          <span data-i18n="cta_appimage">Baixar AppImage</span>
+        </a>
+        <a href="https://github.com/Patopatetico2-lab/ducksdrive" target="_blank" rel="noopener" class="btn btn-secondary">
+          <span>⭐</span>
+          <span data-i18n="cta_github">Ver Código no GitHub</span>
+        </a>
+      </div>
+
+      <!-- Interactive Screenshots Showcase -->
+      <div class="showcase-wrapper">
+        <div class="showcase-tabs">
+          <button class="tab-btn active" data-tab="tab-tray" data-i18n="tab_tray">Painel Flutuante, Quota e Gráfico</button>
+          <button class="tab-btn" data-tab="tab-clouds" data-i18n="tab_clouds">Configurador Multi-Nuvem</button>
+          <button class="tab-btn" data-tab="tab-settings" data-i18n="tab_settings">Configurações, Cache VFS e Idioma</button>
+        </div>
+
+        <div class="showcase-content active" id="tab-tray">
+          <div class="showcase-images-row">
+            <img
+              class="showcase-img"
+              style="max-width: 380px;"
+              src="assets/status-popup-active.png"
+              alt="Painel flutuante do DucksDrive com transferências ativas, barra de quota e gráfico QPainter"
+              loading="lazy"
+            />
+            <img
+              class="showcase-img"
+              style="max-width: 380px;"
+              src="assets/status-popup-idle.png"
+              alt="Painel flutuante do DucksDrive conectado mostrando uso de armazenamento e histórico"
+              loading="lazy"
+            />
+          </div>
+          <p class="showcase-caption" data-i18n="caption_tray">
+            Visualize o espaço usado na nuvem (Quota), pause/retome transferências com 1 clique, acompanhe múltiplos arquivos simultâneos e o gráfico em tempo real via QPainter.
+          </p>
+        </div>
+
+        <div class="showcase-content" id="tab-clouds">
+          <div class="showcase-images-row">
+            <img
+              class="showcase-img"
+              style="max-width: 430px;"
+              src="assets/new-remote-oauth.png"
+              alt="Configuração OAuth para Google Drive, OneDrive e Dropbox"
+              loading="lazy"
+            />
+            <img
+              class="showcase-img"
+              style="max-width: 430px;"
+              src="assets/new-remote-s3.png"
+              alt="Configuração avançada para Amazon S3, MinIO, WebDAV, Mega e SFTP"
+              loading="lazy"
+            />
+          </div>
+          <p class="showcase-caption" data-i18n="caption_clouds">
+            Adicione nuvens OAuth (Google Drive, OneDrive, Dropbox, Box, pCloud) pelo navegador ou configure S3/MinIO, Nextcloud/WebDAV, Mega, FTP e SFTP direto na janela.
+          </p>
+        </div>
+
+        <div class="showcase-content" id="tab-settings">
+          <img
+            class="showcase-img"
+            style="max-width: 580px;"
+            src="assets/settings-dialog.png"
+            alt="Tela de configurações do DucksDrive com controle de banda, modo de cache VFS e idioma"
+            loading="lazy"
+          />
+          <p class="showcase-caption" data-i18n="caption_settings">
+            Ajuste limite de banda (--bwlimit), modo e tamanho máximo do cache VFS no SSD, transferências paralelas, idioma (PT-BR / EN-US) e inicialização automática.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Supported Clouds Strip -->
+  <section class="clouds-section">
+    <div class="container">
+      <div class="clouds-title" data-i18n="clouds_title">Provedores Suportados Direto pela Interface</div>
+      <div class="clouds-pills">
+        <span class="cloud-pill">☁️ Google Drive</span>
+        <span class="cloud-pill">🟦 Microsoft OneDrive</span>
+        <span class="cloud-pill">📦 Dropbox</span>
+        <span class="cloud-pill">🔴 Mega</span>
+        <span class="cloud-pill">📫 Box</span>
+        <span class="cloud-pill">🌩️ pCloud</span>
+        <span class="cloud-pill">🪣 Amazon S3 / Compatible</span>
+        <span class="cloud-pill">🌐 Nextcloud / WebDAV</span>
+        <span class="cloud-pill">📂 SFTP / FTP</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Grid -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-header">
+        <h2 data-i18n="features_heading">Feito para o Desktop Linux moderno</h2>
+        <p data-i18n="features_subheading">
+          Compatível com KDE Plasma, GNOME, XFCE, Cinnamon e qualquer ambiente com suporte à bandeja do sistema.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">📈</div>
+          <h3 data-i18n="feat1_title">Painel com Gráfico em Tempo Real</h3>
+          <p data-i18n="feat1_desc">
+            Clique no ícone da bandeja para abrir o painel flutuante com progresso por arquivo, velocidade em MB/s, tempo restante (ETA) e histórico gráfico renderizado com <code>QPainter</code>.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">📁</div>
+          <h3 data-i18n="feat2_title">Atalho Automático no Gerenciador</h3>
+          <p data-i18n="feat2_desc">
+            Monta via FUSE em <code>~/CloudDrives/{remoto}</code> e adiciona o atalho automaticamente na barra lateral do <strong>Dolphin (KDE)</strong> (com backup automático do <code>user-places.xbel.bak</code>), <strong>Nautilus</strong>, <strong>Thunar</strong> e <strong>Nemo</strong>.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🎮</div>
+          <h3 data-i18n="feat3_title">Modo Gamer (Limite de Banda)</h3>
+          <p data-i18n="feat3_desc">
+            Configure <code>--bwlimit</code> (ex: <code>10M</code>) direto pela interface para evitar que uploads grandes saturem sua rede ou aumentem o ping em jogos online.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3 data-i18n="feat4_title">Controle de Cache SSD (VFS)</h3>
+          <p data-i18n="feat4_desc">
+            Defina o limite de espaço usado pelo cache no seu SSD (<code>--vfs-cache-max-size</code>) e a quantidade de transferências simultâneas (<code>--transfers</code>) sem tocar em arquivos de texto.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🛡️</div>
+          <h3 data-i18n="feat5_title">Monitoramento FUSE e Desligamento Seguro</h3>
+          <p data-i18n="feat5_desc">
+            Um <code>QTimer</code> vigia o processo FUSE em segundo plano sem travar a interface. Ao fechar o app, ele aguarda até 10s para garantir que o cache seja gravado com segurança na nuvem.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <h3 data-i18n="feat6_title">Instância Única e Logs Rotativos</h3>
+          <p data-i18n="feat6_desc">
+            Protegido com <code>QLockFile</code> para evitar conflitos na porta RC do rclone e equipado com <code>RotatingFileHandler</code> (até 5 MB) em <code>~/.local/share/ducksdrive/</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation Section -->
+  <section class="section" id="install">
+    <div class="container">
+      <div class="section-header">
+        <h2 data-i18n="install_heading">Instalação em Segundos</h2>
+        <p data-i18n="install_subheading">
+          O instalador detecta automaticamente sua distribuição Linux, instala o <code>rclone</code> e o <code>fuse3</code>, configura o ambiente isolado e cria o atalho no menu de aplicativos.
+        </p>
+      </div>
+
+      <div class="install-grid">
+        <div class="terminal-card">
+          <div class="terminal-header">
+            <div class="terminal-dots">
+              <span class="red"></span>
+              <span class="yellow"></span>
+              <span class="green"></span>
+            </div>
+            <span class="terminal-title">bash — install.sh</span>
+            <button class="copy-btn" id="copyBtn" type="button" data-i18n="copy_btn">Copiar comandos</button>
+          </div>
+          <div class="terminal-body" id="installCode">
+            <div><span class="prompt">$</span>git clone https://github.com/Patopatetico2-lab/ducksdrive.git</div>
+            <div><span class="prompt">$</span>cd ducksdrive</div>
+            <div><span class="prompt">$</span>chmod +x install.sh</div>
+            <div><span class="prompt">$</span>./install.sh</div>
+          </div>
+          <div class="distro-badges">
+            <span class="distro-tag">🐧 Debian / Ubuntu / Mint (apt)</span>
+            <span class="distro-tag">🏹 Arch / Manjaro (pacman)</span>
+            <span class="distro-tag">🎩 Fedora / RHEL (dnf)</span>
+            <span class="distro-tag">🦎 openSUSE (zypper)</span>
+          </div>
+        </div>
+
+        <div class="appimage-card">
+          <div>
+            <h3>📦 <span data-i18n="appimage_title">Prefere usar AppImage?</span></h3>
+            <p data-i18n="appimage_desc">
+              Você também pode baixar o pacote portátil <strong>DucksDrive-x86_64.AppImage</strong> que já traz o binário do rclone embutido, ou gerar o seu próprio AppImage localmente com um comando:
+            </p>
+            <div class="terminal-card" style="margin-bottom: 20px;">
+              <div class="terminal-body" style="padding: 14px 18px; font-size: 0.85rem;">
+                <div><span class="prompt">$</span>./build_appimage.sh</div>
+              </div>
+            </div>
+          </div>
+          <a href="https://github.com/Patopatetico2-lab/ducksdrive/releases" target="_blank" rel="noopener" class="btn btn-gold" style="justify-content: center;">
+            <span data-i18n="appimage_btn">Ver Releases no GitHub ↗</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>
+        <strong>DucksDrive</strong> — <span data-i18n="footer_text">Software Livre desenvolvido para a comunidade Linux.</span>
+        <br />
+        <a href="https://github.com/Patopatetico2-lab/ducksdrive" target="_blank" rel="noopener">GitHub</a> •
+        <a href="https://github.com/Patopatetico2-lab/ducksdrive/issues" target="_blank" rel="noopener" data-i18n="footer_issues">Reportar Bug / Sugestão</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // Interactive Screenshot Tabs
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.showcase-content');
+
+    tabButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        tabButtons.forEach((b) => b.classList.remove('active'));
+        tabContents.forEach((c) => c.classList.remove('active'));
+        btn.classList.add('active');
+        const target = document.getElementById(btn.dataset.tab);
+        if (target) target.classList.add('active');
+      });
+    });
+
+    // Copy Installation Snippet
+    const copyBtn = document.getElementById('copyBtn');
+    const installSnippet = `git clone https://github.com/Patopatetico2-lab/ducksdrive.git\ncd ducksdrive\nchmod +x install.sh\n./install.sh`;
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(installSnippet);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = currentLang === 'pt' ? 'Copiado! ✓' : 'Copied! ✓';
+        setTimeout(() => {
+          copyBtn.textContent = original;
+        }, 2000);
+      } catch (_) {
+        // Fallback if clipboard API fails
+      }
+    });
+
+    // Bilingual PT-BR / EN-US Switcher
+    const translations = {
+      pt: {
+        nav_features: 'Recursos',
+        nav_install: 'Instalação',
+        hero_badge: 'Open Source • PySide6 (Qt6) + Rclone + FUSE3',
+        hero_title: 'Suas nuvens no Linux como <span class="gradient-text">pastas nativas</span>.',
+        hero_subtitle: 'A experiência do cliente do Google Drive do Windows no seu Linux: ícone na bandeja do sistema, painel flutuante com gráfico de velocidade em tempo real e atalho automático no Dolphin, Nautilus, Thunar e Nemo.',
+        cta_install: 'Instalar no Linux',
+        cta_appimage: 'Baixar AppImage',
+        cta_github: 'Ver Código no GitHub',
+        tab_tray: 'Painel Flutuante, Quota e Gráfico',
+        tab_clouds: 'Configurador Multi-Nuvem',
+        tab_settings: 'Configurações, Cache VFS e Idioma',
+        caption_tray: 'Visualize o espaço usado na nuvem (Quota), pause/retome transferências com 1 clique, acompanhe múltiplos arquivos simultâneos e o gráfico em tempo real via QPainter.',
+        caption_clouds: 'Adicione nuvens OAuth (Google Drive, OneDrive, Dropbox, Box, pCloud) pelo navegador ou configure S3/MinIO, Nextcloud/WebDAV, Mega, FTP e SFTP direto na janela.',
+        caption_settings: 'Ajuste limite de banda (--bwlimit), modo e tamanho máximo do cache VFS no SSD, transferências paralelas, idioma (PT-BR / EN-US) e inicialização automática.',
+        clouds_title: 'Provedores Suportados Direto pela Interface',
+        features_heading: 'Feito para o Desktop Linux moderno',
+        features_subheading: 'Compatível com KDE Plasma, GNOME, XFCE, Cinnamon e qualquer ambiente com suporte à bandeja do sistema.',
+        feat1_title: 'Painel com Gráfico em Tempo Real',
+        feat1_desc: 'Clique no ícone da bandeja para abrir o painel flutuante com progresso por arquivo, velocidade em MB/s, tempo restante (ETA) e histórico gráfico renderizado com <code>QPainter</code>.',
+        feat2_title: 'Atalho Automático no Gerenciador',
+        feat2_desc: 'Monta via FUSE em <code>~/CloudDrives/{remoto}</code> e adiciona o atalho automaticamente na barra lateral do <strong>Dolphin (KDE)</strong> (com backup automático do <code>user-places.xbel.bak</code>), <strong>Nautilus</strong>, <strong>Thunar</strong> e <strong>Nemo</strong>.',
+        feat3_title: 'Modo Gamer (Limite de Banda)',
+        feat3_desc: 'Configure <code>--bwlimit</code> (ex: <code>10M</code>) direto pela interface para evitar que uploads grandes saturem sua rede ou aumentem o ping em jogos online.',
+        feat4_title: 'Controle de Cache SSD (VFS)',
+        feat4_desc: 'Defina o limite de espaço usado pelo cache no seu SSD (<code>--vfs-cache-max-size</code>) e a quantidade de transferências simultâneas (<code>--transfers</code>) sem tocar em arquivos de texto.',
+        feat5_title: 'Monitoramento FUSE e Desligamento Seguro',
+        feat5_desc: 'Um <code>QTimer</code> vigia o processo FUSE em segundo plano sem travar a interface. Ao fechar o app, ele aguarda até 10s para garantir que o cache seja gravado com segurança na nuvem.',
+        feat6_title: 'Instância Única e Logs Rotativos',
+        feat6_desc: 'Protegido com <code>QLockFile</code> para evitar conflitos na porta RC do rclone e equipado com <code>RotatingFileHandler</code> (até 5 MB) em <code>~/.local/share/ducksdrive/</code>.',
+        install_heading: 'Instalação em Segundos',
+        install_subheading: 'O instalador detecta automaticamente sua distribuição Linux, instala o <code>rclone</code> e o <code>fuse3</code>, configura o ambiente isolado e cria o atalho no menu de aplicativos.',
+        copy_btn: 'Copiar comandos',
+        appimage_title: 'Prefere usar AppImage?',
+        appimage_desc: 'Você também pode baixar o pacote portátil <strong>DucksDrive-x86_64.AppImage</strong> que já traz o binário do rclone embutido, ou gerar o seu próprio AppImage localmente com um comando:',
+        appimage_btn: 'Ver Releases no GitHub ↗',
+        footer_text: 'Software Livre desenvolvido para a comunidade Linux.',
+        footer_issues: 'Reportar Bug / Sugestão'
+      },
+      en: {
+        nav_features: 'Features',
+        nav_install: 'Installation',
+        hero_badge: 'Open Source • PySide6 (Qt6) + Rclone + FUSE3',
+        hero_title: 'Your clouds on Linux as <span class="gradient-text">native local folders</span>.',
+        hero_subtitle: 'The Windows Google Drive desktop experience on Linux: system tray icon, floating transfer panel with a live speed chart, and automatic sidebar shortcuts in Dolphin, Nautilus, Thunar, and Nemo.',
+        cta_install: 'Install on Linux',
+        cta_appimage: 'Download AppImage',
+        cta_github: 'View Source on GitHub',
+        tab_tray: 'Floating Panel, Quota & Chart',
+        tab_clouds: 'Multi-Cloud Setup',
+        tab_settings: 'Settings, VFS Cache & Language',
+        caption_tray: 'Monitor cloud storage quota, pause/resume transfers in 1 click, track concurrent file uploads/downloads, and view the live QPainter speed graph.',
+        caption_clouds: 'Connect OAuth clouds (Google Drive, OneDrive, Dropbox, Box, pCloud) via browser or configure S3/MinIO, Nextcloud/WebDAV, Mega, FTP, and SFTP right in the dialog.',
+        caption_settings: 'Configure bandwidth limits (--bwlimit), VFS cache mode and max SSD size, parallel transfers, language (PT-BR / EN-US), and system autostart.',
+        clouds_title: 'Cloud Providers Supported Out of the Box',
+        features_heading: 'Built for the Modern Linux Desktop',
+        features_subheading: 'Compatible with KDE Plasma, GNOME, XFCE, Cinnamon, and any desktop environment with system tray support.',
+        feat1_title: 'Live Transfer Panel & Speed Graph',
+        feat1_desc: 'Click the tray icon to open a frameless floating panel showing per-file progress, MB/s speed, ETA, and a smooth rolling speed chart rendered with <code>QPainter</code>.',
+        feat2_title: 'Automatic File Manager Shortcuts',
+        feat2_desc: 'Mounts via FUSE in <code>~/CloudDrives/{remote}</code> and automatically creates sidebar shortcuts in <strong>Dolphin (KDE)</strong> (with automatic <code>user-places.xbel.bak</code> backup), <strong>Nautilus</strong>, <strong>Thunar</strong>, and <strong>Nemo</strong>.',
+        feat3_title: 'Gamer-Friendly Bandwidth Limit',
+        feat3_desc: 'Set <code>--bwlimit</code> (e.g. <code>10M</code>) right from the GUI so background cloud syncs never saturate your connection or spike your ping in online games.',
+        feat4_title: 'SSD VFS Cache Control',
+        feat4_desc: 'Customize how much SSD space the VFS cache can use (<code>--vfs-cache-max-size</code>) and tune parallel transfers (<code>--transfers</code>) visually.',
+        feat5_title: 'FUSE Watchdog & Safe Shutdown',
+        feat5_desc: 'A background <code>QTimer</code> monitors the FUSE mount without freezing the UI. On exit, DucksDrive waits up to 10s for cached writes to flush safely.',
+        feat6_title: 'Single Instance & Rotating Logs',
+        feat6_desc: 'Protected by <code>QLockFile</code> to prevent rclone RC port conflicts, with automatic 5 MB log rotation (<code>RotatingFileHandler</code>) in <code>~/.local/share/ducksdrive/</code>.',
+        install_heading: 'Install in Seconds',
+        install_subheading: 'The installer automatically detects your Linux distro, installs <code>rclone</code> and <code>fuse3</code>, sets up an isolated Python venv, and registers the desktop icon.',
+        copy_btn: 'Copy commands',
+        appimage_title: 'Prefer AppImage?',
+        appimage_desc: 'Grab the portable <strong>DucksDrive-x86_64.AppImage</strong> with rclone bundled inside, or build your own AppImage locally with a single command:',
+        appimage_btn: 'View GitHub Releases ↗',
+        footer_text: 'Free & Open Source Software built for the Linux community.',
+        footer_issues: 'Report Bug / Feedback'
+      }
+    };
+
+    let currentLang = 'pt';
+    const langToggle = document.getElementById('langToggle');
+
+    langToggle.addEventListener('click', () => {
+      currentLang = currentLang === 'pt' ? 'en' : 'pt';
+      document.documentElement.lang = currentLang === 'pt' ? 'pt-BR' : 'en-US';
+      const dict = translations[currentLang];
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        const key = el.getAttribute('data-i18n');
+        if (dict[key]) {
+          el.innerHTML = dict[key];
+        }
+      });
+    });
+  </script>
+</body>
+</html>
