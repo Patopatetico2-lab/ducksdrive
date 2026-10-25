@@ -183,7 +183,6 @@ class RemoteCreationThread(QThread):
         params.update(self.extra_params)
         for key, value in params.items():
             cmd.extend([key, str(value)])
-        cmd.append("--non-interactive")
         if self.remote_type in ("mega", "ftp", "sftp", "webdav"):
             cmd.append("--obscure")
 
