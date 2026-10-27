@@ -172,7 +172,10 @@ _TRANSLATIONS = {
         "Aguardando envios": "Waiting for uploads",
         "Aguardando o envio de %d arquivo(s) para a nuvem...": "Waiting for %d file(s) to be uploaded to the cloud...",
         "%d arquivo(s) ainda estão sendo enviados para a nuvem.\nSe sair agora, o envio será retomado na próxima vez que esta nuvem for montada.": "%d file(s) are still being uploaded to the cloud.\nIf you exit now, the upload will resume the next time this cloud is mounted.",
-        "ATENÇÃO: %d arquivo(s) ainda aguardam envio para esta nuvem e não serão enviados.": "WARNING: %d file(s) are still waiting to be uploaded to this cloud and will not be uploaded."
+        "ATENÇÃO: %d arquivo(s) ainda aguardam envio para esta nuvem e não serão enviados.": "WARNING: %d file(s) are still waiting to be uploaded to this cloud and will not be uploaded.",
+        "Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc.": "Empty = Amazon S3; or MinIO/Wasabi/etc. endpoint",
+        "ftp.example.com ou ip": "ftp.example.com or IP",
+        "Dados e montagens removidos.\nComo o pacote foi instalado via gerenciador do sistema, execute no terminal:\nsudo pacman -R ducksdrive": "Data and mounts removed.\nSince the package was installed via the system package manager, run in terminal:\nsudo pacman -R ducksdrive"
     },
     "pt_BR": {
         "Rclone mount process died unexpectedly.": "O processo de montagem do Rclone encerrou inesperadamente.",

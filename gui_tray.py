@@ -159,7 +159,7 @@ class NewRemoteDialog(QDialog):
         self.s3_secret_input.setPlaceholderText("Secret Access Key")
         self.s3_secret_input.setEchoMode(QLineEdit.Password)
         self.s3_endpoint_input = QLineEdit()
-        self.s3_endpoint_input.setPlaceholderText("Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc.")
+        self.s3_endpoint_input.setPlaceholderText(tr("Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc."))
         self.conditional_layout.addRow(tr("S3 Access Key:"), self.s3_key_input)
         self.conditional_layout.addRow(tr("S3 Secret Key:"), self.s3_secret_input)
         self.conditional_layout.addRow(tr("S3 Endpoint:"), self.s3_endpoint_input)
@@ -175,7 +175,7 @@ class NewRemoteDialog(QDialog):
 
         # FTP / SFTP Fields
         self.ftp_host_input = QLineEdit()
-        self.ftp_host_input.setPlaceholderText("ftp.example.com ou ip")
+        self.ftp_host_input.setPlaceholderText(tr("ftp.example.com ou ip"))
         self.ftp_user_input = QLineEdit()
         self.ftp_user_input.setPlaceholderText("Username")
         self.ftp_pass_input = QLineEdit()
@@ -504,6 +504,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         status_header = f"{clean_name} • {state_label}"
         self.action_status.setText(status_header)
         self.setToolTip(status_header)
+        self._populate_remotes_menu()
         
         if is_mounted:
             self.update_tray_icon("idle")

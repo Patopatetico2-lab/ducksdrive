@@ -4,10 +4,12 @@ set -euo pipefail
 echo "=== Building DucksDrive AppImage ==="
 
 # Check dependencies
-if ! command -v pip &> /dev/null; then
-    echo "Error: pip is required."
-    exit 1
-fi
+for cmd in pip curl unzip; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "Error: '$cmd' is required."
+        exit 1
+    fi
+done
 
 # Install PyInstaller
 pip install --user pyinstaller

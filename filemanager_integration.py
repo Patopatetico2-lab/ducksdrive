@@ -29,7 +29,14 @@ ET.register_namespace("bookmark", NS_BOOKMARK)
 ET.register_namespace("mime", NS_MIME)
 
 APP_NAME = "DucksDrive"
-GTK_BOOKMARKS_PATH = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
+
+
+def _get_gtk_bookmarks_path() -> str:
+    xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    return os.path.join(xdg_config, "gtk-3.0", "bookmarks")
+
+
+GTK_BOOKMARKS_PATH = _get_gtk_bookmarks_path()
 
 
 def _get_kde_places_path() -> str:

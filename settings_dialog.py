@@ -372,5 +372,12 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover alguns ficheiros:") + f"\n{e}")
             return
 
+        if os.path.exists("/usr/bin/ducksdrive") and not appimage_path:
+            QMessageBox.information(
+                self,
+                tr("Desinstalar DucksDrive"),
+                tr("Dados e montagens removidos.\nComo o pacote foi instalado via gerenciador do sistema, execute no terminal:\nsudo pacman -R ducksdrive")
+            )
+
         self.reject()
         QApplication.quit()

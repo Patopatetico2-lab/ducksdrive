@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QScrollArea
 )
 
+from rclone_config import TaskRunner
 from rclone_daemon import RcloneDaemon
 from rclone_stats import StatsData
 
@@ -216,6 +217,7 @@ class StatusPopup(QWidget):
         # Note: quota timer is started in showEvent and stopped in hideEvent to avoid background polling when hidden
 
         self._quota_worker: Optional[QuotaWorkerThread] = None
+        self._pause_runner = TaskRunner(self)
 
         self._init_ui()
         self.daemon.state_changed.connect(self._on_daemon_state_changed)
@@ -443,45 +445,8 @@ class StatusPopup(QWidget):
         self._quota_worker.start()
         self._last_quota_update = time.time()
 
-    def _toggle_pause(self) -> None:
-        import urllib.request
-        import json
-        import base64
-        import threading
-        from rclone_settings import load_config
-
-        if not self.daemon.is_running():
-            return
-
-        target_pause = not self.is_paused
-        self.is_paused = target_pause
-
-        def do_request(pause_state: bool) -> None:
-            try:
-                creds = self.daemon.rc_credentials
-                if not creds:
-                    return
-                endpoint = f"{creds.url}/core/bwlimit"
-                auth_str = f"{creds.user}:{creds.password}"
-                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-
-                original_limit = str(load_config().get("bwlimit") or "off")
-                limit_val = "1B" if pause_state else original_limit
-
-                req = urllib.request.Request(
-                    url=endpoint,
-                    data=json.dumps({"rate": limit_val}).encode("utf-8"),
-                    headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=5):
-                    pass
-            except Exception as e:
-                import logging
-                logging.getLogger("ducksdrive").debug("Failed to set bwlimit via RC: %s", e)
-
-        threading.Thread(target=do_request, args=(target_pause,), daemon=True).start()
-
+    def _apply_pause_button_ui(self) -> None:
+        """Synchronizes the pause button label and color with `self.is_paused`."""
         if self.is_paused:
             self.btn_pause.setText(tr("Retomar Transferências"))
             self.btn_pause.setStyleSheet("""
@@ -514,6 +479,48 @@ class StatusPopup(QWidget):
                     background-color: #e67e22;
                 }
             """)
+
+    def _toggle_pause(self) -> None:
+        import urllib.request
+        import json
+        import base64
+        from rclone_settings import load_config
+
+        if not self.daemon.is_running() or not self.daemon.rc_credentials:
+            return
+
+        target_pause = not self.is_paused
+        creds = self.daemon.rc_credentials
+        self.btn_pause.setEnabled(False)
+
+        def do_request(pause_state: bool) -> bool:
+            try:
+                endpoint = f"{creds.url}/core/bwlimit"
+                auth_str = f"{creds.user}:{creds.password}"
+                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+
+                original_limit = str(load_config().get("bwlimit") or "off")
+                limit_val = "1B" if pause_state else original_limit
+
+                req = urllib.request.Request(
+                    url=endpoint,
+                    data=json.dumps({"rate": limit_val}).encode("utf-8"),
+                    headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return resp.status == 200
+            except Exception as e:
+                logger.debug("Failed to set bwlimit via RC: %s", e)
+                return False
+
+        def on_done(ok: Any) -> None:
+            self.btn_pause.setEnabled(True)
+            if ok and self.daemon.is_running():
+                self.is_paused = target_pause
+                self._apply_pause_button_ui()
+
+        self._pause_runner.submit(do_request, target_pause, callback=on_done)
 
     @Slot(object, object)
     def _on_quota_success(self, total: int, used: int) -> None:
@@ -637,7 +644,8 @@ class StatusPopup(QWidget):
         super().keyPressEvent(event)
 
     def shutdown_workers(self) -> None:
-        """Waits for the background quota worker (HTTP timeout is 4s). Call only when the app is exiting."""
+        """Waits for the background quota and pause workers. Call only when the app is exiting."""
+        self._pause_runner.wait_all()
         if self._quota_worker:
             try:
                 if self._quota_worker.isRunning():
