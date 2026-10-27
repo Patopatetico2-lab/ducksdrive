@@ -46,7 +46,7 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 ### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
 Instalação direta em 1 comando via Pacman:
 ```bash
-sudo pacman -U https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.5/ducksdrive-1.0.5-1-any.pkg.tar.zst
+curl -LO https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.5/ducksdrive-1.0.5-1-any.pkg.tar.zst && sudo pacman -U ducksdrive-1.0.5-1-any.pkg.tar.zst && rm -f ducksdrive-1.0.5-1-any.pkg.tar.zst
 ```
 Ou compilando direto do repositório com `makepkg`:
 ```bash
