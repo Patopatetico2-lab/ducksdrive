@@ -1,0 +1,13 @@
+pkgbase = ducksdrive
+	pkgdesc = Lightweight Linux system tray client for Rclone FUSE mounts (Google Drive, OneDrive, etc.)
+	pkgver = 1.0.5
+	pkgrel = 1
+	url = https://github.com/Patopatetico2-lab/ducksdrive
+	arch = any
+	license = MIT
+	depends = python
+	depends = python-pyside6
+	depends = rclone
+	depends = fuse3
+
+pkgname = ducksdrive

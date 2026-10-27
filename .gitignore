@@ -9,9 +9,12 @@ __pycache__/
 *.pyc
 *.spec
 
-# Binaries and local AppImages
+# Binaries, packages and local AppImages
 appimagetool*
 *.AppImage
+src/
+pkg/
+*.pkg.tar*
 
 # Logs and patches
 *.log

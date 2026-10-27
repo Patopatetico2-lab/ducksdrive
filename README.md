@@ -43,6 +43,16 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 
 ## Instalação
 
+### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
+Instalação direta em 1 comando via Pacman:
+```bash
+sudo pacman -U https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.5/ducksdrive-1.0.5-1-any.pkg.tar.zst
+```
+Ou compilando direto do repositório com `makepkg`:
+```bash
+git clone https://github.com/Patopatetico2-lab/ducksdrive.git && cd ducksdrive && makepkg -si
+```
+
 ### Pelo script (instala no sistema)
 ```bash
 git clone https://github.com/Patopatetico2-lab/ducksdrive.git

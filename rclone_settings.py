@@ -72,25 +72,37 @@ def _sync_autostart(enabled: bool) -> None:
     
     if enabled:
         os.makedirs(autostart_dir, exist_ok=True)
+        xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+        local_dir = os.path.join(xdg_data, "ducksdrive")
+        local_bin = os.path.join(local_dir, "ducksdrive")
+        local_venv = os.path.join(local_dir, "venv")
+        user_bin = os.path.expanduser("~/.local/bin/ducksdrive")
         appimage_path = os.environ.get("APPIMAGE")
+
         if appimage_path and os.path.exists(appimage_path):
             bin_path = appimage_path
-        else:
-            bin_path = shutil.which("ducksdrive") or os.path.expanduser("~/.local/bin/ducksdrive")
-            if not os.path.exists(bin_path):
-                bin_path = os.path.expanduser("~/.local/bin/ducksdrive")
-        xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-        icon_path = os.path.join(xdg_data, "ducksdrive", "icon.svg")
-        if not os.path.exists(icon_path):
-            bundled_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg")
-            if os.path.exists(bundled_icon):
-                try:
-                    os.makedirs(os.path.dirname(icon_path), exist_ok=True)
-                    shutil.copy2(bundled_icon, icon_path)
-                except Exception:
+            icon_path = os.path.join(local_dir, "icon.svg")
+            if not os.path.exists(icon_path):
+                bundled_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg")
+                if os.path.exists(bundled_icon):
+                    try:
+                        os.makedirs(local_dir, exist_ok=True)
+                        shutil.copy2(bundled_icon, icon_path)
+                    except Exception:
+                        icon_path = "ducksdrive"
+                else:
                     icon_path = "ducksdrive"
-            else:
+        elif os.path.exists(local_bin) or os.path.exists(local_venv):
+            bin_path = local_bin if os.path.exists(local_bin) else user_bin
+            icon_path = os.path.join(local_dir, "icon.svg")
+            if not os.path.exists(icon_path):
                 icon_path = "ducksdrive"
+        elif os.path.exists("/usr/bin/ducksdrive"):
+            bin_path = "/usr/bin/ducksdrive"
+            icon_path = "ducksdrive"
+        else:
+            bin_path = shutil.which("ducksdrive") or user_bin
+            icon_path = "ducksdrive"
         
         content = f"""[Desktop Entry]
 Name=DucksDrive
