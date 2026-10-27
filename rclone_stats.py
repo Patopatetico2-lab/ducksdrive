@@ -192,6 +192,31 @@ def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]
     return None
 
 
+def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> bool:
+    """
+    Sets the active bandwidth limit on the running rclone daemon via RC `/core/bwlimit`.
+
+    Blocking call: run it outside the GUI thread.
+    """
+    auth_str = f"{creds.user}:{creds.password}"
+    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+    req = urllib.request.Request(
+        url=f"{creds.url}/core/bwlimit",
+        data=json.dumps({"rate": rate}).encode("utf-8"),
+        headers={
+            "Authorization": f"Basic {b64_auth}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception as exc:
+        logger.debug("Failed to set bwlimit via RC: %s", exc)
+        return False
+
+
 class RcloneStatsPoller(QThread):
     """
     Dedicated background worker thread that polls Rclone RC `/core/stats`

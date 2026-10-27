@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from rclone_config import TaskRunner, get_clean_env
 from rclone_daemon import RcloneDaemon
-from rclone_settings import _sync_autostart, load_config
+from rclone_settings import _sync_autostart, load_config, save_last_remote
 from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
@@ -117,9 +117,11 @@ class RcloneAppController(QObject):
             logger.info("No cloud remotes found. Triggering first-run setup dialog...")
             QTimer.singleShot(200, self.tray._show_new_remote_dialog)
         else:
-            logger.info("Auto-mounting first available remote: %s (with network retry)", remotes[0])
+            last_remote = str(load_config().get("last_remote") or "").rstrip(":")
+            target_remote = last_remote if last_remote in remotes else remotes[0]
+            logger.info("Auto-mounting remote: %s (with network retry)", target_remote)
             # On startup/autostart: allow 30s timeout and up to 2 retries to accommodate slow network/Wi-Fi DHCP
-            QTimer.singleShot(0, lambda: self.daemon.start(remotes[0], startup_timeout=30.0, retry_on_timeout=2))
+            QTimer.singleShot(0, lambda r=target_remote: self.daemon.start(r, startup_timeout=30.0, retry_on_timeout=2))
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
         logger.info("Signal %d received, shutting down...", sig)
@@ -137,9 +139,10 @@ class RcloneAppController(QObject):
                 self.stats_poller.connection_lost.connect(self._on_connection_lost)
                 self.stats_poller.start()
             
-            # Add to file manager sidebar with dynamic label
+            # Add to file manager sidebar with dynamic label and persist last_remote
             remote_name = self.daemon.current_remote or "Drive"
             clean_remote = remote_name.rstrip(":")
+            save_last_remote(clean_remote)
             self.runner.submit(integrate_mount, self.daemon.mount_point, f"DucksDrive - {clean_remote}")
             
         elif state in ("unmounting", "stopped", "error"):

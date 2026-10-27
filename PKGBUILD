@@ -1,6 +1,6 @@
 # Maintainer: DucksDrive <https://github.com/Patopatetico2-lab/ducksdrive>
 pkgname=ducksdrive
-pkgver=1.0.5
+pkgver=1.0.6
 pkgrel=1
 pkgdesc="Lightweight Linux system tray client for Rclone FUSE mounts (Google Drive, OneDrive, etc.)"
 arch=('any')

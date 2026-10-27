@@ -27,8 +27,15 @@ from PySide6.QtWidgets import (
     QWidget
 )
 
-from rclone_settings import CONFIG_DIR, load_config, save_config
-from i18n import tr
+from rclone_settings import (
+    CONFIG_DIR,
+    clear_vfs_cache_files,
+    get_vfs_cache_usage_bytes,
+    load_config,
+    save_config,
+)
+from rclone_stats import fetch_vfs_queue, format_bytes
+from i18n import set_language, tr
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +49,9 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None, daemon: Optional[Any] = None) -> None:
         super().__init__(parent)
         self.daemon = daemon
+        self.language_changed = False
+        self.bwlimit_changed = False
+        self.theme_changed = False
         self.setWindowTitle(tr("Configurações do DucksDrive"))
         self.setMinimumWidth(520)
         
@@ -98,6 +108,17 @@ class SettingsDialog(QDialog):
         self.cache_spin.setValue(2)
         cache_layout.addRow(tr("Tamanho Máximo do Cache VFS:"), self.cache_spin)
 
+        cache_usage_row = QHBoxLayout()
+        self.cache_usage_label = QLabel(format_bytes(get_vfs_cache_usage_bytes()))
+        self.cache_usage_label.setStyleSheet("font-weight: bold; color: #2980b9;")
+        self.btn_clear_cache = QPushButton(tr("Limpar Cache Agora"))
+        self.btn_clear_cache.setStyleSheet("padding: 4px 10px;")
+        self.btn_clear_cache.clicked.connect(self._on_clear_cache)
+        cache_usage_row.addWidget(self.cache_usage_label)
+        cache_usage_row.addStretch()
+        cache_usage_row.addWidget(self.btn_clear_cache)
+        cache_layout.addRow(tr("Uso Atual do Cache no SSD:"), cache_usage_row)
+
         main_layout.addWidget(cache_group)
 
         # 3. Grupo Geral / Sistema
@@ -107,12 +128,18 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
         sys_layout.addWidget(self.autostart_checkbox)
 
-        # Language Selection
+        # Language & Theme Selection
         lang_layout = QFormLayout()
         self.lang_combo = QComboBox()
         self.lang_combo.addItem(tr("Português (Brasil)"), "pt_BR")
         self.lang_combo.addItem(tr("Inglês (EUA)"), "en_US")
         lang_layout.addRow(tr("Idioma / Language:"), self.lang_combo)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem(tr("Automático (Sistema)"), "auto")
+        self.theme_combo.addItem(tr("Escuro (Dark)"), "dark")
+        self.theme_combo.addItem(tr("Claro (Light)"), "light")
+        lang_layout.addRow(tr("Tema do Painel:"), self.theme_combo)
         sys_layout.addLayout(lang_layout)
 
         main_layout.addWidget(sys_group)
@@ -195,6 +222,42 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.lang_combo.setCurrentIndex(index)
 
+        theme = str(self.config.get("theme", "auto"))
+        t_idx = self.theme_combo.findData(theme)
+        if t_idx >= 0:
+            self.theme_combo.setCurrentIndex(t_idx)
+
+    def _on_clear_cache(self) -> None:
+        """Safely clears local VFS cache files if no uploads are waiting in queue."""
+        usage = get_vfs_cache_usage_bytes()
+        if usage <= 0:
+            QMessageBox.information(self, tr("Limpar Cache VFS"), tr("O cache local VFS já está vazio."))
+            return
+
+        if self.daemon is not None and self.daemon.is_running() and self.daemon.rc_credentials:
+            pending = int(fetch_vfs_queue(self.daemon.rc_credentials) or 0)
+            if pending > 0:
+                QMessageBox.warning(
+                    self,
+                    tr("Cache VFS em Uso"),
+                    tr("Existem %d arquivo(s) aguardando envio para a nuvem.\nAguarde o término dos envios antes de limpar o cache.") % pending,
+                )
+                return
+
+        res = QMessageBox.question(
+            self,
+            tr("Limpar Cache VFS"),
+            tr("Deseja remover %s de arquivos temporários em cache no SSD?\n(Seus arquivos na nuvem não serão afetados.)") % format_bytes(usage),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if res != QMessageBox.Yes:
+            return
+
+        clear_vfs_cache_files()
+        self.cache_usage_label.setText(format_bytes(get_vfs_cache_usage_bytes()))
+        QMessageBox.information(self, tr("Cache Limpo"), tr("O cache VFS local foi limpo com sucesso."))
+
     def _save_and_accept(self) -> None:
         """Validates controls, warns on high SSD cache size, saves to config, and closes."""
         bwlimit = self.bwlimit_combo.currentData() or "off"
@@ -203,7 +266,15 @@ class SettingsDialog(QDialog):
         cache_size = f"{cache_gb}G"
         vfs_mode = self.vfs_mode_combo.currentData() or "full"
         language = self.lang_combo.currentData() or "pt_BR"
+        theme = self.theme_combo.currentData() or "auto"
         language_changed = language != str(self.config.get("language", "pt_BR"))
+        theme_changed = theme != str(self.config.get("theme", "auto"))
+        bwlimit_changed = bwlimit != str(self.config.get("bwlimit", "off"))
+        mount_opts_changed = (
+            cache_size != str(self.config.get("vfs_cache_max_size", "2G"))
+            or int(transfers) != int(self.config.get("transfers", 4))
+            or vfs_mode != str(self.config.get("vfs_cache_mode", "full"))
+        )
 
         # Validate high cache size warning if >= 50 GB
         if cache_gb >= 50:
@@ -226,15 +297,26 @@ class SettingsDialog(QDialog):
         self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
         self.config["language"] = language
+        self.config["theme"] = theme
 
         # Save to disk
         if save_config(self.config):
-            QMessageBox.information(self, tr("Configuração Guardada"), tr("Preferências atualizadas com sucesso.\nAs alterações serão aplicadas na próxima conexão."))
+            self.language_changed = language_changed
+            self.theme_changed = theme_changed
+            self.bwlimit_changed = bwlimit_changed
             if language_changed:
+                set_language(language)
+            if mount_opts_changed:
                 QMessageBox.information(
                     self,
-                    tr("Reinício Necessário"),
-                    tr("O idioma foi alterado. Reinicie o DucksDrive para aplicar o novo idioma.")
+                    tr("Configuração Guardada"),
+                    tr("Preferências atualizadas com sucesso.\nAs alterações de cache/transferências serão aplicadas na próxima conexão.")
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    tr("Configuração Guardada"),
+                    tr("Preferências atualizadas e aplicadas imediatamente.")
                 )
             self.accept()
         else:

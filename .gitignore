@@ -15,6 +15,7 @@ appimagetool*
 src/
 pkg/
 *.pkg.tar*
+*.deb
 
 # Logs and patches
 *.log

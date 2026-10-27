@@ -175,7 +175,22 @@ _TRANSLATIONS = {
         "ATENÇÃO: %d arquivo(s) ainda aguardam envio para esta nuvem e não serão enviados.": "WARNING: %d file(s) are still waiting to be uploaded to this cloud and will not be uploaded.",
         "Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc.": "Empty = Amazon S3; or MinIO/Wasabi/etc. endpoint",
         "ftp.example.com ou ip": "ftp.example.com or IP",
-        "Dados e montagens removidos.\nComo o pacote foi instalado via gerenciador do sistema, execute no terminal:\nsudo pacman -R ducksdrive": "Data and mounts removed.\nSince the package was installed via the system package manager, run in terminal:\nsudo pacman -R ducksdrive"
+        "Dados e montagens removidos.\nComo o pacote foi instalado via gerenciador do sistema, execute no terminal:\nsudo pacman -R ducksdrive": "Data and mounts removed.\nSince the package was installed via the system package manager, run in terminal:\nsudo pacman -R ducksdrive",
+        "Preferências atualizadas e aplicadas imediatamente.": "Preferences updated and applied immediately.",
+        "Preferências atualizadas com sucesso.\nAs alterações de cache/transferências serão aplicadas na próxima conexão.": "Preferences updated successfully.\nCache and transfer changes will be applied on the next connection.",
+        "Uso Atual do Cache no SSD:": "Current SSD Cache Usage:",
+        "Limpar Cache Agora": "Clear Cache Now",
+        "Cache VFS em Uso": "VFS Cache in Use",
+        "Existem %d arquivo(s) aguardando envio para a nuvem.\nAguarde o término dos envios antes de limpar o cache.": "There are %d file(s) waiting to be uploaded to the cloud.\nPlease wait for uploads to finish before clearing the cache.",
+        "Limpar Cache VFS": "Clear VFS Cache",
+        "O cache local VFS já está vazio.": "The local VFS cache is already empty.",
+        "Deseja remover %s de arquivos temporários em cache no SSD?\n(Seus arquivos na nuvem não serão afetados.)": "Do you want to remove %s of cached temporary files on your SSD?\n(Your files in the cloud will not be affected.)",
+        "Cache Limpo": "Cache Cleared",
+        "O cache VFS local foi limpo com sucesso.": "The local VFS cache was cleared successfully.",
+        "Tema do Painel:": "Panel Theme:",
+        "Automático (Sistema)": "Automatic (System)",
+        "Escuro (Dark)": "Dark",
+        "Claro (Light)": "Light"
     },
     "pt_BR": {
         "Rclone mount process died unexpectedly.": "O processo de montagem do Rclone encerrou inesperadamente.",

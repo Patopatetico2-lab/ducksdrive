@@ -46,7 +46,8 @@ from rclone_config import (
     delete_remote
 )
 from rclone_daemon import RcloneDaemon
-from rclone_stats import StatsData, fetch_vfs_queue
+from rclone_settings import load_config, save_last_remote
+from rclone_stats import StatsData, fetch_vfs_queue, set_rc_bwlimit
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
 
@@ -468,11 +469,48 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_delete.triggered.connect(self._show_delete_selector)
         self.menu_remotes.addAction(self.action_delete)
 
+    def retranslate_ui(self) -> None:
+        """Updates all tray menu labels and the floating status popup in real time when language changes."""
+        self.action_open.setText(tr("Abrir Pasta Local"))
+        self.action_panel.setText(tr("Abrir Painel de Transferências"))
+        self.action_connect.setText(tr("Selecionar Nuvem para Conectar..."))
+        self.menu_remotes.setTitle(tr("Gerenciar Nuvens"))
+        self.action_settings.setText(tr("Configurações..."))
+        self.action_exit.setText(tr("Sair"))
+
+        status_map = {
+            "stopped": tr("Desconectado"),
+            "starting": tr("Conectando..."),
+            "mounted": tr("Conectado"),
+            "unmounting": tr("Desconectando..."),
+            "error": tr("Erro"),
+        }
+        state_label = status_map.get(self.daemon.state, self.daemon.state.capitalize())
+        remote_name = self.daemon.current_remote or "DucksDrive"
+        clean_name = remote_name.rstrip(":")
+        status_header = f"{clean_name} • {state_label}"
+        self.action_status.setText(status_header)
+        self.setToolTip(status_header)
+        self._populate_remotes_menu()
+        self.status_popup.retranslate_ui()
+
     def _show_settings_dialog(self) -> None:
-        """Opens the settings configuration dialog with proper widget parent."""
+        """Opens the settings configuration dialog and applies language/bwlimit changes live."""
         dialog = SettingsDialog(parent=None, daemon=self.daemon)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
-        dialog.exec()
+        if dialog.exec() == QDialog.Accepted:
+            if dialog.language_changed:
+                self.retranslate_ui()
+            if dialog.theme_changed:
+                self.status_popup.apply_theme(str(dialog.config.get("theme") or "auto"))
+            if (
+                dialog.bwlimit_changed
+                and self.daemon.is_running()
+                and self.daemon.rc_credentials
+                and not self.status_popup.is_paused
+            ):
+                new_rate = str(dialog.config.get("bwlimit") or "off")
+                self.runner.submit(set_rc_bwlimit, self.daemon.rc_credentials, new_rate)
 
     def update_tray_icon(self, state: str) -> None:
         """
@@ -776,6 +814,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _on_remote_deleted(self, remote: str, deleted: bool) -> None:
         self.refresh_remotes()
         if deleted:
+            if str(load_config().get("last_remote") or "").rstrip(":") == remote.rstrip(":"):
+                save_last_remote("")
             QMessageBox.information(None, tr("Nuvem Removida"), tr("A nuvem '%s' foi removida com sucesso.") % remote)
         else:
             QMessageBox.critical(None, tr("Erro"), tr("Falha ao remover a nuvem '%s'.") % remote)

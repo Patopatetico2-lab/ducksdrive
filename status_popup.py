@@ -38,7 +38,8 @@ from PySide6.QtWidgets import (
 
 from rclone_config import TaskRunner
 from rclone_daemon import RcloneDaemon
-from rclone_stats import StatsData
+from rclone_settings import is_dark_theme_active
+from rclone_stats import StatsData, set_rc_bwlimit
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class SpeedChartWidget(QWidget):
         self.setMaximumHeight(80)
         self.setMinimumHeight(60)
         self.max_points = max_points
+        self.is_dark = False
         self.speed_history: deque[float] = deque([0.0] * max_points, maxlen=max_points)
 
     def add_speed_point(self, speed_mb_s: float) -> None:
@@ -69,12 +71,13 @@ class SpeedChartWidget(QWidget):
 
         # Background card styling
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(245, 247, 250))
+        bg_color = QColor(38, 46, 56) if self.is_dark else QColor(245, 247, 250)
+        painter.setBrush(bg_color)
         painter.drawRoundedRect(rect, 8, 8)
 
         if not self.speed_history or max(self.speed_history) == 0:
             # Draw subtle empty state text
-            painter.setPen(QColor(150, 150, 150))
+            painter.setPen(QColor(149, 165, 166) if self.is_dark else QColor(150, 150, 150))
             painter.setFont(QFont("Sans Serif", 9))
             painter.drawText(rect, Qt.AlignCenter, tr("Sem velocidade de transferência ativa"))
             return
@@ -171,7 +174,7 @@ class QuotaWorkerThread(QThread):
 class TransferItem(QWidget):
     """Small widget representing a single file transfer in the list."""
 
-    def __init__(self, name: str, percentage: int, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, name: str, percentage: int, is_dark: bool = False, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.file_name = name
         layout = QVBoxLayout(self)
@@ -179,7 +182,6 @@ class TransferItem(QWidget):
         layout.setSpacing(2)
 
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet("font-size: 9pt; color: #2c3e50;")
         self.name_label.setWordWrap(False)
         layout.addWidget(self.name_label)
 
@@ -189,6 +191,11 @@ class TransferItem(QWidget):
         self.progress.setFixedHeight(4)
         self.progress.setTextVisible(False)
         layout.addWidget(self.progress)
+        self.apply_theme(is_dark)
+
+    def apply_theme(self, is_dark: bool) -> None:
+        text_col = "#ecf0f1" if is_dark else "#2c3e50"
+        self.name_label.setStyleSheet(f"font-size: 9pt; color: {text_col};")
 
     def update_data(self, name: str, percentage: int) -> None:
         self.file_name = name
@@ -218,8 +225,10 @@ class StatusPopup(QWidget):
 
         self._quota_worker: Optional[QuotaWorkerThread] = None
         self._pause_runner = TaskRunner(self)
+        self.is_dark = False
 
         self._init_ui()
+        self.apply_theme()
         self.daemon.state_changed.connect(self._on_daemon_state_changed)
 
     def _init_ui(self) -> None:
@@ -338,11 +347,11 @@ class StatusPopup(QWidget):
         main_layout.addWidget(self.btn_pause)
 
         # Separator line
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        line.setStyleSheet("background-color: #ecf0f1; max-height: 1px;")
-        main_layout.addWidget(line)
+        self.sep_line = QFrame()
+        self.sep_line.setFrameShape(QFrame.HLine)
+        self.sep_line.setFrameShadow(QFrame.Sunken)
+        self.sep_line.setStyleSheet("background-color: #ecf0f1; max-height: 1px;")
+        main_layout.addWidget(self.sep_line)
 
         # 3. Dynamic Transfer List (Scrollable)
         self.scroll = QScrollArea()
@@ -364,14 +373,16 @@ class StatusPopup(QWidget):
 
         # 4. Metrics & Chart
         metrics_layout = QHBoxLayout()
+        self.speed_title_label = QLabel(tr("Velocidade:"))
         self.speed_value = QLabel("0.00 MB/s")
         self.speed_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #2980b9;")
+        self.eta_title_label = QLabel(tr("Restam:"))
         self.eta_value = QLabel("--:--:--")
         self.eta_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #e67e22;")
-        metrics_layout.addWidget(QLabel(tr("Velocidade:")))
+        metrics_layout.addWidget(self.speed_title_label)
         metrics_layout.addWidget(self.speed_value)
         metrics_layout.addStretch()
-        metrics_layout.addWidget(QLabel(tr("Restam:")))
+        metrics_layout.addWidget(self.eta_title_label)
         metrics_layout.addWidget(self.eta_value)
         main_layout.addLayout(metrics_layout)
 
@@ -384,26 +395,139 @@ class StatusPopup(QWidget):
         self.btn_open.clicked.connect(self._open_cloud_folder)
         main_layout.addWidget(self.btn_open)
 
+    def apply_theme(self, theme_pref: Optional[str] = None) -> None:
+        """Applies Dark or Light theme styling to the popup, transfer items, and speed chart."""
+        self.is_dark = is_dark_theme_active(theme_pref)
+        if self.is_dark:
+            # Tema Escuro (Dark Mode - combina com Breeze Dark / Adwaita Dark)
+            bg = "#202326"
+            fg = "#fcfcfc"
+            border_col = "#3daee9"
+            bar_bg = "#2d3238"
+            muted = "#a1a9b1"
+            empty_col = "#7f8c8d"
+            sep_col = "#333940"
+            close_bg = "#2d3238"
+            close_fg = "#fcfcfc"
+            speed_col = "#5dade2"
+            eta_col = "#f39c12"
+        else:
+            # Tema Claro (Light Mode)
+            bg = "#ffffff"
+            fg = "#2c3e50"
+            border_col = "#dcdde1"
+            bar_bg = "#ecf0f1"
+            muted = "#7f8c8d"
+            empty_col = "#95a5a6"
+            sep_col = "#ecf0f1"
+            close_bg = "#ecf0f1"
+            close_fg = "#7f8c8d"
+            speed_col = "#2980b9"
+            eta_col = "#e67e22"
+
+        self.setObjectName("StatusPopupRoot")
+        self.setStyleSheet(f"""
+            QWidget#StatusPopupRoot {{
+                background-color: {bg};
+                border: 1px solid {border_col};
+                border-radius: 10px;
+            }}
+            QWidget {{
+                background-color: {bg};
+                color: {fg};
+                font-family: 'Sans Serif';
+                font-size: 10pt;
+            }}
+            QLabel {{
+                background: transparent;
+                color: {fg};
+            }}
+            QPushButton {{
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #2980b9;
+            }}
+            QPushButton:disabled {{
+                background-color: {bar_bg};
+                color: {muted};
+            }}
+            QProgressBar {{
+                border: none;
+                background-color: {bar_bg};
+                height: 6px;
+                border-radius: 3px;
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background-color: #27ae60;
+                border-radius: 3px;
+            }}
+            QScrollArea {{
+                border: none;
+                background: transparent;
+            }}
+        """)
+        self.title_label.setStyleSheet(f"font-size: 11pt; color: {fg};")
+        self.quota_label.setStyleSheet(f"font-size: 8pt; color: {muted};")
+        self.empty_label.setStyleSheet(f"color: {empty_col}; font-style: italic; padding: 20px 0;")
+        self.sep_line.setStyleSheet(f"background-color: {sep_col}; max-height: 1px;")
+        self.speed_title_label.setStyleSheet(f"color: {fg};")
+        self.eta_title_label.setStyleSheet(f"color: {fg};")
+        self.speed_value.setStyleSheet(f"font-size: 10pt; font-weight: bold; color: {speed_col};")
+        self.eta_value.setStyleSheet(f"font-size: 10pt; font-weight: bold; color: {eta_col};")
+        self.btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background: {close_bg};
+                color: {close_fg};
+                border: none;
+                border-radius: 11px;
+                font-weight: bold;
+                font-size: 9pt;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background: #e74c3c;
+                color: white;
+            }}
+        """)
+        self._apply_pause_button_ui()
+        self.chart_widget.is_dark = self.is_dark
+        self.chart_widget.update()
+        for i in range(self.scroll_layout.count()):
+            w = self.scroll_layout.itemAt(i).widget()
+            if isinstance(w, TransferItem):
+                w.apply_theme(self.is_dark)
+
+    def retranslate_ui(self) -> None:
+        """Updates all visible labels and tooltips in the popup when the language changes."""
+        self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
+        self._apply_pause_button_ui()
+        self.empty_label.setText(tr("Nenhum arquivo sendo transferido"))
+        self.speed_title_label.setText(tr("Velocidade:"))
+        self.eta_title_label.setText(tr("Restam:"))
+        self.btn_open.setText(tr("Abrir Pasta Local"))
+        if self.daemon.is_running():
+            self.status_badge.setText(tr("● Online"))
+        else:
+            self.status_badge.setText(tr("● Offline"))
+        if self._last_quota_update == 0:
+            self.quota_label.setText(tr("Calculando espaço..."))
+        else:
+            self._fetch_quota()
+        self.chart_widget.update()
+
     @Slot(str)
     def _on_daemon_state_changed(self, state: str) -> None:
         """Resets pause state and quota cache when unmounting or switching cloud remotes."""
         if state in ("stopped", "unmounting", "starting", "error") or self.daemon.current_remote != self._quota_remote:
             self.is_paused = False
-            self.btn_pause.setText(tr("Pausar Transferências"))
-            self.btn_pause.setStyleSheet("""
-                QPushButton {
-                    background-color: #f39c12;
-                    color: white;
-                    border: none;
-                    padding: 6px;
-                    border-radius: 4px;
-                    font-weight: bold;
-                    font-size: 9pt;
-                }
-                QPushButton:hover {
-                    background-color: #e67e22;
-                }
-            """)
+            self._apply_pause_button_ui()
             self._last_quota_update = 0
             self.quota_label.setText(tr("Calculando espaço..."))
             if state in ("stopped", "unmounting", "starting", "error"):
@@ -414,7 +538,8 @@ class StatusPopup(QWidget):
                     self._fetch_quota()
 
     def showEvent(self, event: Any) -> None:
-        """Starts quota timer when popup becomes visible."""
+        """Refreshes theme and starts quota timer when popup becomes visible."""
+        self.apply_theme()
         super().showEvent(event)
         if not self._quota_timer.isActive():
             self._quota_timer.start()
@@ -481,9 +606,6 @@ class StatusPopup(QWidget):
             """)
 
     def _toggle_pause(self) -> None:
-        import urllib.request
-        import json
-        import base64
         from rclone_settings import load_config
 
         if not self.daemon.is_running() or not self.daemon.rc_credentials:
@@ -494,25 +616,9 @@ class StatusPopup(QWidget):
         self.btn_pause.setEnabled(False)
 
         def do_request(pause_state: bool) -> bool:
-            try:
-                endpoint = f"{creds.url}/core/bwlimit"
-                auth_str = f"{creds.user}:{creds.password}"
-                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-
-                original_limit = str(load_config().get("bwlimit") or "off")
-                limit_val = "1B" if pause_state else original_limit
-
-                req = urllib.request.Request(
-                    url=endpoint,
-                    data=json.dumps({"rate": limit_val}).encode("utf-8"),
-                    headers={"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    return resp.status == 200
-            except Exception as e:
-                logger.debug("Failed to set bwlimit via RC: %s", e)
-                return False
+            original_limit = str(load_config().get("bwlimit") or "off")
+            limit_val = "1B" if pause_state else original_limit
+            return set_rc_bwlimit(creds, limit_val, timeout=5.0)
 
         def on_done(ok: Any) -> None:
             self.btn_pause.setEnabled(True)
@@ -584,7 +690,7 @@ class StatusPopup(QWidget):
                     if name in existing_items:
                         existing_items[name].update_data(name, pct)
                     else:
-                        item = TransferItem(name, pct)
+                        item = TransferItem(name, pct, is_dark=self.is_dark)
                         self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
                         existing_items[name] = item
 

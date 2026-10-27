@@ -24,6 +24,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "vfs_cache_mode": "full",
     "autostart": True,
     "language": "pt_BR",
+    "last_remote": "",
+    "theme": "auto",
 }
 
 
@@ -62,6 +64,112 @@ def save_config(config: Dict[str, Any]) -> bool:
     except Exception as e:
         logger.error("Failed to save config file: %s", e)
         return False
+
+
+def save_last_remote(remote_name: str) -> None:
+    """Persists the most recently mounted remote name in ~/.config/ducksdrive/config.json."""
+    clean = remote_name.rstrip(":") if remote_name else ""
+    config = load_config()
+    if config.get("last_remote") == clean:
+        return
+    config["last_remote"] = clean
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4)
+        logger.info("Updated last_remote to '%s'", clean)
+    except Exception as e:
+        logger.error("Failed to save last_remote: %s", e)
+
+
+def get_rclone_cache_dir() -> str:
+    """Returns the rclone cache directory path (~/.cache/rclone or XDG_CACHE_HOME/rclone)."""
+    xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+    return os.path.join(xdg_cache, "rclone")
+
+
+def get_vfs_cache_usage_bytes() -> int:
+    """Calculates total disk space in bytes currently used by the rclone VFS cache."""
+    cache_dir = get_rclone_cache_dir()
+    if not os.path.isdir(cache_dir):
+        return 0
+    total = 0
+    for root, _, files in os.walk(cache_dir):
+        for name in files:
+            fp = os.path.join(root, name)
+            try:
+                if not os.path.islink(fp):
+                    total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
+
+
+def clear_vfs_cache_files() -> bool:
+    """Removes cached VFS data and metadata directories under ~/.cache/rclone."""
+    cache_dir = get_rclone_cache_dir()
+    if not os.path.isdir(cache_dir):
+        return True
+    ok = True
+    for sub in ("vfs", "vfsMeta"):
+        target = os.path.join(cache_dir, sub)
+        if os.path.isdir(target):
+            try:
+                shutil.rmtree(target)
+            except Exception as e:
+                logger.warning("Failed to remove VFS cache dir %s: %s", target, e)
+                ok = False
+    return ok
+
+
+def is_dark_theme_active(theme_pref: str | None = None) -> bool:
+    """
+    Determines whether the dark theme should be used based on user config ('auto', 'dark', 'light')
+    or the active desktop environment / Qt6 colorScheme / palette when set to 'auto'.
+    """
+    pref = (theme_pref or load_config().get("theme") or "auto").lower()
+    if pref == "dark":
+        return True
+    if pref == "light":
+        return False
+
+    # 1. Check Qt 6.5+ native colorScheme hint first
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication, QPalette
+        from PySide6.QtWidgets import QApplication
+
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorScheme") and hasattr(Qt, "ColorScheme"):
+            scheme = hints.colorScheme()
+            if scheme == Qt.ColorScheme.Dark:
+                return True
+            if scheme == Qt.ColorScheme.Light:
+                return False
+
+        app = QApplication.instance()
+        if app is not None:
+            window_color = app.palette().color(QPalette.Window)
+            if window_color.isValid():
+                return window_color.lightness() < 128
+    except Exception:
+        pass
+
+    # 2. Fallback check in KDE kdeglobals
+    kdeglobals = os.path.join(
+        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+        "kdeglobals",
+    )
+    if os.path.exists(kdeglobals):
+        try:
+            with open(kdeglobals, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read().lower()
+            if "breezedark" in content or "dark" in content:
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def _sync_autostart(enabled: bool) -> None:

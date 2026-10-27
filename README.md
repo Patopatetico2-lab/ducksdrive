@@ -33,10 +33,12 @@ Depois de criada, é só escolher a nuvem no menu para montar.
 
 Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de configurações do app:
 
-- `--bwlimit`: limite de banda, tipo `10M`, ou `off` para sem limite. Ajuda a não saturar a rede nem travar jogo online.
-- `--vfs-cache-mode` e `--vfs-cache-max-size`: modo do cache (`full`, `writes`, `minimal` ou `off`) e quanto espaço do SSD o cache pode usar, tipo `10G`.
+- `--bwlimit`: limite de banda, tipo `10M`, ou `off` para sem limite (aplicado em tempo real via API RC sem precisar desmontar). Ajuda a não saturar a rede nem travar jogo online.
+- `--vfs-cache-mode` e `--vfs-cache-max-size`: modo do cache (`full`, `writes`, `minimal` ou `off`), quanto espaço do SSD o cache pode usar (ex: `10G`), medidor do uso atual no SSD e botão **Limpar Cache Agora**.
 - `--transfers`: quantos arquivos são sincronizados ao mesmo tempo, tipo `4`.
-- Idioma: Português (Brasil) ou Inglês (EUA).
+- Idioma: Português (Brasil) ou Inglês (EUA), aplicado na hora sem precisar reiniciar.
+- Tema do Painel: Automático (segue o modo escuro/claro do sistema), Escuro (`#202326`) ou Claro (`#ffffff`).
+- Reconexão inteligente (`last_remote`): lembra a última nuvem conectada e monta ela automaticamente ao iniciar.
 - Iniciar com o sistema (autostart): liga e desliga pelo mesmo menu.
 
 <img width="540" alt="Tela de configurações" src="docs/assets/settings-dialog.png" />
@@ -46,11 +48,17 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 ### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
 Instalação direta em 1 comando via Pacman:
 ```bash
-curl -LO https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.5/ducksdrive-1.0.5-1-any.pkg.tar.zst && sudo pacman -U ducksdrive-1.0.5-1-any.pkg.tar.zst && rm -f ducksdrive-1.0.5-1-any.pkg.tar.zst
+curl -LO https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.6/ducksdrive-1.0.6-1-any.pkg.tar.zst && sudo pacman -U ducksdrive-1.0.6-1-any.pkg.tar.zst && rm -f ducksdrive-1.0.6-1-any.pkg.tar.zst
 ```
 Ou compilando direto do repositório com `makepkg`:
 ```bash
 git clone https://github.com/Patopatetico2-lab/ducksdrive.git && cd ducksdrive && makepkg -si
+```
+
+### Debian / Ubuntu / Linux Mint / Zorin OS (Nativo via .deb)
+Instalação direta em 1 comando via `apt`:
+```bash
+curl -LO https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.6/ducksdrive_1.0.6-1_all.deb && sudo apt install ./ducksdrive_1.0.6-1_all.deb && rm -f ducksdrive_1.0.6-1_all.deb
 ```
 
 ### Pelo script (instala no sistema)
