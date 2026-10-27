@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from i18n import tr
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -39,12 +40,13 @@ from PySide6.QtWidgets import (
 
 from rclone_config import (
     SUPPORTED_REMOTE_TYPES,
+    TaskRunner,
     list_remote_names,
     RemoteCreationThread,
     delete_remote
 )
 from rclone_daemon import RcloneDaemon
-from rclone_stats import StatsData
+from rclone_stats import StatsData, fetch_vfs_queue
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
 
@@ -119,8 +121,10 @@ def get_tray_icon(state: str = "idle") -> QIcon:
 
 class NewRemoteDialog(QDialog):
     """Dialog to gather details for creating a new rclone remote with conditional parameters for non-OAuth providers."""
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None, existing_names: Optional[list[str]] = None) -> None:
         super().__init__(parent)
+        # Names already configured, listed by the caller in the background (no subprocess here)
+        self._existing_names = list(existing_names or [])
         self.setWindowTitle(tr("Configurar Nova Nuvem"))
         self.setMinimumWidth(400)
         
@@ -240,8 +244,7 @@ class NewRemoteDialog(QDialog):
             )
             return
         
-        existing_remotes = list_remote_names()
-        if name in existing_remotes:
+        if name in self._existing_names:
             QMessageBox.warning(self, tr("Erro de Duplicado"), tr("Já existe uma nuvem com o nome '%s'.") % name)
             return
 
@@ -324,7 +327,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.latest_stats: Optional[StatsData] = None
         self._was_syncing = False
         self._current_icon_state = "idle"
-        
+
+        # Background runner for rclone subprocess calls (never block the GUI thread)
+        self.runner = TaskRunner(self)
+        self._remotes_cache: Optional[list[str]] = None
+        self._upload_dialog: Optional[QProgressDialog] = None
+        self._upload_timer: Optional[QTimer] = None
+        self._upload_poll_busy = False
+
         # Initialize floating status popup panel
         self.status_popup = StatusPopup(daemon)
         
@@ -355,7 +365,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         
         # Bloco 3 (Gerenciamento): Submenu dinâmico de Nuvens
         self.menu_remotes = self._menu.addMenu(tr("Gerenciar Nuvens"))
-        self.menu_remotes.aboutToShow.connect(self._populate_remotes_menu)
+        self.menu_remotes.aboutToShow.connect(self._on_remotes_menu_about_to_show)
         self._populate_remotes_menu()
 
         self.action_settings = QAction(tr("Configurações..."), self)
@@ -376,6 +386,35 @@ class RcloneTrayIcon(QSystemTrayIcon):
         
         self.activated.connect(self._on_activated)
 
+    def refresh_remotes(self, callback: Optional[Callable[[list[str]], None]] = None) -> None:
+        """
+        Lists the configured remotes in a background thread, updates the cache/menu and then
+        calls `callback(remotes)` in the GUI thread. On failure the previous list is kept.
+        """
+        def _done(result: object) -> None:
+            names = result if isinstance(result, list) else (self._remotes_cache or [])
+            changed = names != self._remotes_cache
+            self._remotes_cache = names
+            if changed:
+                self._populate_remotes_menu()
+            if callback is not None:
+                callback(names)
+
+        self.runner.submit(list_remote_names, callback=_done)
+
+    def _on_remotes_menu_about_to_show(self) -> None:
+        """Shows the cached list instantly and refreshes it in the background."""
+        self._populate_remotes_menu()
+        self.refresh_remotes()
+
+    def shutdown_workers(self) -> None:
+        """Waits for pending background rclone calls. Call only when the app is exiting."""
+        self.runner.wait_all()
+
+    def _unmount_current(self) -> None:
+        """Menu handler: unmount without freezing the GUI."""
+        self.daemon.stop_async()
+
     def _populate_remotes_menu(self) -> None:
         """Dynamically populates the 'Gerenciar Nuvens' submenu without leaking memory."""
         for act in self.menu_remotes.actions():
@@ -384,15 +423,20 @@ class RcloneTrayIcon(QSystemTrayIcon):
             act.deleteLater()
         self.menu_remotes.clear()
         
-        remotes = list_remote_names()
-        if remotes:
+        remotes = self._remotes_cache
+        if remotes is None:
+            loading_action = QAction(tr("Carregando nuvens..."), self.menu_remotes)
+            loading_action.setEnabled(False)
+            self.menu_remotes.addAction(loading_action)
+            self.menu_remotes.addSeparator()
+        elif remotes:
             for remote in remotes:
                 is_active = self.daemon.is_running() and self.daemon.current_remote and self.daemon.current_remote.rstrip(":") == remote.rstrip(":")
                 label = f"✓ {remote} (" + tr("Ativo") + ")" if is_active else remote
                 remote_menu = QMenu(label, self.menu_remotes)
                 if is_active:
                     action_unmount_local = QAction(tr("Desmontar"), remote_menu)
-                    action_unmount_local.triggered.connect(self.daemon.stop)
+                    action_unmount_local.triggered.connect(self._unmount_current)
                     remote_menu.addAction(action_unmount_local)
                 else:
                     action_mount = QAction(tr("Montar"), remote_menu)
@@ -412,7 +456,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self.menu_remotes.addSeparator()
 
         self.action_unmount = QAction(tr("Desconectar Atual"), self.menu_remotes)
-        self.action_unmount.triggered.connect(self.daemon.stop)
+        self.action_unmount.triggered.connect(self._unmount_current)
         self.action_unmount.setEnabled(self.daemon.is_running())
         self.menu_remotes.addAction(self.action_unmount)
 
@@ -489,7 +533,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Updates the tray tooltip, menu status, and floating status popup with live telemetry."""
         self.latest_stats = stats
         if stats.is_online:
-            has_active = stats.transfers_count > 0 or len(stats.active_transfers) > 0
+            has_active = stats.has_active_transfers
             
             if has_active:
                 self._was_syncing = True
@@ -531,9 +575,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _has_active_transfer(self) -> bool:
         """Checks if there is any active file transfer in progress."""
-        if not self.latest_stats or not self.latest_stats.is_online:
-            return False
-        return self.latest_stats.transfers_count > 0 or len(self.latest_stats.active_transfers) > 0
+        return bool(self.latest_stats and self.latest_stats.has_active_transfers)
 
     def _show_transfer_panel(self) -> None:
         """Shows or toggles the floating status popup panel."""
@@ -555,7 +597,40 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 self.status_popup.show_near_cursor()
 
     def _confirm_quit(self) -> None:
-        """Confirms exit if active transfers are currently in progress."""
+        """
+        Checks (off the GUI thread) whether files are still waiting in the VFS upload queue
+        before exiting, so the user can wait for them instead of relying on the 10s kill timeout.
+        """
+        creds = self.daemon.rc_credentials if self.daemon.is_running() else None
+        if creds is None:
+            self.request_exit.emit()
+            return
+        self.runner.submit(fetch_vfs_queue, creds, callback=self._on_quit_queue_checked)
+
+    def _on_quit_queue_checked(self, pending: Optional[int]) -> None:
+        """GUI-thread continuation of _confirm_quit with the number of files still queued for upload."""
+        pending_count = int(pending or 0)
+
+        if pending_count > 0:
+            box = QMessageBox(
+                QMessageBox.Warning,
+                tr("Transferências Ativas"),
+                tr("%d arquivo(s) ainda estão sendo enviados para a nuvem.\nSe sair agora, o envio será retomado na próxima vez que esta nuvem for montada.") % pending_count,
+                parent=None,
+            )
+            btn_wait = box.addButton(tr("Aguardar e sair"), QMessageBox.AcceptRole)
+            btn_quit = box.addButton(tr("Sair assim mesmo"), QMessageBox.DestructiveRole)
+            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.RejectRole)
+            box.setDefaultButton(btn_wait)
+            box.setEscapeButton(btn_cancel)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is btn_wait:
+                self._wait_for_uploads_then_quit(pending_count)
+            elif clicked is btn_quit:
+                self.request_exit.emit()
+            return
+
         if self._has_active_transfer():
             res = QMessageBox.warning(
                 None,
@@ -567,6 +642,70 @@ class RcloneTrayIcon(QSystemTrayIcon):
             if res != QMessageBox.Yes:
                 return
         self.request_exit.emit()
+
+    def _wait_for_uploads_then_quit(self, pending: int) -> None:
+        """Shows a cancellable progress dialog and exits once the VFS upload queue is empty."""
+        if self._upload_dialog is not None:
+            return
+        dialog = QProgressDialog(
+            tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % pending,
+            tr("Cancelar"), 0, 0, None
+        )
+        dialog.setWindowTitle(tr("Aguardando envios"))
+        dialog.setWindowModality(Qt.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.canceled.connect(self._cancel_upload_wait)
+        self._upload_dialog = dialog
+
+        timer = QTimer(self)
+        timer.setInterval(1000)
+        timer.timeout.connect(self._poll_upload_queue)
+        self._upload_timer = timer
+
+        dialog.show()
+        timer.start()
+
+    def _poll_upload_queue(self) -> None:
+        creds = self.daemon.rc_credentials
+        if creds is None:
+            self._finish_upload_wait(proceed=True)  # mount is gone; nothing left to wait for
+            return
+        if self._upload_poll_busy:
+            return
+        self._upload_poll_busy = True
+        self.runner.submit(fetch_vfs_queue, creds, callback=self._on_upload_poll_result)
+
+    def _on_upload_poll_result(self, pending: Optional[int]) -> None:
+        self._upload_poll_busy = False
+        dialog = self._upload_dialog
+        if dialog is None:
+            return  # cancelled meanwhile
+        if not pending:  # 0 = queue drained, None = RC unreachable (rclone gone)
+            self._finish_upload_wait(proceed=True)
+        else:
+            dialog.setLabelText(tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % pending)
+
+    def _cancel_upload_wait(self) -> None:
+        self._finish_upload_wait(proceed=False)
+
+    def _finish_upload_wait(self, proceed: bool) -> None:
+        dialog, timer = self._upload_dialog, self._upload_timer
+        self._upload_dialog = None
+        self._upload_timer = None
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+        if dialog is not None:
+            try:
+                dialog.canceled.disconnect(self._cancel_upload_wait)  # close() would emit canceled()
+            except (RuntimeError, TypeError):
+                pass
+            dialog.close()
+            dialog.deleteLater()
+        if proceed:
+            self.request_exit.emit()
 
     def _open_folder(self) -> None:
         """Opens the mount point in the system file manager using QDesktopServices."""
@@ -580,8 +719,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
             QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
 
     def _show_delete_selector(self) -> None:
-        """Shows a dialog to select and securely delete a configured cloud remote."""
-        remotes = list_remote_names()
+        """Lists remotes in the background, then shows a dialog to select and delete one."""
+        self.refresh_remotes(self._on_delete_selector_remotes)
+
+    def _on_delete_selector_remotes(self, remotes: list[str]) -> None:
         if not remotes:
             QMessageBox.information(None, tr("Nenhuma Nuvem"), tr("Não existem nuvens configuradas para remover."))
             return
@@ -589,31 +730,60 @@ class RcloneTrayIcon(QSystemTrayIcon):
         remote, ok = QInputDialog.getItem(
             None, tr("Remover Nuvem"), tr("Selecione a nuvem que deseja remover:"), remotes, 0, False
         )
-        if ok and remote:
-            res = QMessageBox.warning(
-                None,
-                tr("Confirmar Exclusão"),
-                tr("Tem certeza que deseja excluir as configurações de '%s'?\nEsta ação não pode ser desfeita.") % remote,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+        if not (ok and remote):
+            return
+
+        active_remote = self.daemon.current_remote
+        creds = self.daemon.rc_credentials
+        if active_remote and active_remote.rstrip(":") == remote.rstrip(":") and creds is not None:
+            # Active remote: find out if uploads are still pending so the user is warned
+            self.runner.submit(
+                fetch_vfs_queue, creds,
+                callback=lambda pending, r=remote: self._confirm_and_delete_remote(r, int(pending or 0)),
             )
-            if res != QMessageBox.Yes:
-                return
+        else:
+            self._confirm_and_delete_remote(remote, 0)
 
-            # Security logic: if active, stop daemon first
-            active_remote = self.daemon.current_remote
-            if active_remote and active_remote.rstrip(":") == remote.rstrip(":"):
-                logger.info("Active remote '%s' is being deleted. Stopping daemon...", remote)
-                self.daemon.stop()
+    def _confirm_and_delete_remote(self, remote: str, pending: int) -> None:
+        text = tr("Tem certeza que deseja excluir as configurações de '%s'?\nEsta ação não pode ser desfeita.") % remote
+        if pending > 0:
+            text += "\n\n" + tr("ATENÇÃO: %d arquivo(s) ainda aguardam envio para esta nuvem e não serão enviados.") % pending
+        res = QMessageBox.warning(
+            None,
+            tr("Confirmar Exclusão"),
+            text,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if res != QMessageBox.Yes:
+            return
 
-            if delete_remote(remote):
-                QMessageBox.information(None, tr("Nuvem Removida"), tr("A nuvem '%s' foi removida com sucesso.") % remote)
-            else:
-                QMessageBox.critical(None, tr("Erro"), tr("Falha ao remover a nuvem '%s'.") % remote)
+        # Security logic: if active, stop daemon first (in the background), then delete
+        active_remote = self.daemon.current_remote
+        if active_remote and active_remote.rstrip(":") == remote.rstrip(":"):
+            logger.info("Active remote '%s' is being deleted. Stopping daemon...", remote)
+            self.daemon.stop_async(on_done=lambda: self._delete_remote_in_background(remote))
+        else:
+            self._delete_remote_in_background(remote)
+
+    def _delete_remote_in_background(self, remote: str) -> None:
+        self.runner.submit(
+            delete_remote, remote,
+            callback=lambda deleted, r=remote: self._on_remote_deleted(r, bool(deleted)),
+        )
+
+    def _on_remote_deleted(self, remote: str, deleted: bool) -> None:
+        self.refresh_remotes()
+        if deleted:
+            QMessageBox.information(None, tr("Nuvem Removida"), tr("A nuvem '%s' foi removida com sucesso.") % remote)
+        else:
+            QMessageBox.critical(None, tr("Erro"), tr("Falha ao remover a nuvem '%s'.") % remote)
 
     def _show_mount_selector(self) -> None:
-        """Shows a dialog to select which remote to mount."""
-        remotes = list_remote_names()
+        """Lists remotes in the background, then shows a dialog to select which one to mount."""
+        self.refresh_remotes(self._on_mount_selector_remotes)
+
+    def _on_mount_selector_remotes(self, remotes: list[str]) -> None:
         if not remotes:
             msg = tr("Nenhuma nuvem configurada.\nGostaria de configurar uma agora?")
             res = QMessageBox.question(None, tr("Nenhuma Nuvem"), msg, QMessageBox.Yes | QMessageBox.No)
@@ -645,7 +815,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _show_new_remote_dialog(self) -> None:
         """Handles the flow for creating a new remote via background thread."""
-        dialog = NewRemoteDialog(parent=None)
+        self.refresh_remotes(self._open_new_remote_dialog)
+
+    def _open_new_remote_dialog(self, existing_names: list[str]) -> None:
+        dialog = NewRemoteDialog(parent=None, existing_names=existing_names)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.raise_()
         dialog.activateWindow()
@@ -707,7 +880,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     )
                     if res != QMessageBox.Yes:
                         return
-                    self.daemon.stop()
+                    # daemon.start() tears the old mount down in the background before mounting
 
                 # Add a 1-second QTimer delay to ensure rclone config file flush completes before mounting
                 QTimer.singleShot(1000, lambda: self.daemon.start(remote_name))

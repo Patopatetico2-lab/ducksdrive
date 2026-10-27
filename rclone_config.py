@@ -12,11 +12,98 @@ import select
 import shutil
 import subprocess
 import time
-from typing import Any, Dict, List, Optional
+from collections import deque
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 logger = logging.getLogger(__name__)
+
+
+class BackgroundTask(QThread):
+    """Runs a single blocking callable off the GUI thread and emits itself when done."""
+
+    completed = Signal(object)  # emits this task; read `.result` afterwards
+
+    def __init__(self, func: Callable[..., Any], *args: Any) -> None:
+        super().__init__()
+        self._func = func
+        self._args = args
+        self.result: Any = None
+        self.callback: Optional[Callable[[Any], None]] = None
+
+    def run(self) -> None:
+        try:
+            self.result = self._func(*self._args)
+        except Exception as exc:
+            logger.error("Background task %s failed: %s", getattr(self._func, "__name__", self._func), exc)
+            self.result = None
+        self.completed.emit(self)
+
+
+class TaskRunner(QObject):
+    """
+    Runs blocking callables one at a time (FIFO) in background threads and delivers each
+    result to its callback on the thread that owns the runner (the GUI thread).
+
+    Serial execution keeps ordering guarantees, e.g. "add bookmark" always finishes
+    before a following "remove bookmark".
+    """
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._queue: Deque[Tuple[Callable[..., Any], Tuple[Any, ...], Optional[Callable[[Any], None]]]] = deque()
+        self._current: Optional[BackgroundTask] = None
+
+    def submit(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        callback: Optional[Callable[[Any], None]] = None,
+    ) -> None:
+        """Queues `func(*args)`; `callback(result)` runs in the GUI thread (result is None on failure)."""
+        self._queue.append((func, args, callback))
+        self._start_next()
+
+    def _start_next(self) -> None:
+        if self._current is not None or not self._queue:
+            return
+        func, args, callback = self._queue.popleft()
+        task = BackgroundTask(func, *args)
+        task.callback = callback
+        task.completed.connect(self._on_completed)
+        self._current = task
+        task.start()
+
+    @Slot(object)
+    def _on_completed(self, task: BackgroundTask) -> None:
+        if task is not self._current:
+            return  # already drained by wait_all()
+        task.wait()  # the thread is only returning from run(); this is instantaneous
+        self._current = None
+        callback = task.callback
+        if callback is not None:
+            try:
+                callback(task.result)
+            except Exception:
+                logger.exception("Background task callback failed")
+        self._start_next()
+
+    def wait_all(self, timeout_ms: int = 5000) -> None:
+        """
+        Blocks until every queued/running task has finished (or the timeout expires).
+        Meant for application shutdown only; callbacks are skipped.
+        """
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while self._current is not None or self._queue:
+            if self._current is None:
+                self._start_next()
+                continue
+            remaining = int((deadline - time.monotonic()) * 1000)
+            if remaining <= 0 or not self._current.wait(remaining):
+                logger.warning("Timed out waiting for background tasks to finish.")
+                return
+            self._current = None
 
 # Commonly used cloud storage providers supported by Rclone
 SUPPORTED_REMOTE_TYPES = [

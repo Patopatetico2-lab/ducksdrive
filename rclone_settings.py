@@ -101,6 +101,8 @@ Terminal=false
 Type=Application
 Categories=Network;Utility;
 StartupNotify=true
+X-GNOME-Autostart-Delay=3
+X-KDE-autostart-after=panel
 """
         try:
             with open(autostart_file, "w", encoding="utf-8") as f:

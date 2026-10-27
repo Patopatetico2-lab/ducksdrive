@@ -15,13 +15,14 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, Slot, QTimer, QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from rclone_config import get_clean_env, list_remote_names
+from rclone_config import TaskRunner, get_clean_env
 from rclone_daemon import RcloneDaemon
 from rclone_settings import _sync_autostart, load_config
 from i18n import set_language, tr
@@ -82,6 +83,8 @@ class RcloneAppController(QObject):
         self.tray = RcloneTrayIcon(self.daemon)
         self.stats_poller: Optional[RcloneStatsPoller] = None
         self._old_pollers: list[RcloneStatsPoller] = []
+        # Serial background runner for file-manager sidebar I/O (keeps add/remove in order, off the GUI thread)
+        self.runner = TaskRunner(self)
         self._is_shutting_down = False
 
         # Connect signals
@@ -105,14 +108,18 @@ class RcloneAppController(QObject):
         """
         self.tray.show()
 
-        remotes = list_remote_names()
+        # `rclone config dump` runs in a background thread; decide what to do once it answers.
+        self.tray.refresh_remotes(self._on_initial_remotes)
+
+    def _on_initial_remotes(self, remotes: list[str]) -> None:
+        """Runs in the GUI thread once the remotes have been listed in the background."""
         if not remotes:
             logger.info("No cloud remotes found. Triggering first-run setup dialog...")
             QTimer.singleShot(200, self.tray._show_new_remote_dialog)
         else:
-            logger.info("Auto-mounting first available remote: %s", remotes[0])
-            # Execute in background via QTimer to avoid blocking the UI thread during startup
-            QTimer.singleShot(0, lambda: self.daemon.start(remotes[0]))
+            logger.info("Auto-mounting first available remote: %s (with network retry)", remotes[0])
+            # On startup/autostart: allow 30s timeout and up to 2 retries to accommodate slow network/Wi-Fi DHCP
+            QTimer.singleShot(0, lambda: self.daemon.start(remotes[0], startup_timeout=30.0, retry_on_timeout=2))
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
         logger.info("Signal %d received, shutting down...", sig)
@@ -133,7 +140,7 @@ class RcloneAppController(QObject):
             # Add to file manager sidebar with dynamic label
             remote_name = self.daemon.current_remote or "Drive"
             clean_remote = remote_name.rstrip(":")
-            integrate_mount(self.daemon.mount_point, label=f"DucksDrive - {clean_remote}")
+            self.runner.submit(integrate_mount, self.daemon.mount_point, f"DucksDrive - {clean_remote}")
             
         elif state in ("unmounting", "stopped", "error"):
             # Stop polling (non-blocking, the GUI thread must not wait for the HTTP timeout)
@@ -141,7 +148,7 @@ class RcloneAppController(QObject):
 
             if state in ("stopped", "error"):
                 # Remove from file manager sidebar
-                clean_integration(self.daemon.mount_point)
+                self.runner.submit(clean_integration, self.daemon.mount_point)
 
     def _stop_poller(self, wait: bool = False) -> None:
         """Detaches and stops the current stats poller without blocking the GUI thread (unless wait=True)."""
@@ -173,6 +180,9 @@ class RcloneAppController(QObject):
         for poller in self._old_pollers:
             poller.wait(2000)
         self.tray.status_popup.shutdown_workers()
+        self.tray.shutdown_workers()
+        # Make sure the sidebar cleanup queued by the final 'stopped' state really finished
+        self.runner.wait_all()
 
     def shutdown(self) -> None:
         """Graceful shutdown: unmount and exit."""
@@ -181,7 +191,7 @@ class RcloneAppController(QObject):
         self._is_shutting_down = True
         logger.info("Shutting down application...")
         self._cleanup_threads()
-        self.daemon.stop()  # This also calls clean_integration via signal handler
+        self.daemon.stop()  # Blocking on purpose (exiting); also queues clean_integration via the state signal
         self.app.quit()
 
 
@@ -207,7 +217,8 @@ def main() -> None:
     
     # Retain lock_file reference in main scope
     lock_file = QLockFile(lock_file_path)
-    lock_file.setStaleLockTime(0)  # 0 = never consider a live lock stale by age
+    # Default stale lock time is 30s; avoid 0 to safely recover from hard reboots/crashes
+    lock_file.setStaleLockTime(30000)
     if not lock_file.tryLock(100):
         QMessageBox.critical(
             None,
@@ -216,8 +227,16 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # 2. System Tray Availability Check
-    if not QSystemTrayIcon.isSystemTrayAvailable():
+    # 2. System Tray Availability Check (with small retry loop during desktop startup)
+    tray_available = False
+    for _ in range(10):
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            tray_available = True
+            break
+        time.sleep(0.5)
+        app.processEvents()
+
+    if not tray_available:
         QMessageBox.critical(
             None,
             tr("Bandeja do Sistema Não Encontrada"),

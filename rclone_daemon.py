@@ -15,15 +15,16 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
-from PySide6.QtCore import QObject, Signal, QTimer, QCoreApplication
+from PySide6.QtCore import QObject, Signal, Slot, QTimer, QCoreApplication, QThread
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MOUNT_POINT = os.path.expanduser("~/CloudDrives")
 DEFAULT_RC_HOST = "127.0.0.1"
 DEFAULT_RC_PORT = 5572
+DEFAULT_STARTUP_TIMEOUT = 30.0
 xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 LOG_DIR = os.path.join(xdg_data, "ducksdrive")
 
@@ -199,6 +200,58 @@ def is_path_mounted(path: str) -> bool:
     return False
 
 
+def _teardown_mount(process: Optional["subprocess.Popen[str]"], mount_point: str) -> bool:
+    """
+    Blocking part of stopping a mount: unmount the FUSE path, terminate rclone
+    (10s grace period for the VFS cache flush, then SIGKILL) and run a final lazy unmount
+    if the path is still reported as mounted.
+
+    Takes up to ~20s in the worst case, so it must never run on the GUI thread
+    (except during application shutdown). Touches no Qt objects.
+
+    Returns:
+        bool: True if the first (non-lazy) unmount succeeded.
+    """
+    # 1. First attempt to unmount via FUSE tool
+    unmounted = unmount_fuse_path(mount_point, lazy=False)
+
+    # 2. Terminate the subprocess with extended timeout (10s) for safe VFS cache flushing
+    if process and process.poll() is None:
+        try:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                logger.warning("Process did not terminate within 10s, sending SIGKILL...")
+                process.kill()
+                process.wait(timeout=3)
+        except Exception as exc:
+            logger.warning("Error terminating rclone process: %s", exc)
+
+    # 3. Final fallback unmount if still reported as mounted
+    if is_path_mounted(mount_point):
+        unmount_fuse_path(mount_point, lazy=True)
+
+    return unmounted
+
+
+class _TeardownWorker(QThread):
+    """Runs `_teardown_mount` in a background thread so the GUI never freezes while unmounting."""
+
+    def __init__(self, process: Optional["subprocess.Popen[str]"], mount_point: str, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._process = process
+        self._mount_point = mount_point
+        self.unmounted = False
+
+    def run(self) -> None:
+        try:
+            self.unmounted = _teardown_mount(self._process, self._mount_point)
+        except Exception as exc:
+            logger.error("Unexpected error while tearing down mount: %s", exc)
+            self.unmounted = False
+
+
 class RcloneDaemon(QObject):
     """
     Manages the lifecycle of the `rclone mount` process, including
@@ -224,7 +277,14 @@ class RcloneDaemon(QObject):
         self.current_remote: Optional[str] = None
         self.state = "stopped"
         self._startup_timer: Optional[QTimer] = None
+        self._startup_start_time = 0.0
         self._log_file: Optional[Any] = None
+
+        # Asynchronous shutdown bookkeeping (see stop_async / stop)
+        self._stop_worker: Optional[_TeardownWorker] = None
+        self._stop_callbacks: List[Callable[[], None]] = []
+        self._last_stop_result = True
+        self._pending_start: Optional[tuple[str, Optional[List[str]], bool, float, int]] = None
 
         # Active health monitoring timer for background FUSE process
         self.health_timer = QTimer(self)
@@ -247,18 +307,32 @@ class RcloneDaemon(QObject):
             if self.process.poll() is not None:
                 if self.process.returncode == 0 and not is_path_mounted(self.mount_point):
                     logger.info("Mount point unmounted externally (clean exit). Updating state to stopped.")
-                    self.stop()
+                    self.stop_async()
                     return
                 logger.error("Rclone mount process died unexpectedly in background!")
-                # Update state BEFORE emitting: the error slot opens a modal dialog whose nested
-                # event loop would otherwise keep re-triggering this health check.
-                failed_remote = self.current_remote
-                self.stop()
-                self.current_remote = failed_remote
-                self._set_state("error")
-                self.mount_error.emit("Rclone mount process died unexpectedly.")
+                # stop_async() flips the state to 'unmounting' right away, so this check cannot re-trigger
+                # while the (background) teardown runs. The error state is applied once it finishes.
+                self._stop_then_fail("Rclone mount process died unexpectedly.")
 
-    def start(self, remote_name: str, extra_args: Optional[List[str]] = None, read_only: bool = False) -> bool:
+    def _stop_then_fail(self, message: str) -> None:
+        """Stops the mount in the background, then reports `message` as an error keeping the failed remote name."""
+        failed_remote = self.current_remote
+
+        def _report() -> None:
+            self.current_remote = failed_remote
+            self._set_state("error")
+            self.mount_error.emit(message)
+
+        self.stop_async(on_done=_report)
+
+    def start(
+        self,
+        remote_name: str,
+        extra_args: Optional[List[str]] = None,
+        read_only: bool = False,
+        startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
+        retry_on_timeout: int = 0,
+    ) -> bool:
         """
         Starts the `rclone mount` process for the specified remote.
 
@@ -266,12 +340,18 @@ class RcloneDaemon(QObject):
             remote_name: Name of the remote (e.g., 'gdrive' or 'gdrive:').
             extra_args: Optional additional CLI flags for rclone.
             read_only: If True, mounts the remote in read-only mode.
+            startup_timeout: Maximum seconds to wait for FUSE mount to become active.
+            retry_on_timeout: Number of automatic retries if mount times out (e.g. during system boot).
         Returns:
-            bool: True if mount started successfully, False otherwise.
+            bool: True if the mount was started (or queued behind a running shutdown), False otherwise.
         """
-        if self.is_running():
+        if self.state == "unmounting" or self.is_running():
+            # Never block the GUI waiting for the old mount to go away: shut it down in the
+            # background and start the requested remote as soon as that finishes.
             logger.info("Another mount is active. Stopping current mount before starting '%s'", remote_name)
-            self.stop()
+            self._pending_start = (remote_name, extra_args, read_only, startup_timeout, retry_on_timeout)
+            self.stop_async(on_done=self._run_pending_start)
+            return True
 
         if hasattr(self, "_startup_timer") and self._startup_timer:
             self._startup_timer.stop()
@@ -415,13 +495,31 @@ class RcloneDaemon(QObject):
                             log_content = lf.read()
                     except Exception:
                         pass
+
+                # Check if process exited due to temporary network/DNS unreadiness at boot
+                is_net_err = any(kw in log_content.lower() for kw in (
+                    "no such host", "network is unreachable", "connection refused",
+                    "dial tcp", "temporary failure in name resolution", "context deadline exceeded"
+                ))
+                if retry_on_timeout > 0 and is_net_err:
+                    logger.warning(
+                        "Rclone mount exited due to network unreadiness at startup. Retrying in 4s (%d retries left)...",
+                        retry_on_timeout,
+                    )
+                    def _retry_on_net() -> None:
+                        self.start(
+                            remote_name,
+                            extra_args=extra_args,
+                            read_only=read_only,
+                            startup_timeout=startup_timeout,
+                            retry_on_timeout=retry_on_timeout - 1,
+                        )
+                    self.stop_async(on_done=lambda: QTimer.singleShot(4000, _retry_on_net))
+                    return
+
                 err = f"Rclone mount exited during startup:\n{log_content.strip()}"
                 logger.error(err)
-                failed_remote = self.current_remote
-                self.stop()
-                self.current_remote = failed_remote
-                self._set_state("error")
-                self.mount_error.emit(err)
+                self._stop_then_fail(err)
                 return
 
             if is_path_mounted(self.mount_point):
@@ -429,50 +527,56 @@ class RcloneDaemon(QObject):
                 self._set_state("mounted")
                 return
 
-            if time.time() - self._startup_start_time > 10.0:
+            if time.time() - self._startup_start_time > startup_timeout:
                 startup_timer.stop()
-                err = f"Rclone mount timed out after 10s for path '{self.mount_point}'."
+                if retry_on_timeout > 0:
+                    logger.warning(
+                        "Rclone mount timed out after %.0fs for path '%s'. Network might be slow/connecting; retrying in 3s (%d retries left)...",
+                        startup_timeout,
+                        self.mount_point,
+                        retry_on_timeout,
+                    )
+                    def _retry_start() -> None:
+                        self.start(
+                            remote_name,
+                            extra_args=extra_args,
+                            read_only=read_only,
+                            startup_timeout=startup_timeout,
+                            retry_on_timeout=retry_on_timeout - 1,
+                        )
+                    self.stop_async(on_done=lambda: QTimer.singleShot(3000, _retry_start))
+                    return
+
+                err = f"Rclone mount timed out after {int(startup_timeout)}s for path '{self.mount_point}'."
                 logger.error(err)
-                failed_remote = self.current_remote
-                self.stop()
-                self.current_remote = failed_remote
-                self._set_state("error")
-                self.mount_error.emit(err)
+                self._stop_then_fail(err)
                 return
 
         startup_timer.timeout.connect(check_startup)
         startup_timer.start()
         return True
 
-    def stop(self) -> bool:
-        """
-        Safely stops the rclone mount process and unmounts the FUSE filesystem.
+    def _run_pending_start(self) -> None:
+        """Starts the remote queued by start() once the previous mount has been torn down."""
+        pending, self._pending_start = self._pending_start, None
+        if pending is not None:
+            remote_name, extra_args, read_only, startup_timeout, retry_on_timeout = pending
+            self.start(remote_name, extra_args, read_only, startup_timeout, retry_on_timeout)
 
-        Returns:
-            bool: True if stopped and unmounted cleanly.
-        """
-        if self.state in ("stopped", "unmounting"):
-            return True
-
+    def _begin_stop(self) -> tuple[Optional["subprocess.Popen[str]"], str]:
+        """GUI-thread half of stopping: flips the state and halts the startup timer."""
         self._set_state("unmounting")
         logger.info("Stopping rclone mount on %s", self.mount_point)
 
-        # 1. First attempt to unmount via FUSE tool
-        unmounted = unmount_fuse_path(self.mount_point, lazy=False)
+        if hasattr(self, "_startup_timer") and self._startup_timer:
+            self._startup_timer.stop()
+            self._startup_timer.deleteLater()
+            self._startup_timer = None
 
-        # 2. Terminate the subprocess with extended timeout (10s) for safe VFS cache flushing
-        if self.process and self.process.poll() is None:
-            try:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    logger.warning("Process did not terminate within 10s, sending SIGKILL...")
-                    self.process.kill()
-                    self.process.wait(timeout=3)
-            except Exception as exc:
-                logger.warning("Error terminating rclone process: %s", exc)
+        return self.process, self.mount_point
 
+    def _finish_stop(self, unmounted: bool) -> bool:
+        """GUI-thread half of stopping: releases resources, publishes 'stopped' and runs waiting callbacks."""
         # Close dedicated log file
         if self._log_file:
             try:
@@ -481,19 +585,80 @@ class RcloneDaemon(QObject):
                 pass
             self._log_file = None
 
-        # 3. Final fallback unmount if still reported as mounted
-        if is_path_mounted(self.mount_point):
-            unmount_fuse_path(self.mount_point, lazy=True)
-
-        if hasattr(self, "_startup_timer") and self._startup_timer:
-            self._startup_timer.stop()
-            self._startup_timer = None
-
         self.process = None
         self.rc_credentials = None
         self.current_remote = None
+        self._last_stop_result = unmounted
         self._set_state("stopped")
+
+        callbacks, self._stop_callbacks = self._stop_callbacks, []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                logger.exception("Error in stop callback")
         return unmounted
+
+    @Slot()
+    def _on_stop_worker_finished(self) -> None:
+        worker = self._stop_worker
+        if worker is None:
+            return  # already finalized by a blocking stop()
+        self._stop_worker = None
+        unmounted = worker.unmounted
+        worker.deleteLater()
+        self._finish_stop(unmounted)
+
+    def stop_async(self, on_done: Optional[Callable[[], None]] = None) -> None:
+        """
+        Stops the mount without blocking the GUI thread.
+
+        The unmount / rclone termination (up to ~20s) runs in a worker thread; the state
+        goes 'unmounting' immediately and 'stopped' when it finishes. `on_done` (if given)
+        is called on the GUI thread right after the 'stopped' state is published, so several
+        callers can safely wait on the same shutdown.
+        """
+        if self.state == "stopped":
+            if on_done is not None:
+                on_done()
+            return
+
+        if on_done is not None:
+            self._stop_callbacks.append(on_done)
+
+        if self.state == "unmounting":
+            return  # a shutdown is already running; on_done fires when it ends
+
+        process, mount_point = self._begin_stop()
+        worker = _TeardownWorker(process, mount_point, self)
+        self._stop_worker = worker
+        worker.finished.connect(self._on_stop_worker_finished)
+        worker.start()
+
+    def stop(self) -> bool:
+        """
+        Safely stops the rclone mount process and unmounts the FUSE filesystem, BLOCKING until done.
+
+        Only use it where blocking is intended (application shutdown, uninstall).
+        Everywhere else prefer `stop_async()`.
+
+        Returns:
+            bool: True if stopped and unmounted cleanly.
+        """
+        if self.state == "stopped":
+            return True
+
+        if self.state == "unmounting":
+            # An async shutdown is in flight: wait for it instead of starting another one.
+            worker = self._stop_worker
+            if worker is not None:
+                worker.wait()
+                self._on_stop_worker_finished()
+            return self._last_stop_result
+
+        process, mount_point = self._begin_stop()
+        unmounted = _teardown_mount(process, mount_point)
+        return self._finish_stop(unmounted)
 
     def is_running(self) -> bool:
         """Checks if the mount process is actively running and path is mounted."""

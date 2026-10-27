@@ -31,6 +31,8 @@ class StatsData:
     speed_str: str = "0.00 MB/s"
     eta_seconds: Optional[int] = None
     eta_str: str = "--:--:--"
+    # NOTE: rclone's `transfers` is the CUMULATIVE number of files already transferred,
+    # NOT the number of active ones. Never use it to decide whether a sync is in progress.
     transfers_count: int = 0
     total_bytes_transferred: int = 0
     total_bytes_str: str = "0 B"
@@ -38,6 +40,11 @@ class StatsData:
     status_text: str = "Disconnected"
     active_transfers: List[Dict[str, Any]] = field(default_factory=list)
     raw_data: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def has_active_transfers(self) -> bool:
+        """True only while rclone reports files in its `transferring` list."""
+        return self.is_online and len(self.active_transfers) > 0
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -124,7 +131,7 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 1.5) -> StatsData:
                 errors = int(data.get("errors", 0))
 
                 # Determine high-level descriptive status
-                if transfers > 0 or len(active_transfers) > 0:
+                if len(active_transfers) > 0:
                     status_text = f"Syncing ({len(active_transfers)} active) • {speed_str} • ETA {eta_str}"
                 elif errors > 0:
                     status_text = f"Idle with {errors} error(s)"
@@ -155,6 +162,34 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 1.5) -> StatsData:
         logger.debug("Unexpected error polling rclone stats: %s", exc)
 
     return StatsData(is_online=False, status_text="Drive not connected")
+
+
+def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]:
+    """
+    Returns how many files are still waiting in the VFS write-back (upload) queue
+    via `vfs/queue`, or None if the RC API could not be queried.
+
+    Blocking call: run it outside the GUI thread.
+    """
+    auth_str = f"{creds.user}:{creds.password}"
+    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+    req = urllib.request.Request(
+        url=f"{creds.url}/vfs/queue",
+        data=b"{}",
+        headers={
+            "Authorization": f"Basic {b64_auth}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            if response.status == 200:
+                data: Dict[str, Any] = json.loads(response.read().decode("utf-8"))
+                return len(data.get("queue") or [])
+    except Exception as exc:
+        logger.debug("Could not query vfs/queue: %s", exc)
+    return None
 
 
 class RcloneStatsPoller(QThread):
