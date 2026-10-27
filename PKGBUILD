@@ -6,7 +6,7 @@ pkgdesc="Lightweight Linux system tray client for Rclone FUSE mounts (Google Dri
 arch=('any')
 url="https://github.com/Patopatetico2-lab/ducksdrive"
 license=('MIT')
-depends=('python' 'python-pyside6' 'rclone' 'fuse3')
+depends=('python' 'python-pyside6' 'qt6-svg' 'rclone' 'fuse3')
 
 package() {
     install -dm755 "$pkgdir/usr/share/$pkgname"

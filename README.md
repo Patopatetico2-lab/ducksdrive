@@ -48,7 +48,7 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 ### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
 Instalação direta em 1 comando via Pacman:
 ```bash
-curl -LO https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.6/ducksdrive-1.0.6-1-any.pkg.tar.zst && sudo pacman -U ducksdrive-1.0.6-1-any.pkg.tar.zst && rm -f ducksdrive-1.0.6-1-any.pkg.tar.zst
+curl -Lo /tmp/ducksdrive-1.0.6-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.6/ducksdrive-1.0.6-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.0.6-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.0.6-1-any.pkg.tar.zst
 ```
 Ou compilando direto do repositório com `makepkg`:
 ```bash
@@ -58,7 +58,7 @@ git clone https://github.com/Patopatetico2-lab/ducksdrive.git && cd ducksdrive &
 ### Debian / Ubuntu / Linux Mint / Zorin OS (Nativo via .deb)
 Instalação direta em 1 comando via `apt`:
 ```bash
-curl -LO https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.6/ducksdrive_1.0.6-1_all.deb && sudo apt install ./ducksdrive_1.0.6-1_all.deb && rm -f ducksdrive_1.0.6-1_all.deb
+curl -Lo /tmp/ducksdrive_1.0.6-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.6/ducksdrive_1.0.6-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.0.6-1_all.deb && rm -f /tmp/ducksdrive_1.0.6-1_all.deb
 ```
 
 ### Pelo script (instala no sistema)
