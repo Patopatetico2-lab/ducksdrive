@@ -69,14 +69,16 @@ Dá para desinstalar clicando no botão **Desinstalar** dentro da tela de config
 <summary>English summary</summary>
 
 ### About
-A Python (PySide6/Qt) GUI for mounting and managing cloud drives via `rclone` and FUSE on Linux, similar to the Windows Google Drive client. Works on KDE Plasma, GNOME, XFCE, and other desktop environments.
+**DucksDrive** is a free, open-source Python (PySide6/Qt6) desktop client and GUI for mounting and managing cloud drives via `rclone` and `FUSE3` on Linux — bringing the Windows Google Drive for Desktop and RaiDrive experience to Linux. Works on KDE Plasma, GNOME, XFCE, Cinnamon, and other desktop environments.
+
+Designed as a modern, lightweight alternative to **Insync**, **RaiDrive**, **Rclone Browser**, and **RcloneTray** on Linux.
 
 ### Features
-- Floating tray panel with cloud storage quota, a pause/resume transfers button, per-file progress bars, transfer speed (MB/s), ETA, and a live speed history graph drawn with `QPainter`.
-- Mounts remotes in `~/CloudDrives/{remote_name}` and automatically adds sidebar shortcuts in Dolphin (backing up `user-places.xbel.bak`), Nautilus, Thunar, and Nemo.
-- Built-in setup dialog for OAuth clouds (Google Drive, OneDrive, Dropbox, Box, pCloud) and direct-credential providers (S3, Nextcloud/WebDAV, Mega, FTP, SFTP).
-- GUI settings for `--bwlimit`, `--vfs-cache-mode`, `--vfs-cache-max-size`, `--transfers`, language (PT-BR / EN-US), and autostart.
+- Floating system tray panel with cloud storage quota, a 1-click pause/resume transfers button, per-file progress bars, transfer speed (MB/s), ETA, and a live speed history graph drawn with `QPainter`.
+- Mounts remotes on demand in `~/CloudDrives/{remote_name}` and automatically adds sidebar shortcuts in **Dolphin (KDE)** (backing up `user-places.xbel.bak`), **Nautilus (GNOME)**, **Thunar (XFCE)**, and **Nemo (Cinnamon)**.
+- Built-in setup dialog for OAuth clouds (**Google Drive**, **Microsoft OneDrive**, **Dropbox**, **Box**, **pCloud**) and direct-credential providers (**Amazon S3 / MinIO / Wasabi**, **Nextcloud / WebDAV**, **Mega**, **FTP**, **SFTP**).
+- GUI settings for gamer-friendly bandwidth limiting (`--bwlimit`), SSD VFS cache control (`--vfs-cache-mode`, `--vfs-cache-max-size`), parallel transfers (`--transfers`), language (PT-BR / EN-US), and system autostart.
 
 ### Install
-Run `./install.sh` (supports `apt`, `pacman`, `dnf`, `zypper`) or grab the portable `.AppImage` from [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases).
+Run `./install.sh` (supports `apt`, `pacman`, `dnf`, `zypper`) or grab the portable `.AppImage` (with `rclone` bundled) from [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases).
 </details>

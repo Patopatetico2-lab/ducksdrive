@@ -3,17 +3,109 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DucksDrive — Suas Nuvens no Linux como Pastas Locais</title>
-  <meta name="description" content="Interface gráfica em Python (PySide6/Qt) para montar e gerenciar Google Drive, OneDrive, Dropbox, Mega, S3 e WebDAV pelo rclone no Linux com ícone na bandeja e gráfico em tempo real." />
-  <meta name="keywords" content="DucksDrive, rclone gui linux, google drive linux, onedrive linux, pyside6, kde dolphin cloud, gnome nautilus cloud, fuse3" />
+  <title>DucksDrive — Suas Nuvens no Linux como Pastas Locais (Rclone GUI)</title>
+  <meta name="description" content="Interface gráfica gratuita em Python (PySide6/Qt6) para montar e gerenciar Google Drive, OneDrive, Dropbox, Mega, S3 e WebDAV pelo rclone e FUSE3 no Linux com ícone na bandeja, gráfico em tempo real e atalho automático no Dolphin e Nautilus." />
+  <meta name="keywords" content="DucksDrive, rclone gui linux, google drive linux, onedrive linux, dropbox linux, mega linux, insync alternative linux, raidrive linux alternative, rclone browser alternative, rclonetray, pyside6, qt6, kde dolphin cloud, gnome nautilus cloud, fuse3, mount cloud drive linux" />
   <meta name="author" content="Patopatetico2-lab" />
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+
+  <!-- Canonical & Multilingual Alternates -->
+  <link rel="canonical" href="https://patopatetico2-lab.github.io/ducksdrive/" />
+  <link rel="alternate" hreflang="pt-BR" href="https://patopatetico2-lab.github.io/ducksdrive/" />
+  <link rel="alternate" hreflang="en" href="https://patopatetico2-lab.github.io/ducksdrive/?lang=en" />
+  <link rel="alternate" hreflang="x-default" href="https://patopatetico2-lab.github.io/ducksdrive/" />
+  <link rel="help" type="text/plain" title="LLMs Documentation" href="https://patopatetico2-lab.github.io/ducksdrive/llms.txt" />
 
   <!-- Open Graph / Social -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="DucksDrive — Cliente de Nuvem para Linux (GUI Rclone)" />
-  <meta property="og:description" content="Ícone na bandeja, painel flutuante com gráfico de velocidade em tempo real e integração automática com Dolphin, Nautilus, Thunar e Nemo." />
+  <meta property="og:site_name" content="DucksDrive" />
+  <meta property="og:url" content="https://patopatetico2-lab.github.io/ducksdrive/" />
+  <meta property="og:locale" content="pt_BR" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta property="og:title" content="DucksDrive — Cliente de Nuvem para Linux (GUI Rclone em Qt6)" />
+  <meta property="og:description" content="Monte Google Drive, OneDrive, Dropbox, Mega, S3 e WebDAV como pastas nativas no Linux. Ícone na bandeja, gráfico de velocidade em tempo real e atalho automático no Dolphin, Nautilus, Thunar e Nemo." />
   <meta property="og:image" content="https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png" />
   <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="DucksDrive — Cloud Drive Client & Rclone GUI for Linux" />
+  <meta name="twitter:description" content="Mount Google Drive, OneDrive, Dropbox, Mega, S3 & WebDAV as native folders on Linux with a live transfer speed graph and file manager shortcuts." />
+  <meta name="twitter:image" content="https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png" />
+
+  <!-- Structured Data (Schema.org JSON-LD for Search Engines & AI Assistants) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "name": "DucksDrive",
+        "alternateName": ["DucksDrive Linux", "DucksDrive Rclone GUI"],
+        "url": "https://patopatetico2-lab.github.io/ducksdrive/",
+        "downloadUrl": "https://github.com/Patopatetico2-lab/ducksdrive/releases",
+        "codeRepository": "https://github.com/Patopatetico2-lab/ducksdrive",
+        "applicationCategory": "UtilitiesApplication",
+        "applicationSubCategory": "Cloud Storage Client & Rclone GUI",
+        "operatingSystem": "Linux (KDE Plasma, GNOME, XFCE, Cinnamon, Debian, Ubuntu, Arch Linux, Fedora, openSUSE)",
+        "softwareRequirements": "rclone, fuse3",
+        "programmingLanguage": "Python (PySide6 / Qt6)",
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "author": {
+          "@type": "Organization",
+          "name": "Patopatetico2-lab",
+          "url": "https://github.com/Patopatetico2-lab"
+        },
+        "description": "Free and open-source Python (PySide6/Qt6) GUI for mounting and managing cloud storage (Google Drive, OneDrive, Dropbox, Mega, Box, pCloud, Amazon S3, Nextcloud/WebDAV, SFTP) via rclone and FUSE3 on Linux. Features a system tray panel with live speed chart, quota bar, pause/resume transfers, gamer bandwidth limiter (--bwlimit), VFS SSD cache control, and automatic sidebar shortcuts in Dolphin, Nautilus, Thunar, and Nemo.",
+        "screenshot": [
+          "https://patopatetico2-lab.github.io/ducksdrive/assets/demo.gif",
+          "https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png",
+          "https://patopatetico2-lab.github.io/ducksdrive/assets/new-remote-oauth.png",
+          "https://patopatetico2-lab.github.io/ducksdrive/assets/settings-dialog.png"
+        ],
+        "featureList": [
+          "Mount Google Drive, OneDrive, Dropbox, Mega, Box, pCloud, S3, Nextcloud/WebDAV, FTP, and SFTP as native local folders in ~/CloudDrives",
+          "System tray floating panel with cloud quota, per-file progress, ETA, 1-click pause/resume, and real-time QPainter speed graph",
+          "Automatic sidebar shortcuts in KDE Dolphin (with user-places.xbel.bak backup), GNOME Nautilus, XFCE Thunar, and Cinnamon Nemo",
+          "Gamer-friendly bandwidth limit (--bwlimit) and SSD VFS cache size controls (--vfs-cache-max-size)",
+          "Portable AppImage with bundled rclone binary or automatic distro installer for apt, pacman, dnf, and zypper"
+        ]
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Qual a melhor interface gráfica (GUI) para usar Google Drive e OneDrive no Linux?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "O DucksDrive é uma interface gráfica gratuita e open-source em PySide6 (Qt6) para Linux que monta Google Drive, OneDrive, Dropbox, Mega, pCloud, S3 e Nextcloud como pastas locais via rclone e FUSE3. Ele traz a experiência do cliente do Google Drive do Windows e do RaiDrive para o Linux, com ícone na bandeja, gráfico de velocidade em tempo real e atalhos automáticos no Dolphin (KDE) e Nautilus (GNOME)."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What is the best free alternative to Insync, RaiDrive, and Rclone Browser on Linux?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "DucksDrive is a modern, free, and open-source alternative to Insync, RaiDrive, Rclone Browser, and RcloneTray on Linux. Built with Python and PySide6 (Qt6) over rclone and FUSE3, it mounts cloud drives in ~/CloudDrives with automatic sidebar shortcuts in Dolphin, Nautilus, Thunar, and Nemo, a frameless system tray popup with a live transfer speed graph, VFS SSD cache management, and bandwidth limiting (--bwlimit)."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Como limitar a velocidade de upload da nuvem no Linux para não dar lag em jogos?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Na janela de configurações do DucksDrive, você pode definir o limite de banda (--bwlimit, por exemplo 10M) ou pausar as transferências com 1 clique direto no painel da bandeja do sistema, evitando saturar a rede durante partidas online."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
 
   <!-- Inline SVG Favicon from icon.svg -->
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='18' cy='48' r='8' fill='%232980b9'/%3E%3Ccircle cx='28' cy='40' r='12' fill='%232980b9'/%3E%3Ccircle cx='44' cy='44' r='10' fill='%232980b9'/%3E%3Ccircle cx='54' cy='48' r='8' fill='%232980b9'/%3E%3Crect x='18' y='44' width='36' height='12' fill='%232980b9'/%3E%3Cellipse cx='18' cy='38' rx='5' ry='10' fill='%23f39c12' transform='rotate(30 18 38)'/%3E%3Cellipse cx='46' cy='38' rx='5' ry='10' fill='%23f39c12' transform='rotate(-30 46 38)'/%3E%3Ccircle cx='32' cy='36' r='15' fill='%23f1c40f'/%3E%3Ccircle cx='32' cy='24' r='14' fill='%23f1c40f'/%3E%3Cpath d='M 32 11 C 32 4 25 4 25 8 C 25 11 30 12 32 12' fill='%23f39c12'/%3E%3Cpath d='M 32 11 C 32 2 39 3 39 7 C 39 10 34 11 32 12' fill='%23f39c12'/%3E%3Ccircle cx='26' cy='22' r='2.5' fill='%232c3e50'/%3E%3Ccircle cx='38' cy='22' r='2.5' fill='%232c3e50'/%3E%3Ccircle cx='25' cy='21' r='1' fill='%23ffffff'/%3E%3Ccircle cx='37' cy='21' r='1' fill='%23ffffff'/%3E%3Ccircle cx='21' cy='26' r='3' fill='%23e74c3c' opacity='0.3'/%3E%3Ccircle cx='43' cy='26' r='3' fill='%23e74c3c' opacity='0.3'/%3E%3Crect x='27' y='24' width='10' height='6' rx='3' fill='%23e67e22'/%3E%3Crect x='28' y='25' width='4' height='1.5' rx='0.75' fill='%23ffffff' opacity='0.4'/%3E%3Ccircle cx='16' cy='50' r='10' fill='%233498db'/%3E%3Ccircle cx='28' cy='42' r='14' fill='%233498db'/%3E%3Ccircle cx='42' cy='46' r='12' fill='%233498db'/%3E%3Ccircle cx='52' cy='52' r='8' fill='%233498db'/%3E%3Crect x='16' y='46' width='36' height='14' fill='%233498db'/%3E%3C/svg%3E" />
@@ -602,6 +694,63 @@
       margin-bottom: 20px;
     }
 
+    /* FAQ Section */
+    .faq-list {
+      max-width: 860px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .faq-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 20px 24px;
+      transition: all 0.2s ease;
+    }
+
+    .faq-item:hover,
+    .faq-item[open] {
+      border-color: var(--border-highlight);
+      background: var(--bg-card-hover);
+    }
+
+    .faq-item summary {
+      font-weight: 700;
+      font-size: 1.05rem;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .faq-item summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .faq-item summary::after {
+      content: "+";
+      font-size: 1.3rem;
+      color: var(--accent-blue);
+      font-weight: 700;
+      transition: transform 0.2s ease;
+    }
+
+    .faq-item[open] summary::after {
+      content: "−";
+    }
+
+    .faq-item p {
+      margin-top: 12px;
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.65;
+    }
+
     /* Footer */
     footer {
       border-top: 1px solid var(--border-subtle);
@@ -659,6 +808,7 @@
       <nav class="nav-links">
         <a href="#features" class="hide-mobile" data-i18n="nav_features">Recursos</a>
         <a href="#install" class="hide-mobile" data-i18n="nav_install">Instalação</a>
+        <a href="#faq" class="hide-mobile" data-i18n="nav_faq">FAQ</a>
         <a href="https://github.com/Patopatetico2-lab/ducksdrive" target="_blank" rel="noopener">GitHub ↗</a>
         <button class="lang-btn" id="langToggle" type="button" aria-label="Alternar idioma">EN / PT</button>
       </nav>
@@ -941,6 +1091,41 @@
     </div>
   </section>
 
+  <!-- FAQ Section -->
+  <section class="section" id="faq" style="padding-top: 20px;">
+    <div class="container">
+      <div class="section-header">
+        <h2 data-i18n="faq_heading">Perguntas Frequentes</h2>
+        <p data-i18n="faq_subheading">
+          Dúvidas comuns sobre montagem de nuvens via Rclone + FUSE3 no Linux.
+        </p>
+      </div>
+
+      <div class="faq-list">
+        <details class="faq-item" open>
+          <summary data-i18n="faq1_q">Qual a diferença do DucksDrive para o Insync, RaiDrive e Rclone Browser?</summary>
+          <p data-i18n="faq1_a">
+            O <strong>DucksDrive</strong> é 100% gratuito e open-source (diferente do Insync) e traz a experiência moderna do cliente do Google Drive do Windows e do RaiDrive para o Linux. Ao contrário de interfaces antigas como Rclone Browser ou RcloneTray, ele é feito em <strong>PySide6 (Qt6)</strong> com painel flutuante na bandeja, gráfico de velocidade em tempo real (<code>QPainter</code>), pausa de envios em 1 clique e criação automática de atalhos no Dolphin, Nautilus, Thunar e Nemo.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary data-i18n="faq2_q">Os arquivos ocupam espaço no meu SSD ou ficam na nuvem?</summary>
+          <p data-i18n="faq2_a">
+            As nuvens são montadas sob demanda via <strong>FUSE3</strong> em <code>~/CloudDrives/{remoto}</code>. Você navega pelos arquivos como uma pasta local sem precisar baixar toda a nuvem. O cache inteligente VFS usa apenas o espaço máximo que você definir nas configurações (ex: <code>10G</code> em <code>--vfs-cache-max-size</code>).
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary data-i18n="faq3_q">Como evitar que o upload de arquivos grandes dê lag em jogos online?</summary>
+          <p data-i18n="faq3_a">
+            Na tela de Configurações você pode ativar o limite de banda (<code>--bwlimit</code>, como <code>10M</code>) a qualquer momento ou pausar todas as transferências com um clique direto no ícone da bandeja do sistema.
+          </p>
+        </details>
+      </div>
+    </div>
+  </section>
+
   <!-- Footer -->
   <footer>
     <div class="container">
@@ -990,6 +1175,7 @@
       pt: {
         nav_features: 'Recursos',
         nav_install: 'Instalação',
+        nav_faq: 'FAQ',
         hero_badge: 'Open Source • PySide6 (Qt6) + Rclone + FUSE3',
         hero_title: 'Suas nuvens no Linux como <span class="gradient-text">pastas nativas</span>.',
         hero_subtitle: 'A experiência do cliente do Google Drive do Windows no seu Linux: ícone na bandeja do sistema, painel flutuante com gráfico de velocidade em tempo real e atalho automático no Dolphin, Nautilus, Thunar e Nemo.',
@@ -1025,12 +1211,21 @@
         appimage_title: 'Prefere usar AppImage?',
         appimage_desc: 'Você também pode baixar o pacote portátil <strong>DucksDrive-x86_64.AppImage</strong> que já traz o binário do rclone embutido, ou gerar o seu próprio AppImage localmente com um comando:',
         appimage_btn: 'Ver Releases no GitHub ↗',
+        faq_heading: 'Perguntas Frequentes',
+        faq_subheading: 'Dúvidas comuns sobre montagem de nuvens via Rclone + FUSE3 no Linux.',
+        faq1_q: 'Qual a diferença do DucksDrive para o Insync, RaiDrive e Rclone Browser?',
+        faq1_a: 'O <strong>DucksDrive</strong> é 100% gratuito e open-source (diferente do Insync) e traz a experiência moderna do cliente do Google Drive do Windows e do RaiDrive para o Linux. Ao contrário de interfaces antigas como Rclone Browser ou RcloneTray, ele é feito em <strong>PySide6 (Qt6)</strong> com painel flutuante na bandeja, gráfico de velocidade em tempo real (<code>QPainter</code>), pausa de envios em 1 clique e criação automática de atalhos no Dolphin, Nautilus, Thunar e Nemo.',
+        faq2_q: 'Os arquivos ocupam espaço no meu SSD ou ficam na nuvem?',
+        faq2_a: 'As nuvens são montadas sob demanda via <strong>FUSE3</strong> em <code>~/CloudDrives/{remoto}</code>. Você navega pelos arquivos como uma pasta local sem precisar baixar toda a nuvem. O cache inteligente VFS usa apenas o espaço máximo que você definir nas configurações (ex: <code>10G</code> em <code>--vfs-cache-max-size</code>).',
+        faq3_q: 'Como evitar que o upload de arquivos grandes dê lag em jogos online?',
+        faq3_a: 'Na tela de Configurações você pode ativar o limite de banda (<code>--bwlimit</code>, como <code>10M</code>) a qualquer momento ou pausar todas as transferências com um clique direto no ícone da bandeja do sistema.',
         footer_text: 'Software Livre desenvolvido para a comunidade Linux.',
         footer_issues: 'Reportar Bug / Sugestão'
       },
       en: {
         nav_features: 'Features',
         nav_install: 'Installation',
+        nav_faq: 'FAQ',
         hero_badge: 'Open Source • PySide6 (Qt6) + Rclone + FUSE3',
         hero_title: 'Your clouds on Linux as <span class="gradient-text">native local folders</span>.',
         hero_subtitle: 'The Windows Google Drive desktop experience on Linux: system tray icon, floating transfer panel with a live speed chart, and automatic sidebar shortcuts in Dolphin, Nautilus, Thunar, and Nemo.',
@@ -1066,6 +1261,14 @@
         appimage_title: 'Prefer AppImage?',
         appimage_desc: 'Grab the portable <strong>DucksDrive-x86_64.AppImage</strong> with rclone bundled inside, or build your own AppImage locally with a single command:',
         appimage_btn: 'View GitHub Releases ↗',
+        faq_heading: 'Frequently Asked Questions',
+        faq_subheading: 'Common questions about mounting cloud storage via Rclone + FUSE3 on Linux.',
+        faq1_q: 'How does DucksDrive compare to Insync, RaiDrive, and Rclone Browser?',
+        faq1_a: '<strong>DucksDrive</strong> is 100% free and open-source (unlike Insync) and brings the Windows Google Drive / RaiDrive desktop experience to Linux. Unlike legacy tools such as Rclone Browser or RcloneTray, it is built with <strong>PySide6 (Qt6)</strong> and features a frameless system tray popup, a live <code>QPainter</code> transfer speed chart, 1-click pause/resume, and automatic sidebar shortcuts in Dolphin, Nautilus, Thunar, and Nemo.',
+        faq2_q: 'Do cloud files take up space on my SSD?',
+        faq2_a: 'Cloud remotes are mounted on demand via <strong>FUSE3</strong> at <code>~/CloudDrives/{remote}</code>. You browse your cloud like a local folder without downloading everything upfront. The smart VFS cache only uses up to the maximum SSD limit you configure (e.g. <code>10G</code> via <code>--vfs-cache-max-size</code>).',
+        faq3_q: 'How can I prevent large cloud uploads from causing lag in online games?',
+        faq3_a: 'In the Settings dialog you can set a bandwidth limit (<code>--bwlimit</code>, such as <code>10M</code>) anytime, or pause active transfers in a single click directly from the system tray popup.',
         footer_text: 'Free & Open Source Software built for the Linux community.',
         footer_issues: 'Report Bug / Feedback'
       }
@@ -1074,8 +1277,8 @@
     let currentLang = 'pt';
     const langToggle = document.getElementById('langToggle');
 
-    langToggle.addEventListener('click', () => {
-      currentLang = currentLang === 'pt' ? 'en' : 'pt';
+    function applyLanguage(lang) {
+      currentLang = lang === 'en' ? 'en' : 'pt';
       document.documentElement.lang = currentLang === 'pt' ? 'pt-BR' : 'en-US';
       const dict = translations[currentLang];
       document.querySelectorAll('[data-i18n]').forEach((el) => {
@@ -1084,7 +1287,16 @@
           el.innerHTML = dict[key];
         }
       });
+    }
+
+    langToggle.addEventListener('click', () => {
+      applyLanguage(currentLang === 'pt' ? 'en' : 'pt');
     });
+
+    // Auto-select English when accessed via ?lang=en
+    if (new URLSearchParams(window.location.search).get('lang') === 'en') {
+      applyLanguage('en');
+    }
   </script>
 </body>
 </html>
