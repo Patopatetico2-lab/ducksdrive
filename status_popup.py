@@ -321,33 +321,20 @@ class StatusPopup(QWidget):
         # 2. Quota Section
         quota_layout = QVBoxLayout()
         quota_layout.setSpacing(2)
-        self.quota_label = QLabel(tr("Calculando espaço..."))
+        self.quota_label = QLabel(tr("Desconectado"))
         self.quota_label.setStyleSheet("font-size: 8pt; color: #7f8c8d;")
         self.quota_bar = QProgressBar()
         self.quota_bar.setFixedHeight(6)
         self.quota_bar.setTextVisible(False)
         self.quota_bar.setStyleSheet("QProgressBar::chunk { background-color: #3498db; }")
+        self.quota_bar.hide()
         quota_layout.addWidget(self.quota_label)
         quota_layout.addWidget(self.quota_bar)
         
         main_layout.addLayout(quota_layout)
         
-        # Pause button
-        self.btn_pause = QPushButton(tr("Pausar Transferências"))
-        self.btn_pause.setStyleSheet("""
-            QPushButton {
-                background-color: #f39c12;
-                color: white;
-                border: none;
-                padding: 6px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 9pt;
-            }
-            QPushButton:hover {
-                background-color: #e67e22;
-            }
-        """)
+        # Pause / Connect button
+        self.btn_pause = QPushButton(tr("Conectar / Reconectar"))
         self.btn_pause.clicked.connect(self._toggle_pause)
         main_layout.addWidget(self.btn_pause)
 
@@ -526,27 +513,40 @@ class StatusPopup(QWidget):
         self.btn_open.setText(tr("Abrir Pasta Local"))
         if self.daemon.is_running():
             self.status_badge.setText(tr("● Online"))
+            if self._last_quota_update == 0:
+                self.quota_label.setText(tr("Calculando espaço..."))
+            else:
+                self._fetch_quota()
         else:
             self.status_badge.setText(tr("● Offline"))
-        if self._last_quota_update == 0:
-            self.quota_label.setText(tr("Calculando espaço..."))
-        else:
-            self._fetch_quota()
+            if self.daemon.state == "starting":
+                self.quota_label.setText(tr("Calculando espaço..."))
+            else:
+                self.quota_label.setText(tr("Desconectado"))
         if self.isVisible():
             self.chart_widget.update()
 
     @Slot(str)
     def _on_daemon_state_changed(self, state: str) -> None:
-        """Resets pause state and quota cache when unmounting or switching cloud remotes."""
+        """Resets pause state, quota cache, and popup widgets when unmounting or switching cloud remotes."""
         if state in ("stopped", "unmounting", "starting", "error") or self.daemon.current_remote != self._quota_remote:
             self.is_paused = False
-            self._apply_pause_button_ui()
             self._last_quota_update = 0
-            self.quota_label.setText(tr("Calculando espaço..."))
-            if state in ("stopped", "unmounting", "starting", "error"):
+            if state in ("stopped", "unmounting", "error"):
                 self._quota_remote = None
+                self._latest_stats = StatsData(is_online=False, status_text="Drive not connected")
+                self._render_stats(self._latest_stats)
+            elif state == "starting":
+                self._quota_remote = None
+                self.quota_label.setText(tr("Calculando espaço..."))
+                self.quota_bar.setValue(0)
+                self.quota_bar.hide()
+                self.btn_open.setEnabled(False)
+                self._apply_pause_button_ui()
             else:
                 self._quota_remote = self.daemon.current_remote
+                self.quota_label.setText(tr("Calculando espaço..."))
+                self._apply_pause_button_ui()
                 if self.isVisible():
                     self._fetch_quota()
 
@@ -587,11 +587,45 @@ class StatusPopup(QWidget):
         self._last_quota_update = time.time()
 
     def _apply_pause_button_ui(self) -> None:
-        """Synchronizes the pause button label and color with `self.is_paused`."""
+        """Synchronizes the action button label, enabled state, and color with daemon and pause state."""
+        disabled_bg = "#2d3238" if self.is_dark else "#ecf0f1"
+        disabled_fg = "#a1a9b1" if self.is_dark else "#7f8c8d"
+
+        if not self.daemon.is_running():
+            if self.daemon.state == "starting":
+                self.btn_pause.setText(tr("Conectando..."))
+                self.btn_pause.setEnabled(False)
+            elif self.daemon.state == "unmounting":
+                self.btn_pause.setText(tr("Desconectando..."))
+                self.btn_pause.setEnabled(False)
+            else:
+                self.btn_pause.setText(tr("Conectar / Reconectar"))
+                self.btn_pause.setEnabled(True)
+            self.btn_pause.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #3498db;
+                    color: white;
+                    border: none;
+                    padding: 6px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                }}
+                QPushButton:hover {{
+                    background-color: #2980b9;
+                }}
+                QPushButton:disabled {{
+                    background-color: {disabled_bg};
+                    color: {disabled_fg};
+                }}
+            """)
+            return
+
+        self.btn_pause.setEnabled(True)
         if self.is_paused:
             self.btn_pause.setText(tr("Retomar Transferências"))
-            self.btn_pause.setStyleSheet("""
-                QPushButton {
+            self.btn_pause.setStyleSheet(f"""
+                QPushButton {{
                     background-color: #27ae60;
                     color: white;
                     border: none;
@@ -599,15 +633,19 @@ class StatusPopup(QWidget):
                     border-radius: 4px;
                     font-weight: bold;
                     font-size: 9pt;
-                }
-                QPushButton:hover {
+                }}
+                QPushButton:hover {{
                     background-color: #2ecc71;
-                }
+                }}
+                QPushButton:disabled {{
+                    background-color: {disabled_bg};
+                    color: {disabled_fg};
+                }}
             """)
         else:
             self.btn_pause.setText(tr("Pausar Transferências"))
-            self.btn_pause.setStyleSheet("""
-                QPushButton {
+            self.btn_pause.setStyleSheet(f"""
+                QPushButton {{
                     background-color: #f39c12;
                     color: white;
                     border: none;
@@ -615,16 +653,51 @@ class StatusPopup(QWidget):
                     border-radius: 4px;
                     font-weight: bold;
                     font-size: 9pt;
-                }
-                QPushButton:hover {
+                }}
+                QPushButton:hover {{
                     background-color: #e67e22;
-                }
+                }}
+                QPushButton:disabled {{
+                    background-color: {disabled_bg};
+                    color: {disabled_fg};
+                }}
             """)
+
+    def _reconnect_from_popup(self) -> None:
+        """Connects or reconnects the last/current cloud remote directly from the status panel."""
+        if self.daemon.state in ("starting", "unmounting"):
+            return
+        from rclone_config import list_remote_names
+        from rclone_settings import load_config
+
+        self.btn_pause.setEnabled(False)
+
+        def _on_remotes(remotes: Any) -> None:
+            if self.daemon.is_running() or self.daemon.state in ("starting", "unmounting"):
+                return
+            names = remotes if isinstance(remotes, list) else []
+            if not names:
+                self._apply_pause_button_ui()
+                return
+            current = (self.daemon.current_remote or "").rstrip(":")
+            last = str(load_config().get("last_remote") or "").rstrip(":")
+            if current and current in names:
+                target = current
+            elif last and last in names:
+                target = last
+            else:
+                target = names[0]
+            self.daemon.start(target)
+
+        self._pause_runner.submit(list_remote_names, callback=_on_remotes)
 
     def _toggle_pause(self) -> None:
         from rclone_settings import load_config
 
-        if not self.daemon.is_running() or not self.daemon.rc_credentials:
+        if not self.daemon.is_running():
+            self._reconnect_from_popup()
+            return
+        if not self.daemon.rc_credentials:
             return
 
         target_pause = not self.is_paused
@@ -727,13 +800,18 @@ class StatusPopup(QWidget):
             else:
                 clear_transfers()
         else:
+            self.title_label.setText("<b>DucksDrive</b>")
             self.status_badge.setText(tr("● Offline"))
             self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
+            self.quota_label.setText(tr("Desconectado"))
+            self.quota_bar.setValue(0)
+            self.quota_bar.hide()
             self._last_quota_update = 0
             clear_transfers()
 
+        self._apply_pause_button_ui()
         self.btn_open.setEnabled(self.daemon.is_running())
 
     def _open_cloud_folder(self) -> None:

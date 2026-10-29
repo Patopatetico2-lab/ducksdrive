@@ -190,7 +190,11 @@ _TRANSLATIONS = {
         "Tema do Painel:": "Panel Theme:",
         "Automático (Sistema)": "Automatic (System)",
         "Escuro (Dark)": "Dark",
-        "Claro (Light)": "Light"
+        "Claro (Light)": "Light",
+        "Sincronizando...": "Syncing...",
+        "Desconectar": "Disconnect",
+        "Remover": "Remove",
+        "Conectar / Reconectar": "Connect / Reconnect"
     },
     "pt_BR": {
         "Rclone mount process died unexpectedly.": "O processo de montagem do Rclone encerrou inesperadamente.",

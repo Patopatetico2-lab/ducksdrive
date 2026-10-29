@@ -26,7 +26,6 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
-    QInputDialog,
     QLineEdit,
     QMenu,
     QMessageBox,
@@ -46,7 +45,7 @@ from rclone_config import (
     delete_remote
 )
 from rclone_daemon import RcloneDaemon, is_path_mounted
-from rclone_settings import load_config, save_last_remote
+from rclone_settings import apply_app_theme, get_theme_stylesheet, load_config, save_last_remote
 from rclone_stats import StatsData, fetch_vfs_queue, set_rc_bwlimit
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
@@ -190,10 +189,23 @@ class NewRemoteDialog(QDialog):
         layout.addLayout(form)
         
         self.btn_create = QPushButton(tr("Iniciar Autorização no Browser"))
+        self.btn_create.setStyleSheet(
+            "background-color: #3498db; color: white; border: none; padding: 8px 14px; border-radius: 4px; font-weight: bold;"
+        )
         self.btn_create.clicked.connect(self.accept)
         layout.addWidget(self.btn_create)
 
         self._on_provider_changed(0)
+        self.apply_theme(str(load_config().get("theme") or "auto"))
+
+    def apply_theme(self, theme_pref: Optional[str] = None) -> None:
+        """Applies the active Light or Dark QSS theme to the NewRemoteDialog."""
+        active_pref = theme_pref or str(load_config().get("theme") or "auto")
+        apply_app_theme(active_pref, self)
+        self.setStyleSheet(get_theme_stylesheet(active_pref))
+        self.btn_create.setStyleSheet(
+            "background-color: #3498db; color: white; border: none; padding: 8px 14px; border-radius: 4px; font-weight: bold;"
+        )
 
     def _on_provider_changed(self, index: int) -> None:
         rtype = self.type_combo.currentData()
@@ -358,10 +370,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_panel.triggered.connect(self._show_transfer_panel)
         self._menu.addAction(self.action_panel)
 
-        self.action_connect = QAction(tr("Selecionar Nuvem para Conectar..."), self)
-        self.action_connect.triggered.connect(self._show_mount_selector)
-        self._menu.addAction(self.action_connect)
-
         self._menu.addSeparator()
         
         # Bloco 3 (Gerenciamento): Submenu dinâmico de Nuvens
@@ -381,11 +389,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._menu.addAction(self.action_exit)
 
         self.setContextMenu(self._menu)
+        self.apply_theme(str(load_config().get("theme") or "auto"))
         
         self.daemon.state_changed.connect(self._on_state_changed)
         self.daemon.mount_error.connect(self._on_mount_error)
         
         self.activated.connect(self._on_activated)
+
+    def apply_theme(self, theme_pref: Optional[str] = None) -> None:
+        """Applies the active theme globally to QApplication, the tray menus, and the status popup."""
+        active_pref = theme_pref or str(load_config().get("theme") or "auto")
+        apply_app_theme(active_pref)
+        qss = get_theme_stylesheet(active_pref)
+        self._menu.setStyleSheet(qss)
+        self.menu_remotes.setStyleSheet(qss)
+        self.status_popup.apply_theme(active_pref)
 
     def refresh_remotes(self, callback: Optional[Callable[[list[str]], None]] = None) -> None:
         """
@@ -436,9 +454,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 label = f"✓ {remote} (" + tr("Ativo") + ")" if is_active else remote
                 remote_menu = QMenu(label, self.menu_remotes)
                 if is_active:
-                    action_unmount_local = QAction(tr("Desmontar"), remote_menu)
-                    action_unmount_local.triggered.connect(self._unmount_current)
-                    remote_menu.addAction(action_unmount_local)
+                    action_disconnect = QAction(tr("Desconectar"), remote_menu)
+                    action_disconnect.triggered.connect(self._unmount_current)
+                    remote_menu.addAction(action_disconnect)
                 else:
                     action_mount = QAction(tr("Montar"), remote_menu)
                     action_mount.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=False))
@@ -447,7 +465,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     action_mount_ro = QAction(tr("Montar (Somente Leitura)"), remote_menu)
                     action_mount_ro.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=True))
                     remote_menu.addAction(action_mount_ro)
-                
+
+                remote_menu.addSeparator()
+                action_delete_remote = QAction(tr("Remover"), remote_menu)
+                action_delete_remote.triggered.connect(lambda checked=False, r=remote: self._request_delete_remote(r))
+                remote_menu.addAction(action_delete_remote)
+
                 self.menu_remotes.addMenu(remote_menu)
             self.menu_remotes.addSeparator()
         else:
@@ -456,24 +479,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self.menu_remotes.addAction(empty_action)
             self.menu_remotes.addSeparator()
 
-        self.action_unmount = QAction(tr("Desconectar Atual"), self.menu_remotes)
-        self.action_unmount.triggered.connect(self._unmount_current)
-        self.action_unmount.setEnabled(self.daemon.is_running())
-        self.menu_remotes.addAction(self.action_unmount)
-
         self.action_new = QAction(tr("Adicionar Nova Nuvem..."), self.menu_remotes)
         self.action_new.triggered.connect(self._show_new_remote_dialog)
         self.menu_remotes.addAction(self.action_new)
-
-        self.action_delete = QAction(tr("Remover Nuvem..."), self.menu_remotes)
-        self.action_delete.triggered.connect(self._show_delete_selector)
-        self.menu_remotes.addAction(self.action_delete)
 
     def retranslate_ui(self) -> None:
         """Updates all tray menu labels and the floating status popup in real time when language changes."""
         self.action_open.setText(tr("Abrir Pasta Local"))
         self.action_panel.setText(tr("Abrir Painel de Transferências"))
-        self.action_connect.setText(tr("Selecionar Nuvem para Conectar..."))
         self.menu_remotes.setTitle(tr("Gerenciar Nuvens"))
         self.action_settings.setText(tr("Configurações..."))
         self.action_exit.setText(tr("Sair"))
@@ -499,10 +512,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog = SettingsDialog(parent=None, daemon=self.daemon)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         if dialog.exec() == QDialog.Accepted:
+            self.apply_theme(str(dialog.config.get("theme") or "auto"))
             if dialog.language_changed:
                 self.retranslate_ui()
-            if dialog.theme_changed:
-                self.status_popup.apply_theme(str(dialog.config.get("theme") or "auto"))
             if (
                 dialog.bwlimit_changed
                 and self.daemon.is_running()
@@ -580,19 +592,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.latest_stats = stats
         if stats.is_online:
             has_active = stats.has_active_transfers
-            
+            remote_name = self.daemon.current_remote or "DucksDrive"
+            clean_name = remote_name.rstrip(":")
+
             if has_active:
                 self._was_syncing = True
                 self.update_tray_icon("syncing")
+                menu_header = f"{clean_name} • {tr('Sincronizando...')}"
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
                     name = t.get("name", tr("Arquivo"))
                     pct = int(t.get("percentage") or 0)
-                    text = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
-                    self._set_status_and_tooltip(text, f"{APP_NAME}: {text}")
+                    tooltip_detail = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
+                    self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {tooltip_detail}")
                 else:
-                    text = f"{tr('Velocidade:')} {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
-                    self._set_status_and_tooltip(text, f"{APP_NAME}: {stats.status_text}")
+                    self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
             else:
                 self.update_tray_icon("idle")
                 if self._was_syncing:
@@ -603,10 +617,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
                         QSystemTrayIcon.Information,
                         4000
                     )
-                remote_name = self.daemon.current_remote or "DucksDrive"
-                clean_name = remote_name.rstrip(":")
-                text = f"{clean_name} • {tr('Conectado')} ({stats.speed_str})"
-                self._set_status_and_tooltip(text, f"{APP_NAME}: {stats.status_text}")
+                menu_header = f"{clean_name} • {tr('Conectado')}"
+                self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
         else:
             self._was_syncing = False
             self.update_tray_icon("error")
@@ -761,21 +773,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         else:
             QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
 
-    def _show_delete_selector(self) -> None:
-        """Lists remotes in the background, then shows a dialog to select and delete one."""
-        self.refresh_remotes(self._on_delete_selector_remotes)
-
-    def _on_delete_selector_remotes(self, remotes: list[str]) -> None:
-        if not remotes:
-            QMessageBox.information(None, tr("Nenhuma Nuvem"), tr("Não existem nuvens configuradas para remover."))
-            return
-
-        remote, ok = QInputDialog.getItem(
-            None, tr("Remover Nuvem"), tr("Selecione a nuvem que deseja remover:"), remotes, 0, False
-        )
-        if not (ok and remote):
-            return
-
+    def _request_delete_remote(self, remote: str) -> None:
+        """Initiates deletion of the selected remote, checking pending uploads first if active."""
         active_remote = self.daemon.current_remote
         creds = self.daemon.rc_credentials
         if active_remote and active_remote.rstrip(":") == remote.rstrip(":") and creds is not None:
@@ -823,40 +822,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
             QMessageBox.information(None, tr("Nuvem Removida"), tr("A nuvem '%s' foi removida com sucesso.") % remote)
         else:
             QMessageBox.critical(None, tr("Erro"), tr("Falha ao remover a nuvem '%s'.") % remote)
-
-    def _show_mount_selector(self) -> None:
-        """Lists remotes in the background, then shows a dialog to select which one to mount."""
-        self.refresh_remotes(self._on_mount_selector_remotes)
-
-    def _on_mount_selector_remotes(self, remotes: list[str]) -> None:
-        if not remotes:
-            msg = tr("Nenhuma nuvem configurada.\nGostaria de configurar uma agora?")
-            res = QMessageBox.question(None, tr("Nenhuma Nuvem"), msg, QMessageBox.Yes | QMessageBox.No)
-            if res == QMessageBox.Yes:
-                self._show_new_remote_dialog()
-            return
-
-        remote, ok = QInputDialog.getItem(
-            None, tr("Conectar Nuvem"), tr("Selecione uma nuvem para conectar:"), remotes, 0, False
-        )
-        if not ok or not remote:
-            return
-
-        if self.daemon.is_running():
-            active_remote = (self.daemon.current_remote or "").rstrip(":")
-            if active_remote == remote.rstrip(":"):
-                return
-            res = QMessageBox.question(
-                None,
-                tr("Substituir Drive Ativo"),
-                tr("Um drive já está conectado (%s). Deseja desconectá-lo e conectar ao novo remoto configurado?") % self.daemon.current_remote,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if res != QMessageBox.Yes:
-                return
-
-        self.daemon.start(remote)
 
     def _show_new_remote_dialog(self) -> None:
         """Handles the flow for creating a new remote via background thread."""

@@ -30,8 +30,11 @@ from PySide6.QtWidgets import (
 from rclone_config import TaskRunner
 from rclone_settings import (
     CONFIG_DIR,
+    apply_app_theme,
     clear_vfs_cache_files,
+    get_theme_stylesheet,
     get_vfs_cache_usage_bytes,
+    is_dark_theme_active,
     load_config,
     save_config,
 )
@@ -60,6 +63,7 @@ class SettingsDialog(QDialog):
         self.config = load_config()
         self._init_ui()
         self._load_values()
+        self.apply_theme(str(self.theme_combo.currentData() or self.config.get("theme") or "auto"))
         self._refresh_cache_usage()
 
     def _init_ui(self) -> None:
@@ -103,6 +107,7 @@ class SettingsDialog(QDialog):
         self.vfs_mode_combo.addItem(tr("Writes"), "writes")
         self.vfs_mode_combo.addItem(tr("Minimal"), "minimal")
         self.vfs_mode_combo.addItem(tr("Off"), "off")
+        self.vfs_mode_combo.currentIndexChanged.connect(self._on_vfs_mode_changed)
         cache_layout.addRow(tr("Modo do Cache VFS:"), self.vfs_mode_combo)
 
         self.cache_spin = QSpinBox()
@@ -142,6 +147,7 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItem(tr("Automático (Sistema)"), "auto")
         self.theme_combo.addItem(tr("Escuro (Dark)"), "dark")
         self.theme_combo.addItem(tr("Claro (Light)"), "light")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         lang_layout.addRow(tr("Tema do Painel:"), self.theme_combo)
         sys_layout.addLayout(lang_layout)
 
@@ -217,6 +223,7 @@ class SettingsDialog(QDialog):
         index = self.vfs_mode_combo.findData(vfs_mode)
         if index >= 0:
             self.vfs_mode_combo.setCurrentIndex(index)
+        self._on_vfs_mode_changed()
 
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
 
@@ -229,6 +236,29 @@ class SettingsDialog(QDialog):
         t_idx = self.theme_combo.findData(theme)
         if t_idx >= 0:
             self.theme_combo.setCurrentIndex(t_idx)
+
+    def _on_vfs_mode_changed(self, _index: int = 0) -> None:
+        """Disables max VFS cache size spinbox when cache mode is 'off' or 'minimal'."""
+        mode = self.vfs_mode_combo.currentData()
+        self.cache_spin.setEnabled(mode not in ("off", "minimal"))
+
+    def _on_theme_combo_changed(self, _index: int = 0) -> None:
+        """Applies the selected theme immediately when the user changes the theme combo."""
+        selected_theme = str(self.theme_combo.currentData() or "auto")
+        self.apply_theme(selected_theme)
+
+    def apply_theme(self, theme_pref: Optional[str] = None) -> None:
+        """Applies QSS and palette styling for the specified theme ('light', 'dark', or 'auto')."""
+        active_pref = theme_pref or str(self.theme_combo.currentData() or self.config.get("theme") or "auto")
+        is_dark = apply_app_theme(active_pref, self)
+        self.setStyleSheet(get_theme_stylesheet(active_pref))
+        usage_col = "#5dade2" if is_dark else "#2980b9"
+        self.cache_usage_label.setStyleSheet(f"font-weight: bold; color: {usage_col};")
+
+    def reject(self) -> None:
+        """Restores the previously saved theme if the user cancels the dialog."""
+        apply_app_theme(str(self.config.get("theme") or "auto"))
+        super().reject()
 
     def _refresh_cache_usage(self) -> None:
         """Asynchronously calculates local VFS cache usage in a background thread."""
@@ -322,7 +352,7 @@ class SettingsDialog(QDialog):
         )
 
         # Validate high cache size warning if >= 50 GB
-        if cache_gb >= 50:
+        if self.cache_spin.isEnabled() and cache_gb >= 50:
             res = QMessageBox.warning(
                 self,
                 tr("Aviso de Cache Elevado"),
@@ -349,6 +379,7 @@ class SettingsDialog(QDialog):
             self.language_changed = language_changed
             self.theme_changed = theme_changed
             self.bwlimit_changed = bwlimit_changed
+            self.apply_theme(theme)
             if language_changed:
                 set_language(language)
             if mount_opts_changed:

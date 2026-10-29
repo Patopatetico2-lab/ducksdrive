@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PKG_NAME="ducksdrive"
-PKG_VER="1.0.6"
+PKG_VER="1.0.7"
 PKG_REL="1"
 DEB_FILE="${PKG_NAME}_${PKG_VER}-${PKG_REL}_all.deb"
 WORK_DIR="$(mktemp -d)"

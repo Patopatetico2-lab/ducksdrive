@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from rclone_config import TaskRunner, get_clean_env
 from rclone_daemon import RcloneDaemon
-from rclone_settings import _sync_autostart, load_config, save_last_remote
+from rclone_settings import _sync_autostart, apply_app_theme, load_config, save_last_remote
 from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
@@ -207,9 +207,10 @@ def main() -> None:
     app.setDesktopFileName("ducksdrive")
     app.setQuitOnLastWindowClosed(False)
 
-    # Initialize language and synchronize autostart once
+    # Initialize language, theme, and synchronize autostart once
     cfg = load_config()
     set_language(cfg.get("language", "pt_BR"))
+    apply_app_theme(str(cfg.get("theme") or "auto"))
     _sync_autostart(bool(cfg.get("autostart", True)))
 
 
