@@ -12,7 +12,7 @@ from collections import deque
 from typing import Any, Optional
 
 from i18n import tr
-from PySide6.QtCore import Qt, QUrl, QTimer, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QUrl, QTimer, QThread, QEvent, QPoint, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -229,6 +229,8 @@ class StatusPopup(QWidget):
         self.is_dark = False
         self._applied_theme_state: Optional[tuple[bool, str]] = None
         self._latest_stats: Optional[StatsData] = None
+        self._drag_pos: Optional[QPoint] = None
+        self._user_moved = False
 
         self._init_ui()
         self.apply_theme()
@@ -366,6 +368,7 @@ class StatusPopup(QWidget):
         self.scroll_layout.setSpacing(2)
         self.scroll_layout.addStretch()
         self.scroll.setWidget(self.scroll_content)
+        self.scroll.viewport().installEventFilter(self)
         
         self.empty_label = QLabel(tr("Nenhum arquivo sendo transferido"))
         self.empty_label.setStyleSheet("color: #bdc3c7; font-style: italic; padding: 20px 0;")
@@ -745,24 +748,72 @@ class StatusPopup(QWidget):
 
     def show_near_cursor(self) -> None:
         """
-        Positions the popup nicely near the mouse cursor.
+        Positions the popup nicely near the mouse cursor (unless manually moved by the user).
         """
         self.adjustSize()
-        cursor_pos = QCursor.pos()
-        screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
-        screen_geo = screen.availableGeometry()
+        if not self._user_moved:
+            cursor_pos = QCursor.pos()
+            screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
+            screen_geo = screen.availableGeometry()
 
-        x = cursor_pos.x() - self.width() // 2
-        y = cursor_pos.y() - self.height() - 15
+            x = cursor_pos.x() - self.width() // 2
+            y = cursor_pos.y() - self.height() - 15
 
-        if x < screen_geo.left(): x = screen_geo.left() + 10
-        elif x + self.width() > screen_geo.right(): x = screen_geo.right() - self.width() - 10
-        if y < screen_geo.top(): y = cursor_pos.y() + 20
+            if x < screen_geo.left(): x = screen_geo.left() + 10
+            elif x + self.width() > screen_geo.right(): x = screen_geo.right() - self.width() - 10
+            if y < screen_geo.top(): y = cursor_pos.y() + 20
 
-        self.move(x, y)
+            self.move(x, y)
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _begin_drag(self, global_pos: QPoint) -> None:
+        """Starts an interactive window move via the compositor (Wayland/X11) with manual fallback."""
+        self._user_moved = True
+        win = self.windowHandle()
+        if win is not None and win.startSystemMove():
+            self._drag_pos = None
+            return
+        self._drag_pos = global_pos - self.frameGeometry().topLeft()
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        """Allows dragging the window even when clicking inside the scroll area viewport."""
+        if watched is self.scroll.viewport():
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._begin_drag(event.globalPosition().toPoint())
+                return True
+            if event.type() == QEvent.MouseMove and (event.buttons() & Qt.LeftButton) and self._drag_pos is not None:
+                self.move(event.globalPosition().toPoint() - self._drag_pos)
+                return True
+            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                self._drag_pos = None
+                return True
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event: Any) -> None:
+        """Initiates window dragging when clicking anywhere on the popup background or labels."""
+        if event.button() == Qt.LeftButton:
+            self._begin_drag(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        """Fallback window dragging for compositors without startSystemMove support."""
+        if (event.buttons() & Qt.LeftButton) and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        """Ends manual fallback dragging."""
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: Any) -> None:
         """Closes popup when Escape key is pressed."""
