@@ -45,7 +45,7 @@ from rclone_config import (
     RemoteCreationThread,
     delete_remote
 )
-from rclone_daemon import RcloneDaemon
+from rclone_daemon import RcloneDaemon, is_path_mounted
 from rclone_settings import load_config, save_last_remote
 from rclone_stats import StatsData, fetch_vfs_queue, set_rc_bwlimit
 from status_popup import StatusPopup
@@ -567,6 +567,13 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.update_tray_icon("error")
         QMessageBox.critical(None, tr("Erro de Montagem"), tr(error))
 
+    def _set_status_and_tooltip(self, status_text: Optional[str] = None, tooltip_text: Optional[str] = None) -> None:
+        """Updates menu status action text and tray tooltip only when changed to avoid redundant DBus IPC."""
+        if status_text is not None and self.action_status.text() != status_text:
+            self.action_status.setText(status_text)
+        if tooltip_text is not None and self.toolTip() != tooltip_text:
+            self.setToolTip(tooltip_text)
+
     @Slot(object)
     def update_stats(self, stats: StatsData) -> None:
         """Updates the tray tooltip, menu status, and floating status popup with live telemetry."""
@@ -582,12 +589,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     name = t.get("name", tr("Arquivo"))
                     pct = int(t.get("percentage") or 0)
                     text = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
-                    self.action_status.setText(text)
-                    self.setToolTip(f"{APP_NAME}: {text}")
+                    self._set_status_and_tooltip(text, f"{APP_NAME}: {text}")
                 else:
                     text = f"{tr('Velocidade:')} {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
-                    self.action_status.setText(text)
-                    self.setToolTip(f"{APP_NAME}: {stats.status_text}")
+                    self._set_status_and_tooltip(text, f"{APP_NAME}: {stats.status_text}")
             else:
                 self.update_tray_icon("idle")
                 if self._was_syncing:
@@ -601,13 +606,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 remote_name = self.daemon.current_remote or "DucksDrive"
                 clean_name = remote_name.rstrip(":")
                 text = f"{clean_name} • {tr('Conectado')} ({stats.speed_str})"
-                self.action_status.setText(text)
-                self.setToolTip(f"{APP_NAME}: {stats.status_text}")
+                self._set_status_and_tooltip(text, f"{APP_NAME}: {stats.status_text}")
         else:
             self._was_syncing = False
             self.update_tray_icon("error")
             if self.daemon.state == "mounted":
-                self.action_status.setText(tr("Status: Conexão Perdida"))
+                self._set_status_and_tooltip(tr("Status: Conexão Perdida"), None)
 
         # Forward telemetry to floating status popup
         self.status_popup.update_stats(stats)
@@ -749,7 +753,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _open_folder(self) -> None:
         """Opens the mount point in the system file manager using QDesktopServices."""
         path = self.daemon.mount_point
-        if os.path.exists(path):
+        if is_path_mounted(path):
             try:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             except Exception as e:

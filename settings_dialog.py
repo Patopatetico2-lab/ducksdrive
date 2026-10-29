@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget
 )
 
+from rclone_config import TaskRunner
 from rclone_settings import (
     CONFIG_DIR,
     clear_vfs_cache_files,
@@ -49,6 +50,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None, daemon: Optional[Any] = None) -> None:
         super().__init__(parent)
         self.daemon = daemon
+        self._cache_runner = TaskRunner(self)
         self.language_changed = False
         self.bwlimit_changed = False
         self.theme_changed = False
@@ -58,6 +60,7 @@ class SettingsDialog(QDialog):
         self.config = load_config()
         self._init_ui()
         self._load_values()
+        self._refresh_cache_usage()
 
     def _init_ui(self) -> None:
         """Initializes grouped form layouts with QGroupBox controls."""
@@ -109,7 +112,7 @@ class SettingsDialog(QDialog):
         cache_layout.addRow(tr("Tamanho Máximo do Cache VFS:"), self.cache_spin)
 
         cache_usage_row = QHBoxLayout()
-        self.cache_usage_label = QLabel(format_bytes(get_vfs_cache_usage_bytes()))
+        self.cache_usage_label = QLabel(tr("Calculando espaço..."))
         self.cache_usage_label.setStyleSheet("font-weight: bold; color: #2980b9;")
         self.btn_clear_cache = QPushButton(tr("Limpar Cache Agora"))
         self.btn_clear_cache.setStyleSheet("padding: 4px 10px;")
@@ -227,22 +230,52 @@ class SettingsDialog(QDialog):
         if t_idx >= 0:
             self.theme_combo.setCurrentIndex(t_idx)
 
+    def _refresh_cache_usage(self) -> None:
+        """Asynchronously calculates local VFS cache usage in a background thread."""
+        self.cache_usage_label.setText(tr("Calculando espaço..."))
+        self._cache_runner.submit(
+            get_vfs_cache_usage_bytes,
+            callback=lambda usage: self.cache_usage_label.setText(format_bytes(int(usage or 0))),
+        )
+
     def _on_clear_cache(self) -> None:
-        """Safely clears local VFS cache files if no uploads are waiting in queue."""
-        usage = get_vfs_cache_usage_bytes()
+        """Safely clears local VFS cache files in background if no uploads are waiting in queue."""
+        self.btn_clear_cache.setEnabled(False)
+        creds = (
+            self.daemon.rc_credentials
+            if (self.daemon is not None and self.daemon.is_running() and self.daemon.rc_credentials)
+            else None
+        )
+
+        def _check_before_clear(rc_creds: Any) -> tuple[int, int]:
+            usage = get_vfs_cache_usage_bytes()
+            pending = 0
+            if usage > 0 and rc_creds is not None:
+                pending = int(fetch_vfs_queue(rc_creds) or 0)
+            return usage, pending
+
+        self._cache_runner.submit(_check_before_clear, creds, callback=self._on_pre_clear_checked)
+
+    def _on_pre_clear_checked(self, result: Any) -> None:
+        if not isinstance(result, tuple):
+            self.btn_clear_cache.setEnabled(True)
+            return
+        usage, pending = result
+        self.cache_usage_label.setText(format_bytes(usage))
+
         if usage <= 0:
+            self.btn_clear_cache.setEnabled(True)
             QMessageBox.information(self, tr("Limpar Cache VFS"), tr("O cache local VFS já está vazio."))
             return
 
-        if self.daemon is not None and self.daemon.is_running() and self.daemon.rc_credentials:
-            pending = int(fetch_vfs_queue(self.daemon.rc_credentials) or 0)
-            if pending > 0:
-                QMessageBox.warning(
-                    self,
-                    tr("Cache VFS em Uso"),
-                    tr("Existem %d arquivo(s) aguardando envio para a nuvem.\nAguarde o término dos envios antes de limpar o cache.") % pending,
-                )
-                return
+        if pending > 0:
+            self.btn_clear_cache.setEnabled(True)
+            QMessageBox.warning(
+                self,
+                tr("Cache VFS em Uso"),
+                tr("Existem %d arquivo(s) aguardando envio para a nuvem.\nAguarde o término dos envios antes de limpar o cache.") % pending,
+            )
+            return
 
         res = QMessageBox.question(
             self,
@@ -252,11 +285,23 @@ class SettingsDialog(QDialog):
             QMessageBox.No,
         )
         if res != QMessageBox.Yes:
+            self.btn_clear_cache.setEnabled(True)
             return
 
-        clear_vfs_cache_files()
-        self.cache_usage_label.setText(format_bytes(get_vfs_cache_usage_bytes()))
+        def _do_clear() -> int:
+            clear_vfs_cache_files()
+            return get_vfs_cache_usage_bytes()
+
+        self._cache_runner.submit(_do_clear, callback=self._on_cache_cleared)
+
+    def _on_cache_cleared(self, remaining_bytes: Any) -> None:
+        self.cache_usage_label.setText(format_bytes(int(remaining_bytes or 0)))
+        self.btn_clear_cache.setEnabled(True)
         QMessageBox.information(self, tr("Cache Limpo"), tr("O cache VFS local foi limpo com sucesso."))
+
+    def done(self, r: int) -> None:
+        self._cache_runner.wait_all(2000)
+        super().done(r)
 
     def _save_and_accept(self) -> None:
         """Validates controls, warns on high SSD cache size, saves to config, and closes."""

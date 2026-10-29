@@ -6,6 +6,7 @@ random in-memory Remote Control (RC) credentials, and robust FUSE unmounting
 with dynamic fallback to fusermount3 or fusermount.
 """
 
+import base64
 import glob
 import logging
 import os
@@ -36,6 +37,12 @@ class RCCredentials:
     password: str
     host: str = DEFAULT_RC_HOST
     port: int = DEFAULT_RC_PORT
+    auth_header: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.auth_header:
+            b64_auth = base64.b64encode(f"{self.user}:{self.password}".encode("utf-8")).decode("ascii")
+            object.__setattr__(self, "auth_header", f"Basic {b64_auth}")
 
     @property
     def url(self) -> str:
@@ -181,23 +188,22 @@ def is_path_mounted(path: str) -> bool:
         bool: True if the path is an active mount point.
     """
     path = os.path.abspath(os.path.expanduser(path))
-    if os.path.ismount(path):
-        return True
 
-    # Check /proc/mounts as fallback for FUSE mounts
+    # Read /proc/mounts first (in-memory kernel procfs; never blocks on FUSE stat in D-state)
     if os.path.exists("/proc/mounts"):
         try:
             with open("/proc/mounts", "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.split()
                     if len(parts) >= 2:
-                        mount_point_in_proc = unescape_mount_path(parts[1])
+                        mount_point_in_proc = os.path.abspath(unescape_mount_path(parts[1]))
                         if mount_point_in_proc == path:
                             return True
+            return False
         except Exception:
             pass
 
-    return False
+    return os.path.ismount(path)
 
 
 def _teardown_mount(process: Optional["subprocess.Popen[str]"], mount_point: str) -> bool:
@@ -285,6 +291,7 @@ class RcloneDaemon(QObject):
         self._stop_callbacks: List[Callable[[], None]] = []
         self._last_stop_result = True
         self._pending_start: Optional[tuple[str, Optional[List[str]], bool, float, int]] = None
+        self._pre_unmount_attempted = False
 
         # Active health monitoring timer for background FUSE process
         self.health_timer = QTimer(self)
@@ -376,10 +383,19 @@ class RcloneDaemon(QObject):
         clean_remote_name = remote_name.rstrip(":")
         self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_remote_name}"))
 
-        # Ensure directory is unmounted before mounting
-        if is_path_mounted(self.mount_point):
-            logger.info("Mount point is currently busy, attempting pre-mount unmount...")
-            unmount_fuse_path(self.mount_point, lazy=True)
+        # Ensure directory is unmounted before mounting (off the GUI thread via _TeardownWorker)
+        if is_path_mounted(self.mount_point) and not self._pre_unmount_attempted:
+            logger.info("Mount point is currently busy, attempting async pre-mount unmount...")
+            self._pre_unmount_attempted = True
+            self._pending_start = (remote_name, extra_args, read_only, startup_timeout, retry_on_timeout)
+            self._stop_callbacks.append(self._run_pending_start)
+            _, mp = self._begin_stop()
+            worker = _TeardownWorker(None, mp, self)
+            self._stop_worker = worker
+            worker.finished.connect(self._on_stop_worker_finished)
+            worker.start()
+            return True
+        self._pre_unmount_attempted = False
 
         # Prepare target mount folder
         try:
@@ -417,9 +433,16 @@ class RcloneDaemon(QObject):
             "--vfs-cache-max-size",
             cache_size,
             "--vfs-read-chunk-size",
-            "64M",
+            "8M",
             "--vfs-read-chunk-size-limit",
             "off",
+            "--dir-cache-time",
+            "30m",
+            "--poll-interval",
+            "15s",
+            "--attr-timeout",
+            "10s",
+            "--vfs-fast-fingerprint",
         ]
         if bwlimit.lower() != "off":
             cmd.extend(["--bwlimit", bwlimit])

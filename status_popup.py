@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from rclone_config import TaskRunner
-from rclone_daemon import RcloneDaemon
+from rclone_daemon import RcloneDaemon, is_path_mounted
 from rclone_settings import is_dark_theme_active
 from rclone_stats import StatsData, set_rc_bwlimit
 
@@ -56,9 +56,10 @@ class SpeedChartWidget(QWidget):
         self.speed_history: deque[float] = deque([0.0] * max_points, maxlen=max_points)
 
     def add_speed_point(self, speed_mb_s: float) -> None:
-        """Appends a new speed data point and triggers a repaint."""
+        """Appends a new speed data point and triggers a repaint only when visible."""
         self.speed_history.append(speed_mb_s)
-        self.update()
+        if self.isVisible():
+            self.update()
 
     def paintEvent(self, event: Any) -> None:
         """Renders a smooth gradient-filled line chart of transfer speeds."""
@@ -226,6 +227,8 @@ class StatusPopup(QWidget):
         self._quota_worker: Optional[QuotaWorkerThread] = None
         self._pause_runner = TaskRunner(self)
         self.is_dark = False
+        self._applied_theme_state: Optional[tuple[bool, str]] = None
+        self._latest_stats: Optional[StatsData] = None
 
         self._init_ui()
         self.apply_theme()
@@ -397,7 +400,12 @@ class StatusPopup(QWidget):
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
         """Applies Dark or Light theme styling to the popup, transfer items, and speed chart."""
-        self.is_dark = is_dark_theme_active(theme_pref)
+        effective_dark = is_dark_theme_active(theme_pref)
+        theme_state = (effective_dark, tr("● Offline"))
+        if self._applied_theme_state == theme_state:
+            return
+        self._applied_theme_state = theme_state
+        self.is_dark = effective_dark
         if self.is_dark:
             # Tema Escuro (Dark Mode - combina com Breeze Dark / Adwaita Dark)
             bg = "#202326"
@@ -498,7 +506,8 @@ class StatusPopup(QWidget):
         """)
         self._apply_pause_button_ui()
         self.chart_widget.is_dark = self.is_dark
-        self.chart_widget.update()
+        if self.isVisible():
+            self.chart_widget.update()
         for i in range(self.scroll_layout.count()):
             w = self.scroll_layout.itemAt(i).widget()
             if isinstance(w, TransferItem):
@@ -520,7 +529,8 @@ class StatusPopup(QWidget):
             self.quota_label.setText(tr("Calculando espaço..."))
         else:
             self._fetch_quota()
-        self.chart_widget.update()
+        if self.isVisible():
+            self.chart_widget.update()
 
     @Slot(str)
     def _on_daemon_state_changed(self, state: str) -> None:
@@ -541,6 +551,9 @@ class StatusPopup(QWidget):
         """Refreshes theme and starts quota timer when popup becomes visible."""
         self.apply_theme()
         super().showEvent(event)
+        if self._latest_stats is not None:
+            self._render_stats(self._latest_stats)
+        self.chart_widget.update()
         if not self._quota_timer.isActive():
             self._quota_timer.start()
         now = time.time()
@@ -651,6 +664,16 @@ class StatusPopup(QWidget):
 
     def update_stats(self, stats: StatsData) -> None:
         """Updates UI elements and chart with new telemetry data, reusing transfer widgets efficiently."""
+        self._latest_stats = stats
+        self.chart_widget.add_speed_point(stats.speed_mb_s if stats.is_online else 0.0)
+        if not self.isVisible():
+            if not stats.is_online:
+                self._last_quota_update = 0
+            return
+        self._render_stats(stats)
+
+    def _render_stats(self, stats: StatsData) -> None:
+        """Renders the telemetry snapshot into visible popup widgets."""
         def clear_transfers():
             for i in reversed(range(self.scroll_layout.count())):
                 widget = self.scroll_layout.itemAt(i).widget()
@@ -664,7 +687,6 @@ class StatusPopup(QWidget):
             self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText(stats.speed_str)
             self.eta_value.setText(stats.eta_str)
-            self.chart_widget.add_speed_point(stats.speed_mb_s)
             
             clean_remote = (self.daemon.current_remote or "Drive").rstrip(":")
             self.title_label.setText(f"<b>{clean_remote}</b>")
@@ -706,7 +728,6 @@ class StatusPopup(QWidget):
             self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
-            self.chart_widget.add_speed_point(0.0)
             self._last_quota_update = 0
             clear_transfers()
 
@@ -715,7 +736,7 @@ class StatusPopup(QWidget):
     def _open_cloud_folder(self) -> None:
         """Opens the mount point in the file manager using QDesktopServices and closes popup."""
         path = self.daemon.mount_point
-        if os.path.exists(path):
+        if is_path_mounted(path):
             try:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             except Exception as e:

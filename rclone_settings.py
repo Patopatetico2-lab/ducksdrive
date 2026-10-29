@@ -29,13 +29,26 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+_CONFIG_CACHE: Dict[str, Any] | None = None
+_CONFIG_MTIME: float | None = None
+
+
 def load_config() -> Dict[str, Any]:
     """
     Loads configuration from ~/.config/ducksdrive/config.json.
     Merges with defaults if missing keys.
     """
+    global _CONFIG_CACHE, _CONFIG_MTIME
+    try:
+        mtime: float | None = os.path.getmtime(CONFIG_FILE)
+    except OSError:
+        mtime = None
+
+    if _CONFIG_CACHE is not None and mtime == _CONFIG_MTIME:
+        return _CONFIG_CACHE.copy()
+
     config = DEFAULT_CONFIG.copy()
-    if os.path.exists(CONFIG_FILE):
+    if mtime is not None:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -44,6 +57,8 @@ def load_config() -> Dict[str, Any]:
         except Exception as e:
             logger.error("Failed to load config file: %s. Using defaults.", e)
 
+    _CONFIG_CACHE = config.copy()
+    _CONFIG_MTIME = mtime
     return config
 
 
@@ -52,10 +67,18 @@ def save_config(config: Dict[str, Any]) -> bool:
     Saves configuration dictionary to ~/.config/ducksdrive/config.json
     and synchronizes system autostart (.desktop file).
     """
+    global _CONFIG_CACHE, _CONFIG_MTIME
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
+        try:
+            _CONFIG_MTIME = os.path.getmtime(CONFIG_FILE)
+        except OSError:
+            _CONFIG_MTIME = None
+        merged = DEFAULT_CONFIG.copy()
+        merged.update(config)
+        _CONFIG_CACHE = merged
         logger.info("Saved configuration successfully to %s", CONFIG_FILE)
         
         # Synchronize system autostart state
@@ -68,6 +91,7 @@ def save_config(config: Dict[str, Any]) -> bool:
 
 def save_last_remote(remote_name: str) -> None:
     """Persists the most recently mounted remote name in ~/.config/ducksdrive/config.json."""
+    global _CONFIG_CACHE, _CONFIG_MTIME
     clean = remote_name.rstrip(":") if remote_name else ""
     config = load_config()
     if config.get("last_remote") == clean:
@@ -77,6 +101,11 @@ def save_last_remote(remote_name: str) -> None:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
+        try:
+            _CONFIG_MTIME = os.path.getmtime(CONFIG_FILE)
+        except OSError:
+            _CONFIG_MTIME = None
+        _CONFIG_CACHE = config.copy()
         logger.info("Updated last_remote to '%s'", clean)
     except Exception as e:
         logger.error("Failed to save last_remote: %s", e)
@@ -225,6 +254,13 @@ X-GNOME-Autostart-Delay=3
 X-KDE-autostart-after=panel
 """
         try:
+            if os.path.exists(autostart_file):
+                try:
+                    with open(autostart_file, "r", encoding="utf-8") as f:
+                        if f.read() == content:
+                            return
+                except OSError:
+                    pass
             with open(autostart_file, "w", encoding="utf-8") as f:
                 f.write(content)
             logger.info("Synchronized autostart: Enabled.")

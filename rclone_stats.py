@@ -85,6 +85,15 @@ def format_eta(eta_seconds: Optional[int]) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _get_auth_header(creds: RCCredentials) -> str:
+    """Returns the pre-computed Basic Auth header from RCCredentials."""
+    if getattr(creds, "auth_header", ""):
+        return creds.auth_header
+    auth_str = f"{creds.user}:{creds.password}"
+    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+    return f"Basic {b64_auth}"
+
+
 def fetch_rclone_stats(creds: RCCredentials, timeout: float = 1.5) -> StatsData:
     """
     Executes a single HTTP POST query to `http://<host>:<port>/core/stats`
@@ -98,14 +107,12 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 1.5) -> StatsData:
         StatsData: Parsed telemetry snapshot.
     """
     endpoint = f"{creds.url}/core/stats"
-    auth_str = f"{creds.user}:{creds.password}"
-    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
 
     req = urllib.request.Request(
         url=endpoint,
         data=b"{}",
         headers={
-            "Authorization": f"Basic {b64_auth}",
+            "Authorization": _get_auth_header(creds),
             "Content-Type": "application/json",
         },
         method="POST",
@@ -171,13 +178,11 @@ def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]
 
     Blocking call: run it outside the GUI thread.
     """
-    auth_str = f"{creds.user}:{creds.password}"
-    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
     req = urllib.request.Request(
         url=f"{creds.url}/vfs/queue",
         data=b"{}",
         headers={
-            "Authorization": f"Basic {b64_auth}",
+            "Authorization": _get_auth_header(creds),
             "Content-Type": "application/json",
         },
         method="POST",
@@ -198,13 +203,11 @@ def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> boo
 
     Blocking call: run it outside the GUI thread.
     """
-    auth_str = f"{creds.user}:{creds.password}"
-    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
     req = urllib.request.Request(
         url=f"{creds.url}/core/bwlimit",
         data=json.dumps({"rate": rate}).encode("utf-8"),
         headers={
-            "Authorization": f"Basic {b64_auth}",
+            "Authorization": _get_auth_header(creds),
             "Content-Type": "application/json",
         },
         method="POST",
