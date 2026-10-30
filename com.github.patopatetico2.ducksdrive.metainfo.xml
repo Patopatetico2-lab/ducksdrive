@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.patopatetico2.ducksdrive</id>
+  <name>DucksDrive</name>
+  <summary>Lightweight Linux system tray client for Rclone FUSE mounts</summary>
+  <summary xml:lang="pt">Cliente leve de bandeja do sistema para montagens FUSE do Rclone no Linux</summary>
+  <summary xml:lang="pt_BR">Cliente leve de bandeja do sistema para montagens FUSE do Rclone no Linux</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <developer id="io.github.patopatetico2">
+    <name>Patopatetico2-lab</name>
+  </developer>
+
+  <description>
+    <p>
+      DucksDrive is a modern, lightweight Python (PySide6/Qt6) desktop client and GUI for mounting and managing cloud storage and remote drives via Rclone and FUSE3 on Linux. It brings the Windows Google Drive for Desktop and RaiDrive experience to Linux with a native system tray icon, a floating transfer status panel, and seamless file manager sidebar integration.
+    </p>
+    <p xml:lang="pt">
+      O DucksDrive é um cliente desktop moderno e leve em Python (PySide6/Qt6) para montar e gerir armazenamento na nuvem e unidades remotas via Rclone e FUSE3 no Linux. Traz a experiência do Google Drive para Desktop e RaiDrive para o Linux, com ícone na bandeja do sistema, painel flutuante de transferências em tempo real e integração automática na barra lateral do gestor de ficheiros.
+    </p>
+    <p xml:lang="pt_BR">
+      O DucksDrive é um cliente desktop moderno e leve em Python (PySide6/Qt6) para montar e gerenciar armazenamento na nuvem e unidades remotas via Rclone e FUSE3 no Linux. Traz a experiência do Google Drive para Desktop e RaiDrive para o Linux, com ícone na bandeja do sistema, painel flutuante de transferências em tempo real e integração automática na barra lateral do gerenciador de arquivos.
+    </p>
+    <ul>
+      <li>Floating transfer panel with cloud storage quota, 1-click pause/resume or reconnect, per-file progress bars, transfer speed (MB/s), ETA, and a rolling speed chart.</li>
+      <li xml:lang="pt_BR">Painel flutuante com quota da nuvem, botão de pausar/retomar ou reconectar com 1 clique, progresso por arquivo, velocidade (MB/s), ETA e gráfico de velocidade em tempo real.</li>
+      <li>Supports OAuth providers (Google Drive, OneDrive, Dropbox, Box, pCloud) and direct credentials (Amazon S3 / MinIO / Wasabi, Nextcloud / WebDAV, Mega, FTP, SFTP).</li>
+      <li xml:lang="pt_BR">Suporte a provedores OAuth (Google Drive, OneDrive, Dropbox, Box, pCloud) e credenciais diretas (Amazon S3 / MinIO / Wasabi, Nextcloud / WebDAV, Mega, FTP, SFTP).</li>
+      <li>Live bandwidth limiting (--bwlimit), SSD VFS cache usage meter and 1-click cache cleaner, Dark/Light/Auto theme, and Dolphin/Nautilus/Thunar/Nemo sidebar integration.</li>
+      <li xml:lang="pt_BR">Controle de banda em tempo real (--bwlimit), medidor e limpeza de cache VFS no SSD, tema Claro/Escuro/Automático e atalho automático no Dolphin/Nautilus/Thunar/Nemo.</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.github.patopatetico2.ducksdrive.desktop</launchable>
+
+  <url type="homepage">https://patopatetico2-lab.github.io/ducksdrive/</url>
+  <url type="bugtracker">https://github.com/Patopatetico2-lab/ducksdrive/issues</url>
+  <url type="vcs-browser">https://github.com/Patopatetico2-lab/ducksdrive</url>
+
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+    <category>FileTools</category>
+  </categories>
+
+  <keywords>
+    <keyword>rclone</keyword>
+    <keyword>cloud</keyword>
+    <keyword>fuse</keyword>
+    <keyword>google drive</keyword>
+    <keyword>onedrive</keyword>
+    <keyword>nextcloud</keyword>
+    <keyword>webdav</keyword>
+    <keyword>s3</keyword>
+  </keywords>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Floating transfer panel actively syncing files</caption>
+      <caption xml:lang="pt_BR">Painel flutuante sincronizando arquivos em tempo real</caption>
+      <image>https://raw.githubusercontent.com/Patopatetico2-lab/ducksdrive/main/docs/assets/status-popup-active.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Floating status panel when connected and idle</caption>
+      <caption xml:lang="pt_BR">Painel de status conectado e ocioso</caption>
+      <image>https://raw.githubusercontent.com/Patopatetico2-lab/ducksdrive/main/docs/assets/status-popup-idle.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Performance, VFS SSD cache, and system settings dialog</caption>
+      <caption xml:lang="pt_BR">Janela de configurações de desempenho, cache SSD VFS e sistema</caption>
+      <image>https://raw.githubusercontent.com/Patopatetico2-lab/ducksdrive/main/docs/assets/settings-dialog.png</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="1.0.8" date="2026-10-29">
+      <description>
+        <p>Restored native KDE Breeze rendering across all dialogs and controls using QPalette instead of destructive QSS stylesheets, with live theme switching and StatusPopup synchronization.</p>
+      </description>
+    </release>
+    <release version="1.0.7" date="2026-10-29">
+      <description>
+        <p>Global Light/Dark theme propagation across all dialogs and menus, 1-click Reconnect button in the floating panel when offline, unified cloud management submenu, and VFS cache mode guard.</p>
+      </description>
+    </release>
+    <release version="1.0.6" date="2026-10-27">
+      <description>
+        <p>Added Dark/Light/Auto theme support, SSD VFS cache usage meter and cleaner, live bandwidth limit updates via Rclone RC, and last_remote persistence.</p>
+      </description>
+    </release>
+  </releases>
+</component>
