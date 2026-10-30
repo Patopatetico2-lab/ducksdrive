@@ -227,6 +227,7 @@ class StatusPopup(QWidget):
         self._quota_worker: Optional[QuotaWorkerThread] = None
         self._pause_runner = TaskRunner(self)
         self.is_dark = False
+        self._theme_pref: Optional[str] = None
         self._applied_theme_state: Optional[tuple[bool, str]] = None
         self._latest_stats: Optional[StatsData] = None
         self._drag_pos: Optional[QPoint] = None
@@ -390,7 +391,9 @@ class StatusPopup(QWidget):
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
         """Applies Dark or Light theme styling to the popup, transfer items, and speed chart."""
-        effective_dark = is_dark_theme_active(theme_pref)
+        if theme_pref is not None:
+            self._theme_pref = theme_pref
+        effective_dark = is_dark_theme_active(self._theme_pref)
         theme_state = (effective_dark, tr("● Offline"))
         if self._applied_theme_state == theme_state:
             return

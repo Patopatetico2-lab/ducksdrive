@@ -32,9 +32,7 @@ from rclone_settings import (
     CONFIG_DIR,
     apply_app_theme,
     clear_vfs_cache_files,
-    get_theme_stylesheet,
     get_vfs_cache_usage_bytes,
-    is_dark_theme_active,
     load_config,
     save_config,
 )
@@ -120,7 +118,6 @@ class SettingsDialog(QDialog):
         self.cache_usage_label = QLabel(tr("Calculando espaço..."))
         self.cache_usage_label.setStyleSheet("font-weight: bold; color: #2980b9;")
         self.btn_clear_cache = QPushButton(tr("Limpar Cache Agora"))
-        self.btn_clear_cache.setStyleSheet("padding: 4px 10px;")
         self.btn_clear_cache.clicked.connect(self._on_clear_cache)
         cache_usage_row.addWidget(self.cache_usage_label)
         cache_usage_row.addStretch()
@@ -145,8 +142,8 @@ class SettingsDialog(QDialog):
 
         self.theme_combo = QComboBox()
         self.theme_combo.addItem(tr("Automático (Sistema)"), "auto")
-        self.theme_combo.addItem(tr("Escuro (Dark)"), "dark")
         self.theme_combo.addItem(tr("Claro (Light)"), "light")
+        self.theme_combo.addItem(tr("Escuro (Dark)"), "dark")
         self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         lang_layout.addRow(tr("Tema do Painel:"), self.theme_combo)
         sys_layout.addLayout(lang_layout)
@@ -167,7 +164,6 @@ class SettingsDialog(QDialog):
 
         self.btn_cancel = QPushButton(tr("Cancelar"))
         self.btn_cancel.clicked.connect(self.reject)
-        self.btn_cancel.setStyleSheet("padding: 6px 14px;")
         btn_layout.addWidget(self.btn_cancel)
 
         self.btn_save = QPushButton(tr("Guardar Configurações"))
@@ -248,12 +244,14 @@ class SettingsDialog(QDialog):
         self.apply_theme(selected_theme)
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
-        """Applies QSS and palette styling for the specified theme ('light', 'dark', or 'auto')."""
-        active_pref = theme_pref or str(self.theme_combo.currentData() or self.config.get("theme") or "auto")
-        is_dark = apply_app_theme(active_pref, self)
-        self.setStyleSheet(get_theme_stylesheet(active_pref))
-        usage_col = "#5dade2" if is_dark else "#2980b9"
-        self.cache_usage_label.setStyleSheet(f"font-weight: bold; color: {usage_col};")
+        """Applies native QPalette styling for the specified theme ('light', 'dark', or 'auto')."""
+        active_pref = str(theme_pref or self.theme_combo.currentData() or self.config.get("theme") or "auto")
+        palette = apply_app_theme(active_pref)
+        if palette is not None:
+            self.setPalette(palette)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
 
     def reject(self) -> None:
         """Restores the previously saved theme if the user cancels the dialog."""

@@ -24,7 +24,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from rclone_config import TaskRunner, get_clean_env
 from rclone_daemon import RcloneDaemon
-from rclone_settings import _sync_autostart, apply_app_theme, load_config, save_last_remote
+from rclone_settings import (
+    _sync_autostart,
+    apply_app_theme,
+    load_config,
+    save_last_remote,
+    set_system_default_palette,
+)
 from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
@@ -206,6 +212,9 @@ def main() -> None:
     app.setApplicationDisplayName("DucksDrive")
     app.setDesktopFileName("ducksdrive")
     app.setQuitOnLastWindowClosed(False)
+
+    SYSTEM_DEFAULT_PALETTE = QApplication.instance().palette()
+    set_system_default_palette(SYSTEM_DEFAULT_PALETTE)
 
     # Initialize language, theme, and synchronize autostart once
     cfg = load_config()

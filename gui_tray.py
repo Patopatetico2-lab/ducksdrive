@@ -45,7 +45,7 @@ from rclone_config import (
     delete_remote
 )
 from rclone_daemon import RcloneDaemon, is_path_mounted
-from rclone_settings import apply_app_theme, get_theme_stylesheet, load_config, save_last_remote
+from rclone_settings import apply_app_theme, load_config, save_last_remote
 from rclone_stats import StatsData, fetch_vfs_queue, set_rc_bwlimit
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
@@ -199,13 +199,14 @@ class NewRemoteDialog(QDialog):
         self.apply_theme(str(load_config().get("theme") or "auto"))
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
-        """Applies the active Light or Dark QSS theme to the NewRemoteDialog."""
+        """Applies the active theme palette to the NewRemoteDialog."""
         active_pref = theme_pref or str(load_config().get("theme") or "auto")
-        apply_app_theme(active_pref, self)
-        self.setStyleSheet(get_theme_stylesheet(active_pref))
-        self.btn_create.setStyleSheet(
-            "background-color: #3498db; color: white; border: none; padding: 8px 14px; border-radius: 4px; font-weight: bold;"
-        )
+        palette = apply_app_theme(active_pref)
+        if palette is not None:
+            self.setPalette(palette)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
 
     def _on_provider_changed(self, index: int) -> None:
         rtype = self.type_combo.currentData()
@@ -399,10 +400,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
         """Applies the active theme globally to QApplication, the tray menus, and the status popup."""
         active_pref = theme_pref or str(load_config().get("theme") or "auto")
-        apply_app_theme(active_pref)
-        qss = get_theme_stylesheet(active_pref)
-        self._menu.setStyleSheet(qss)
-        self.menu_remotes.setStyleSheet(qss)
+        palette = apply_app_theme(active_pref)
+        if palette is not None:
+            self._menu.setPalette(palette)
+            self.menu_remotes.setPalette(palette)
         self.status_popup.apply_theme(active_pref)
 
     def refresh_remotes(self, callback: Optional[Callable[[list[str]], None]] = None) -> None:

@@ -151,13 +151,60 @@ def clear_vfs_cache_files() -> bool:
     return ok
 
 
+SYSTEM_DEFAULT_PALETTE: Any = None
 _SYSTEM_DARK_CACHE: bool | None = None
+
+
+def set_system_default_palette(palette: Any) -> None:
+    """Stores a copy of the original system QPalette captured at application startup."""
+    global SYSTEM_DEFAULT_PALETTE, _SYSTEM_DARK_CACHE
+    try:
+        from PySide6.QtGui import QPalette
+
+        SYSTEM_DEFAULT_PALETTE = QPalette(palette)
+        win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
+        if win_col.isValid():
+            _SYSTEM_DARK_CACHE = win_col.lightness() < 128
+    except Exception:
+        SYSTEM_DEFAULT_PALETTE = palette
 
 
 def _detect_system_dark() -> bool:
     """Detects whether the desktop environment is using a dark color scheme before custom palettes are applied."""
     global _SYSTEM_DARK_CACHE
-    # 1. Check KDE kdeglobals first (unaffected by QApplication palette overrides)
+    if _SYSTEM_DARK_CACHE is not None:
+        return _SYSTEM_DARK_CACHE
+
+    # 1. Check saved system default palette or initial QApplication palette
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication, QPalette
+        from PySide6.QtWidgets import QApplication
+
+        if SYSTEM_DEFAULT_PALETTE is not None:
+            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
+            if win_col.isValid():
+                _SYSTEM_DARK_CACHE = win_col.lightness() < 128
+                return _SYSTEM_DARK_CACHE
+
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorScheme") and hasattr(Qt, "ColorScheme"):
+            scheme = hints.colorScheme()
+            if scheme == Qt.ColorScheme.Dark:
+                return True
+            if scheme == Qt.ColorScheme.Light:
+                return False
+
+        app = QApplication.instance()
+        if app is not None:
+            window_color = app.palette().color(QPalette.Window)
+            if window_color.isValid():
+                _SYSTEM_DARK_CACHE = window_color.lightness() < 128
+                return _SYSTEM_DARK_CACHE
+    except Exception:
+        pass
+
+    # 2. Fallback check in KDE kdeglobals
     kdeglobals = os.path.join(
         os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
         "kdeglobals",
@@ -172,31 +219,6 @@ def _detect_system_dark() -> bool:
                 return False
         except Exception:
             pass
-
-    # 2. Check Qt 6.5+ native colorScheme hint or initial palette
-    try:
-        from PySide6.QtCore import Qt
-        from PySide6.QtGui import QGuiApplication, QPalette
-        from PySide6.QtWidgets import QApplication
-
-        hints = QGuiApplication.styleHints()
-        if hasattr(hints, "colorScheme") and hasattr(Qt, "ColorScheme"):
-            scheme = hints.colorScheme()
-            if scheme == Qt.ColorScheme.Dark:
-                return True
-            if scheme == Qt.ColorScheme.Light:
-                return False
-
-        if _SYSTEM_DARK_CACHE is None:
-            app = QApplication.instance()
-            if app is not None:
-                window_color = app.palette().color(QPalette.Window)
-                if window_color.isValid():
-                    _SYSTEM_DARK_CACHE = window_color.lightness() < 128
-        if _SYSTEM_DARK_CACHE is not None:
-            return _SYSTEM_DARK_CACHE
-    except Exception:
-        pass
 
     return False
 
@@ -214,205 +236,84 @@ def is_dark_theme_active(theme_pref: str | None = None) -> bool:
     return _detect_system_dark()
 
 
-def get_theme_stylesheet(theme_pref: str | None = None) -> str:
+def apply_app_theme(theme_mode: str = "auto") -> Any:
     """
-    Returns the centralized QSS stylesheet for all application dialogs, menus, and controls
-    according to the resolved theme (Light or Dark).
+    Applies the chosen theme ('light', 'dark', or 'auto') natively via QPalette
+    on QApplication (with zero QSS on controls) and updates StatusPopup.
     """
-    is_dark = is_dark_theme_active(theme_pref)
-    if is_dark:
-        bg = "#202326"
-        surface = "#262a2e"
-        input_bg = "#1b1e20"
-        fg = "#fcfcfc"
-        muted_fg = "#7f8c8d"
-        border = "#3b4045"
-        btn_bg = "#2d3238"
-        btn_hover = "#3a4047"
-        disabled_bg = "#25292e"
-        disabled_fg = "#6c737a"
-        accent = "#3daee9"
-    else:
-        bg = "#ffffff"
-        surface = "#f5f5f5"
-        input_bg = "#ffffff"
-        fg = "#222222"
-        muted_fg = "#777777"
-        border = "#dcdde1"
-        btn_bg = "#f5f5f5"
-        btn_hover = "#e8e8e8"
-        disabled_bg = "#eeeeee"
-        disabled_fg = "#888888"
-        accent = "#3498db"
-
-    return f"""
-        QDialog, QMessageBox, QProgressDialog {{
-            background-color: {bg};
-            color: {fg};
-        }}
-        QDialog QWidget, QMessageBox QWidget, QProgressDialog QWidget {{
-            color: {fg};
-        }}
-        QLabel {{
-            background-color: transparent;
-            color: {fg};
-        }}
-        QGroupBox {{
-            background-color: {surface};
-            color: {fg};
-            border: 1px solid {border};
-            border-radius: 6px;
-            margin-top: 10px;
-            padding-top: 10px;
-            font-weight: bold;
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            subcontrol-position: top left;
-            left: 10px;
-            padding: 0 4px;
-            color: {fg};
-            background-color: transparent;
-        }}
-        QLineEdit, QSpinBox, QComboBox {{
-            background-color: {input_bg};
-            color: {fg};
-            border: 1px solid {border};
-            border-radius: 4px;
-            padding: 4px 8px;
-            selection-background-color: {accent};
-            selection-color: #ffffff;
-        }}
-        QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
-            border: 1px solid {accent};
-        }}
-        QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{
-            background-color: {disabled_bg};
-            color: {disabled_fg};
-            border: 1px solid {border};
-        }}
-        QComboBox QAbstractItemView {{
-            background-color: {input_bg};
-            color: {fg};
-            border: 1px solid {border};
-            selection-background-color: {accent};
-            selection-color: #ffffff;
-            outline: none;
-        }}
-        QCheckBox {{
-            background-color: transparent;
-            color: {fg};
-            spacing: 6px;
-        }}
-        QPushButton {{
-            background-color: {btn_bg};
-            color: {fg};
-            border: 1px solid {border};
-            border-radius: 4px;
-            padding: 6px 14px;
-        }}
-        QPushButton:hover {{
-            background-color: {btn_hover};
-        }}
-        QPushButton:disabled {{
-            background-color: {disabled_bg};
-            color: {disabled_fg};
-        }}
-        QMenu {{
-            background-color: {bg};
-            color: {fg};
-            border: 1px solid {border};
-            padding: 4px;
-        }}
-        QMenu::item {{
-            background-color: transparent;
-            color: {fg};
-            padding: 6px 24px 6px 12px;
-            border-radius: 4px;
-        }}
-        QMenu::item:selected {{
-            background-color: {accent};
-            color: #ffffff;
-        }}
-        QMenu::item:disabled {{
-            color: {muted_fg};
-            background-color: transparent;
-        }}
-        QMenu::separator {{
-            height: 1px;
-            background-color: {border};
-            margin: 4px 6px;
-        }}
-    """
-
-
-def apply_app_theme(theme_pref: str | None = None, widget: Any = None) -> bool:
-    """
-    Applies the chosen theme ('light', 'dark', or 'auto') globally to QApplication,
-    the optional target widget, and all currently open top-level windows/menus.
-    """
-    _detect_system_dark()
-    is_dark = is_dark_theme_active(theme_pref)
-    qss = get_theme_stylesheet(theme_pref)
+    global SYSTEM_DEFAULT_PALETTE
+    mode = (theme_mode or load_config().get("theme") or "auto").lower()
 
     try:
         from PySide6.QtGui import QColor, QPalette
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QWidget
 
         app = QApplication.instance()
-        if app is not None:
-            pal = QPalette()
-            if is_dark:
-                win_col = QColor("#202326")
-                base_col = QColor("#1b1e20")
-                alt_col = QColor("#262a2e")
-                text_col = QColor("#fcfcfc")
-                btn_col = QColor("#2d3238")
-                dis_col = QColor("#6c737a")
-                hl_col = QColor("#3daee9")
+        if app is None:
+            return None
+
+        if SYSTEM_DEFAULT_PALETTE is None:
+            set_system_default_palette(app.palette())
+
+        if mode == "light":
+            palette = QPalette()
+            palette.setColor(QPalette.Window, QColor("#eff0f1"))
+            palette.setColor(QPalette.WindowText, QColor("#232629"))
+            palette.setColor(QPalette.Base, QColor("#ffffff"))
+            palette.setColor(QPalette.AlternateBase, QColor("#f7f7f7"))
+            palette.setColor(QPalette.Text, QColor("#232629"))
+            palette.setColor(QPalette.Button, QColor("#fcfcfc"))
+            palette.setColor(QPalette.ButtonText, QColor("#232629"))
+            palette.setColor(QPalette.Mid, QColor("#bdc3c7"))
+            palette.setColor(QPalette.Dark, QColor("#7f8c8d"))
+            palette.setColor(QPalette.Light, QColor("#ffffff"))
+            palette.setColor(QPalette.Highlight, QColor("#3daee9"))
+            palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+            palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+            palette.setColor(QPalette.ToolTipText, QColor("#232629"))
+            palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#7f8c8d"))
+            palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#7f8c8d"))
+            palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#7f8c8d"))
+            app.setPalette(palette)
+        elif mode == "dark":
+            palette = QPalette()
+            palette.setColor(QPalette.Window, QColor("#202326"))
+            palette.setColor(QPalette.WindowText, QColor("#eff0f1"))
+            palette.setColor(QPalette.Base, QColor("#181a1c"))
+            palette.setColor(QPalette.AlternateBase, QColor("#232629"))
+            palette.setColor(QPalette.Text, QColor("#eff0f1"))
+            palette.setColor(QPalette.Button, QColor("#292c30"))
+            palette.setColor(QPalette.ButtonText, QColor("#eff0f1"))
+            palette.setColor(QPalette.Mid, QColor("#3b4045"))
+            palette.setColor(QPalette.Dark, QColor("#121415"))
+            palette.setColor(QPalette.Light, QColor("#454a4f"))
+            palette.setColor(QPalette.Highlight, QColor("#3daee9"))
+            palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+            palette.setColor(QPalette.ToolTipBase, QColor("#202326"))
+            palette.setColor(QPalette.ToolTipText, QColor("#eff0f1"))
+            palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#6c737a"))
+            palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#6c737a"))
+            palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6c737a"))
+            app.setPalette(palette)
+        else:
+            palette = QPalette(SYSTEM_DEFAULT_PALETTE)
+            app.setPalette(SYSTEM_DEFAULT_PALETTE)
+
+        for top in app.topLevelWidgets():
+            if hasattr(top, "_applied_theme_state") and hasattr(top, "apply_theme"):
+                top.apply_theme(mode)
             else:
-                win_col = QColor("#ffffff")
-                base_col = QColor("#ffffff")
-                alt_col = QColor("#f5f5f5")
-                text_col = QColor("#222222")
-                btn_col = QColor("#f5f5f5")
-                dis_col = QColor("#888888")
-                hl_col = QColor("#3498db")
+                top.setPalette(palette)
+                for child in top.findChildren(QWidget):
+                    child.setPalette(palette)
+                top.style().unpolish(top)
+                top.style().polish(top)
+                top.update()
 
-            pal.setColor(QPalette.Window, win_col)
-            pal.setColor(QPalette.WindowText, text_col)
-            pal.setColor(QPalette.Base, base_col)
-            pal.setColor(QPalette.AlternateBase, alt_col)
-            pal.setColor(QPalette.ToolTipBase, win_col)
-            pal.setColor(QPalette.ToolTipText, text_col)
-            pal.setColor(QPalette.Text, text_col)
-            pal.setColor(QPalette.Button, btn_col)
-            pal.setColor(QPalette.ButtonText, text_col)
-            pal.setColor(QPalette.Highlight, hl_col)
-            pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-            pal.setColor(QPalette.Disabled, QPalette.Text, dis_col)
-            pal.setColor(QPalette.Disabled, QPalette.WindowText, dis_col)
-            pal.setColor(QPalette.Disabled, QPalette.ButtonText, dis_col)
-            app.setPalette(pal)
-            app.setStyleSheet(qss)
-
-            if widget is not None and not hasattr(widget, "_applied_theme_state"):
-                widget.setStyleSheet(qss)
-
-            for top in app.topLevelWidgets():
-                if top is widget:
-                    continue
-                if hasattr(top, "apply_theme") and callable(top.apply_theme):
-                    try:
-                        top.apply_theme(theme_pref)
-                    except TypeError:
-                        top.apply_theme()
-                elif not hasattr(top, "_applied_theme_state"):
-                    top.setStyleSheet(qss)
+        return palette
     except Exception as exc:
         logger.debug("Failed to apply global theme: %s", exc)
-
-    return is_dark
+        return None
 
 
 def _sync_autostart(enabled: bool) -> None:
