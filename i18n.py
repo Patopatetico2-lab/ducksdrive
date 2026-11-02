@@ -194,7 +194,8 @@ _TRANSLATIONS = {
         "Sincronizando...": "Syncing...",
         "Desconectar": "Disconnect",
         "Remover": "Remove",
-        "Conectar / Reconectar": "Connect / Reconnect"
+        "Conectar / Reconectar": "Connect / Reconnect",
+        "Recomendado: 4 a 6 para Google Drive/OneDrive (valores muito altos podem causar rate-limit da API em pastas com milhares de arquivos).": "Recommended: 4 to 6 for Google Drive/OneDrive (very high values may trigger API rate-limiting on folders with thousands of files)."
     },
     "pt_BR": {
         "Rclone mount process died unexpectedly.": "O processo de montagem do Rclone encerrou inesperadamente.",

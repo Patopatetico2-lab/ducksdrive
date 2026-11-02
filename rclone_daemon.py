@@ -101,13 +101,14 @@ def get_clean_env() -> dict[str, str]:
     env.pop("APPDIR", None)
     return env
 
-def unmount_fuse_path(mount_path: str, lazy: bool = False) -> bool:
+def unmount_fuse_path(mount_path: str, lazy: bool = False, fallback_lazy: bool = True) -> bool:
     """
     Unmounts a FUSE mount path using the dynamically detected unmount tool.
 
     Args:
         mount_path: Directory path to unmount.
-        lazy: Whether to attempt lazy unmount if busy.
+        lazy: Whether to attempt lazy unmount immediately.
+        fallback_lazy: Whether to retry with lazy unmount (-uz) if normal unmount fails.
 
     Returns:
         bool: True if unmounted successfully or path wasn't mounted, False otherwise.
@@ -142,8 +143,8 @@ def unmount_fuse_path(mount_path: str, lazy: bool = False) -> bool:
     except Exception as exc:
         logger.error("Error executing unmount: %s", exc)
 
-    # Retry with lazy unmount if first attempt failed and not already lazy
-    if not lazy and "fusermount" in tool_name:
+    # Retry with lazy unmount if first attempt failed and fallback_lazy is enabled
+    if not lazy and fallback_lazy and "fusermount" in tool_name:
         logger.info("Retrying with lazy unmount (-uz)...")
         try:
             lazy_res = subprocess.run([unmount_bin, "-uz", mount_path], capture_output=True, text=True, timeout=5, env=get_clean_env())
@@ -206,29 +207,58 @@ def is_path_mounted(path: str) -> bool:
     return os.path.ismount(path)
 
 
+def get_fuse_waiting_requests(mount_path: str) -> int:
+    """
+    Reads the number of in-flight FUSE kernel requests for `mount_path` via
+    `/proc/self/mountinfo` and `/sys/fs/fuse/connections/<minor>/waiting`.
+    Pure kernel procfs/sysfs read: never touches FUSE or blocks in D-state.
+    """
+    if not os.path.exists("/proc/self/mountinfo"):
+        return 0
+    target = os.path.abspath(os.path.expanduser(mount_path))
+    try:
+        minor: Optional[str] = None
+        with open("/proc/self/mountinfo", "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 5:
+                    mp = os.path.abspath(unescape_mount_path(parts[4]))
+                    if mp == target and ":" in parts[2]:
+                        minor = parts[2].split(":", 1)[1]
+                        break
+        if minor:
+            waiting_file = f"/sys/fs/fuse/connections/{minor}/waiting"
+            if os.path.exists(waiting_file):
+                with open(waiting_file, "r", encoding="utf-8") as wf:
+                    return int(wf.read().strip() or 0)
+    except Exception:
+        pass
+    return 0
+
+
 def _teardown_mount(process: Optional["subprocess.Popen[str]"], mount_point: str) -> bool:
     """
     Blocking part of stopping a mount: unmount the FUSE path, terminate rclone
-    (10s grace period for the VFS cache flush, then SIGKILL) and run a final lazy unmount
+    (15s grace period for the VFS cache metadata flush, then SIGKILL) and run a final lazy unmount
     if the path is still reported as mounted.
 
-    Takes up to ~20s in the worst case, so it must never run on the GUI thread
+    Takes up to ~25s in the worst case, so it must never run on the GUI thread
     (except during application shutdown). Touches no Qt objects.
 
     Returns:
         bool: True if the first (non-lazy) unmount succeeded.
     """
-    # 1. First attempt to unmount via FUSE tool
-    unmounted = unmount_fuse_path(mount_point, lazy=False)
+    # 1. First attempt a clean (non-lazy) unmount via FUSE tool without forcing -uz while rclone is flushing
+    unmounted = unmount_fuse_path(mount_point, lazy=False, fallback_lazy=False)
 
-    # 2. Terminate the subprocess with extended timeout (10s) for safe VFS cache flushing
+    # 2. Terminate the subprocess with extended timeout (15s) for safe VFS metadata flushing
     if process and process.poll() is None:
         try:
             process.terminate()
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                logger.warning("Process did not terminate within 10s, sending SIGKILL...")
+                logger.warning("Process did not terminate within 15s, sending SIGKILL...")
                 process.kill()
                 process.wait(timeout=3)
         except Exception as exc:
@@ -236,7 +266,7 @@ def _teardown_mount(process: Optional["subprocess.Popen[str]"], mount_point: str
 
     # 3. Final fallback unmount if still reported as mounted
     if is_path_mounted(mount_point):
-        unmount_fuse_path(mount_point, lazy=True)
+        unmounted = unmount_fuse_path(mount_point, lazy=True) or unmounted
 
     return unmounted
 
@@ -282,6 +312,7 @@ class RcloneDaemon(QObject):
         self.process: Optional[subprocess.Popen[str]] = None
         self.current_remote: Optional[str] = None
         self.state = "stopped"
+        self.is_user_paused = False
         self._startup_timer: Optional[QTimer] = None
         self._startup_start_time = 0.0
         self._log_file: Optional[Any] = None
@@ -411,6 +442,7 @@ class RcloneDaemon(QObject):
         active_port = get_available_rc_port(self.rc_host, self.rc_port)
         self.rc_credentials = generate_rc_credentials(self.rc_host, active_port)
         self.current_remote = remote_name
+        self.is_user_paused = False
 
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
 
@@ -419,10 +451,15 @@ class RcloneDaemon(QObject):
         cfg = load_config()
         bwlimit = str(cfg.get("bwlimit", "off"))
         cache_size = str(cfg.get("vfs_cache_max_size", "2G"))
-        transfers = str(cfg.get("transfers", 4))
+        try:
+            transfers_int = max(1, int(cfg.get("transfers", 4)))
+        except (ValueError, TypeError):
+            transfers_int = 4
+        transfers = str(transfers_int)
+        checkers = str(max(8, transfers_int * 2))
         vfs_cache_mode = str(cfg.get("vfs_cache_mode", "full"))
 
-        # Build mandatory rclone mount arguments with user settings
+        # Build mandatory rclone mount arguments with user settings and FUSE/VFS optimizations
         cmd = [
             rclone_bin,
             "mount",
@@ -432,6 +469,8 @@ class RcloneDaemon(QObject):
             vfs_cache_mode,
             "--vfs-cache-max-size",
             cache_size,
+            "--vfs-write-back",
+            "15s",
             "--vfs-read-chunk-size",
             "8M",
             "--vfs-read-chunk-size-limit",
@@ -443,6 +482,16 @@ class RcloneDaemon(QObject):
             "--attr-timeout",
             "10s",
             "--vfs-fast-fingerprint",
+            "--write-back-cache",
+            "--no-modtime",
+            "--checkers",
+            checkers,
+            "--drive-pacer-min-sleep",
+            "10ms",
+            "--drive-pacer-burst",
+            "200",
+            "--drive-chunk-size",
+            "32M",
         ]
         if bwlimit.lower() != "off":
             cmd.extend(["--bwlimit", bwlimit])
@@ -611,6 +660,7 @@ class RcloneDaemon(QObject):
         self.process = None
         self.rc_credentials = None
         self.current_remote = None
+        self.is_user_paused = False
         self._last_stop_result = unmounted
         self._set_state("stopped")
 

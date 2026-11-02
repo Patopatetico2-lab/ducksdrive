@@ -340,6 +340,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._pending_remote_name: Optional[str] = None
         self.latest_stats: Optional[StatsData] = None
         self._was_syncing = False
+        self._idle_confirm_polls = 0
         self._current_icon_state = "idle"
 
         # Background runner for rclone subprocess calls (never block the GUI thread)
@@ -598,6 +599,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
             if has_active:
                 self._was_syncing = True
+                self._idle_confirm_polls = 0
                 self.update_tray_icon("syncing")
                 menu_header = f"{clean_name} • {tr('Sincronizando...')}"
                 if stats.active_transfers:
@@ -609,19 +611,27 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 else:
                     self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
             else:
-                self.update_tray_icon("idle")
                 if self._was_syncing:
-                    self._was_syncing = False
-                    self.showMessage(
-                        APP_NAME,
-                        tr("Transferências concluídas! Todos os ficheiros foram sincronizados com a nuvem."),
-                        QSystemTrayIcon.Information,
-                        4000
-                    )
-                menu_header = f"{clean_name} • {tr('Conectado')}"
-                self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
+                    self._idle_confirm_polls += 1
+                    if self._idle_confirm_polls >= 3:
+                        self._was_syncing = False
+                        self._idle_confirm_polls = 0
+                        self.update_tray_icon("idle")
+                        self.showMessage(
+                            APP_NAME,
+                            tr("Transferências concluídas! Todos os ficheiros foram sincronizados com a nuvem."),
+                            QSystemTrayIcon.Information,
+                            4000
+                        )
+                        menu_header = f"{clean_name} • {tr('Conectado')}"
+                        self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
+                else:
+                    self.update_tray_icon("idle")
+                    menu_header = f"{clean_name} • {tr('Conectado')}"
+                    self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
         else:
             self._was_syncing = False
+            self._idle_confirm_polls = 0
             self.update_tray_icon("error")
             if self.daemon.state == "mounted":
                 self._set_status_and_tooltip(tr("Status: Conexão Perdida"), None)

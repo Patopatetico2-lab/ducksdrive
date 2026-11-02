@@ -91,6 +91,9 @@ class SettingsDialog(QDialog):
         self.transfers_spin = QSpinBox()
         self.transfers_spin.setRange(1, 16)
         self.transfers_spin.setValue(4)
+        self.transfers_spin.setToolTip(
+            tr("Recomendado: 4 a 6 para Google Drive/OneDrive (valores muito altos podem causar rate-limit da API em pastas com milhares de arquivos).")
+        )
         net_layout.addRow(tr("Transferências Paralelas:"), self.transfers_spin)
 
         main_layout.addWidget(net_group)

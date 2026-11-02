@@ -158,7 +158,7 @@ class QuotaWorkerThread(QThread):
                 method="POST"
             )
             
-            with urllib.request.urlopen(req_about, timeout=4) as response:
+            with urllib.request.urlopen(req_about, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
                 total = int(data.get("total") or 0)
                 used = int(data.get("used") or 0)
@@ -534,6 +534,7 @@ class StatusPopup(QWidget):
         """Resets pause state, quota cache, and popup widgets when unmounting or switching cloud remotes."""
         if state in ("stopped", "unmounting", "starting", "error") or self.daemon.current_remote != self._quota_remote:
             self.is_paused = False
+            self.daemon.is_user_paused = False
             self._last_quota_update = 0
             if state in ("stopped", "unmounting", "error"):
                 self._quota_remote = None
@@ -573,8 +574,12 @@ class StatusPopup(QWidget):
             self._quota_timer.stop()
 
     def _fetch_quota(self) -> None:
-        """Spawns the background thread to fetch cloud quota info without blocking UI."""
+        """Spawns the background thread to fetch cloud quota info without blocking UI or competing with active transfers."""
         if not self.daemon.is_running() or not self.daemon.rc_credentials:
+            return
+
+        # Defer quota API calls while file transfers are active to avoid pacer contention and context canceled errors
+        if self._latest_stats is not None and self._latest_stats.has_active_transfers:
             return
 
         if hasattr(self, "_quota_worker") and self._quota_worker:
@@ -716,6 +721,7 @@ class StatusPopup(QWidget):
             self.btn_pause.setEnabled(True)
             if ok and self.daemon.is_running():
                 self.is_paused = target_pause
+                self.daemon.is_user_paused = target_pause
                 self._apply_pause_button_ui()
 
         self._pause_runner.submit(do_request, target_pause, callback=on_done)
@@ -801,6 +807,10 @@ class StatusPopup(QWidget):
                         self.scroll_layout.removeWidget(w)
                         w.deleteLater()
             else:
+                if stats.vfs_queue_count > 0:
+                    self.empty_label.setText(tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % stats.vfs_queue_count)
+                else:
+                    self.empty_label.setText(tr("Nenhum arquivo sendo transferido"))
                 clear_transfers()
         else:
             self.title_label.setText("<b>DucksDrive</b>")

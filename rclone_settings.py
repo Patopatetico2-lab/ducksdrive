@@ -118,19 +118,28 @@ def get_rclone_cache_dir() -> str:
 
 
 def get_vfs_cache_usage_bytes() -> int:
-    """Calculates total disk space in bytes currently used by the rclone VFS cache."""
+    """Calculates total disk space in bytes currently used by the rclone VFS cache using fast os.scandir traversal."""
     cache_dir = get_rclone_cache_dir()
     if not os.path.isdir(cache_dir):
         return 0
     total = 0
-    for root, _, files in os.walk(cache_dir):
-        for name in files:
-            fp = os.path.join(root, name)
-            try:
-                if not os.path.islink(fp):
-                    total += os.path.getsize(fp)
-            except OSError:
-                pass
+    stack = [cache_dir]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
     return total
 
 

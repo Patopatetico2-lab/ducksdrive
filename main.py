@@ -140,7 +140,7 @@ class RcloneAppController(QObject):
             # Start statistics polling
             if self.daemon.rc_credentials:
                 self._stop_poller()
-                self.stats_poller = RcloneStatsPoller(self.daemon.rc_credentials)
+                self.stats_poller = RcloneStatsPoller(self.daemon.rc_credentials, daemon=self.daemon)
                 self.stats_poller.stats_updated.connect(self.tray.update_stats)
                 self.stats_poller.connection_lost.connect(self._on_connection_lost)
                 self.stats_poller.start()

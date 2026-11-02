@@ -17,7 +17,8 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
-from rclone_daemon import RCCredentials
+from rclone_daemon import RCCredentials, get_fuse_waiting_requests, is_path_mounted
+from rclone_settings import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,14 @@ class StatsData:
     errors_count: int = 0
     status_text: str = "Disconnected"
     active_transfers: List[Dict[str, Any]] = field(default_factory=list)
+    vfs_queue_count: int = 0
+    is_burst_paused: bool = False
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_active_transfers(self) -> bool:
-        """True only while rclone reports files in its `transferring` list."""
-        return self.is_online and len(self.active_transfers) > 0
+        """True while rclone reports active transfers or files waiting in the VFS upload queue."""
+        return self.is_online and (len(self.active_transfers) > 0 or self.vfs_queue_count > 0)
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -94,7 +97,7 @@ def _get_auth_header(creds: RCCredentials) -> str:
     return f"Basic {b64_auth}"
 
 
-def fetch_rclone_stats(creds: RCCredentials, timeout: float = 1.5) -> StatsData:
+def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
     """
     Executes a single HTTP POST query to `http://<host>:<port>/core/stats`
     using HTTP Basic Auth.
@@ -223,7 +226,9 @@ def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> boo
 class RcloneStatsPoller(QThread):
     """
     Dedicated background worker thread that polls Rclone RC `/core/stats`
-    every 1 second and emits parsed statistics signals.
+    every 1 second, tracks the VFS upload queue, and automatically yields
+    background upload bandwidth during active local FUSE directory/file bursts
+    so file managers (Dolphin/Nautilus) never freeze.
     """
 
     stats_updated = Signal(object)  # Emits StatsData instance
@@ -234,11 +239,22 @@ class RcloneStatsPoller(QThread):
         credentials: RCCredentials,
         poll_interval: float = 1.0,
         parent: Optional[Any] = None,
+        daemon: Optional[Any] = None,
     ) -> None:
         super().__init__(parent)
         self.credentials = credentials
         self.poll_interval = poll_interval
+        self.daemon = daemon
         self._running = False
+
+    def _is_daemon_mount_alive(self) -> bool:
+        """Checks whether the underlying rclone daemon process and mount point are still active."""
+        if self.daemon is None:
+            return False
+        try:
+            return bool(self.daemon.is_running() and is_path_mounted(self.daemon.mount_point))
+        except Exception:
+            return False
 
     def run(self) -> None:
         """Main polling loop running once per second."""
@@ -247,16 +263,91 @@ class RcloneStatsPoller(QThread):
 
         was_online = False
         consecutive_failures = 0
+        last_valid_stats: Optional[StatsData] = None
+        vfs_queue_count = 0
+        last_queue_check = 0.0
+        last_listed: Optional[int] = None
+        burst_throttled = False
+        quiet_polls = 0
+
         while self._running:
-            stats = fetch_rclone_stats(self.credentials, timeout=1.5)
+            stats = fetch_rclone_stats(self.credentials, timeout=4.0)
+            now = time.monotonic()
 
             if stats.is_online:
                 consecutive_failures = 0
                 was_online = True
+
+                # Track directory lookup/creation rate (`listed` counter)
+                current_listed = int(stats.raw_data.get("listed", 0))
+                listed_delta = max(0, current_listed - last_listed) if last_listed is not None else 0
+                last_listed = current_listed
+
+                # Poll VFS upload queue every 2s or when transfers/bursts are active
+                should_check_queue = (
+                    (now - last_queue_check >= 2.0)
+                    or len(stats.active_transfers) > 0
+                    or vfs_queue_count > 0
+                    or listed_delta > 0
+                )
+                if should_check_queue:
+                    q_len = fetch_vfs_queue(self.credentials, timeout=2.0)
+                    if q_len is not None:
+                        vfs_queue_count = q_len
+                    last_queue_check = now
+
+                stats.vfs_queue_count = vfs_queue_count
+                if len(stats.active_transfers) == 0 and vfs_queue_count > 0:
+                    stats.status_text = f"Syncing ({vfs_queue_count} queued) • {stats.speed_str} • ETA {stats.eta_str}"
+
+                # Smart FUSE Burst Coalescing: if the file manager is actively creating folders/files
+                # on the FUSE mount while background uploads are running, yield upload bandwidth (Tx)
+                # so VFS directory locks and Google Drive API pacer tokens are 100% free for the file manager.
+                waiting_reqs = (
+                    get_fuse_waiting_requests(self.daemon.mount_point)
+                    if self.daemon is not None and getattr(self.daemon, "mount_point", None)
+                    else 0
+                )
+                user_paused = bool(self.daemon is not None and getattr(self.daemon, "is_user_paused", False))
+                has_bg_uploads = len(stats.active_transfers) > 0 or vfs_queue_count > 0
+                fuse_busy = (waiting_reqs >= 1 and (listed_delta >= 1 or vfs_queue_count > 0)) or (listed_delta >= 4)
+
+                if user_paused:
+                    burst_throttled = False
+                    quiet_polls = 0
+                elif fuse_busy and has_bg_uploads:
+                    quiet_polls = 0
+                    if not burst_throttled:
+                        user_bw = str(load_config().get("bwlimit") or "off")
+                        rx_limit = user_bw.split(":", 1)[1] if ":" in user_bw else user_bw
+                        if set_rc_bwlimit(self.credentials, f"1B:{rx_limit}", timeout=2.0):
+                            burst_throttled = True
+                            logger.info(
+                                "FUSE burst active (waiting=%d, listed_delta=%d); prioritizing file manager.",
+                                waiting_reqs,
+                                listed_delta,
+                            )
+                    stats.is_burst_paused = burst_throttled
+                elif burst_throttled:
+                    quiet_polls += 1
+                    if quiet_polls >= 3:
+                        user_bw = str(load_config().get("bwlimit") or "off")
+                        if set_rc_bwlimit(self.credentials, user_bw, timeout=2.0):
+                            burst_throttled = False
+                            quiet_polls = 0
+                            logger.info("FUSE burst finished; restored background transfer rate (%s).", user_bw)
+                    else:
+                        stats.is_burst_paused = True
+
+                last_valid_stats = stats
                 self.stats_updated.emit(stats)
             else:
                 consecutive_failures += 1
-                if consecutive_failures >= 3:
+                # If rclone is simply busy with heavy FUSE/VFS locks, do not falsely report "Offline"
+                if self._is_daemon_mount_alive() and consecutive_failures < 10:
+                    if last_valid_stats is not None:
+                        self.stats_updated.emit(last_valid_stats)
+                elif consecutive_failures >= 3:
                     if was_online:
                         self.connection_lost.emit()
                         was_online = False
