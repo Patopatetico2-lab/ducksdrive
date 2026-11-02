@@ -605,7 +605,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
                     name = t.get("name", tr("Arquivo"))
-                    pct = int(t.get("percentage") or 0)
+                    pct = min(99, int(t.get("percentage") or 0))
                     tooltip_detail = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                     self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {tooltip_detail}")
                 else:

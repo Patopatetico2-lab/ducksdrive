@@ -17,8 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
-from rclone_daemon import RCCredentials, get_fuse_waiting_requests, is_path_mounted
-from rclone_settings import load_config
+from rclone_daemon import RCCredentials, is_path_mounted
 
 logger = logging.getLogger(__name__)
 
@@ -267,8 +266,6 @@ class RcloneStatsPoller(QThread):
         vfs_queue_count = 0
         last_queue_check = 0.0
         last_listed: Optional[int] = None
-        burst_throttled = False
-        quiet_polls = 0
 
         while self._running:
             stats = fetch_rclone_stats(self.credentials, timeout=4.0)
@@ -299,45 +296,6 @@ class RcloneStatsPoller(QThread):
                 stats.vfs_queue_count = vfs_queue_count
                 if len(stats.active_transfers) == 0 and vfs_queue_count > 0:
                     stats.status_text = f"Syncing ({vfs_queue_count} queued) • {stats.speed_str} • ETA {stats.eta_str}"
-
-                # Smart FUSE Burst Coalescing: if the file manager is actively creating folders/files
-                # on the FUSE mount while background uploads are running, yield upload bandwidth (Tx)
-                # so VFS directory locks and Google Drive API pacer tokens are 100% free for the file manager.
-                waiting_reqs = (
-                    get_fuse_waiting_requests(self.daemon.mount_point)
-                    if self.daemon is not None and getattr(self.daemon, "mount_point", None)
-                    else 0
-                )
-                user_paused = bool(self.daemon is not None and getattr(self.daemon, "is_user_paused", False))
-                has_bg_uploads = len(stats.active_transfers) > 0 or vfs_queue_count > 0
-                fuse_busy = (waiting_reqs >= 1 and (listed_delta >= 1 or vfs_queue_count > 0)) or (listed_delta >= 4)
-
-                if user_paused:
-                    burst_throttled = False
-                    quiet_polls = 0
-                elif fuse_busy and has_bg_uploads:
-                    quiet_polls = 0
-                    if not burst_throttled:
-                        user_bw = str(load_config().get("bwlimit") or "off")
-                        rx_limit = user_bw.split(":", 1)[1] if ":" in user_bw else user_bw
-                        if set_rc_bwlimit(self.credentials, f"1B:{rx_limit}", timeout=2.0):
-                            burst_throttled = True
-                            logger.info(
-                                "FUSE burst active (waiting=%d, listed_delta=%d); prioritizing file manager.",
-                                waiting_reqs,
-                                listed_delta,
-                            )
-                    stats.is_burst_paused = burst_throttled
-                elif burst_throttled:
-                    quiet_polls += 1
-                    if quiet_polls >= 3:
-                        user_bw = str(load_config().get("bwlimit") or "off")
-                        if set_rc_bwlimit(self.credentials, user_bw, timeout=2.0):
-                            burst_throttled = False
-                            quiet_polls = 0
-                            logger.info("FUSE burst finished; restored background transfer rate (%s).", user_bw)
-                    else:
-                        stats.is_burst_paused = True
 
                 last_valid_stats = stats
                 self.stats_updated.emit(stats)

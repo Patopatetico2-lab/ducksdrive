@@ -791,7 +791,7 @@ class StatusPopup(QWidget):
                 active_names = set()
                 for t in stats.active_transfers:
                     name = t.get("name", tr("Arquivo"))
-                    pct = int(t.get("percentage") or 0)
+                    pct = min(99, int(t.get("percentage") or 0))
                     active_names.add(name)
                     
                     if name in existing_items:
