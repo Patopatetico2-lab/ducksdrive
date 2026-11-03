@@ -1021,7 +1021,7 @@
           <div class="feature-icon">🛡️</div>
           <h3 data-i18n="feat5_title">Monitoramento FUSE e Desligamento Seguro</h3>
           <p data-i18n="feat5_desc">
-            Um <code>QTimer</code> vigia o processo FUSE em segundo plano sem travar a interface. Ao fechar o app, ele aguarda até 10s para garantir que o cache seja gravado com segurança na nuvem.
+            Um <code>QTimer</code> vigia o processo FUSE em segundo plano sem travar a interface. Ao fechar o app, ele aguarda até 15s para garantir que o cache seja gravado com segurança na nuvem.
           </p>
         </div>
 
@@ -1202,7 +1202,7 @@
         feat4_title: 'Controle de Cache SSD (VFS)',
         feat4_desc: 'Defina o limite de espaço usado pelo cache no seu SSD (<code>--vfs-cache-max-size</code>) e a quantidade de transferências simultâneas (<code>--transfers</code>) sem tocar em arquivos de texto.',
         feat5_title: 'Monitoramento FUSE e Desligamento Seguro',
-        feat5_desc: 'Um <code>QTimer</code> vigia o processo FUSE em segundo plano sem travar a interface. Ao fechar o app, ele aguarda até 10s para garantir que o cache seja gravado com segurança na nuvem.',
+        feat5_desc: 'Um <code>QTimer</code> vigia o processo FUSE em segundo plano sem travar a interface. Ao fechar o app, ele aguarda até 15s para garantir que o cache seja gravado com segurança na nuvem.',
         feat6_title: 'Instância Única e Logs Rotativos',
         feat6_desc: 'Protegido com <code>QLockFile</code> para evitar conflitos na porta RC do rclone e equipado com <code>RotatingFileHandler</code> (até 5 MB) em <code>~/.local/share/ducksdrive/</code>.',
         install_heading: 'Instalação em Segundos',
@@ -1252,7 +1252,7 @@
         feat4_title: 'SSD VFS Cache Control',
         feat4_desc: 'Customize how much SSD space the VFS cache can use (<code>--vfs-cache-max-size</code>) and tune parallel transfers (<code>--transfers</code>) visually.',
         feat5_title: 'FUSE Watchdog & Safe Shutdown',
-        feat5_desc: 'A background <code>QTimer</code> monitors the FUSE mount without freezing the UI. On exit, DucksDrive waits up to 10s for cached writes to flush safely.',
+        feat5_desc: 'A background <code>QTimer</code> monitors the FUSE mount without freezing the UI. On exit, DucksDrive waits up to 15s for cached writes to flush safely.',
         feat6_title: 'Single Instance & Rotating Logs',
         feat6_desc: 'Protected by <code>QLockFile</code> to prevent rclone RC port conflicts, with automatic 5 MB log rotation (<code>RotatingFileHandler</code>) in <code>~/.local/share/ducksdrive/</code>.',
         install_heading: 'Install in Seconds',

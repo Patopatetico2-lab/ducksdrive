@@ -17,6 +17,8 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from i18n import tr
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,15 +122,18 @@ SUPPORTED_REMOTE_TYPES = [
 ]
 
 
-_SENSITIVE_PARAMS = {"pass", "password", "secret_access_key", "token", "client_secret"}
+_SENSITIVE_PARAMS = {"pass", "password", "secret_access_key", "token", "client_secret", "--rc-pass"}
 
 
 def mask_command(cmd: List[str]) -> str:
-    """Returns the command line as a string with the value of sensitive `key value` pairs hidden."""
+    """Returns the command line as a string with the value of sensitive `key value` or `key=value` pairs hidden."""
     masked: List[str] = []
     for i, arg in enumerate(cmd):
         if i > 0 and cmd[i - 1].lower() in _SENSITIVE_PARAMS:
             masked.append("******")
+        elif "=" in arg and arg.split("=", 1)[0].lower() in _SENSITIVE_PARAMS:
+            key = arg.split("=", 1)[0]
+            masked.append(f"{key}=******")
         else:
             masked.append(arg)
     return " ".join(masked)
@@ -229,6 +234,42 @@ def list_remote_names() -> List[str]:
     return sorted(list(remotes.keys()))
 
 
+def get_remote_type_fast(remote_name: str) -> Optional[str]:
+    """
+    Reads the remote backend `type` directly from the rclone.conf file without spawning a subprocess.
+    Safe to call on the GUI thread. Returns None if not found or encrypted.
+    """
+    clean_name = remote_name.rstrip(":")
+    env_path = os.environ.get("RCLONE_CONFIG")
+    if env_path:
+        conf_path = os.path.expanduser(env_path)
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        conf_path = os.path.join(xdg, "rclone", "rclone.conf")
+
+    if not os.path.isfile(conf_path):
+        return None
+
+    target_header = f"[{clean_name}]"
+    in_section = False
+    try:
+        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or line.startswith(";"):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    in_section = (line == target_header)
+                    continue
+                if in_section and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip().lower() == "type":
+                        return v.strip().lower()
+    except OSError:
+        pass
+    return None
+
+
 class RemoteCreationThread(QThread):
     """
     Background worker thread to run `rclone config create` asynchronously,
@@ -254,24 +295,31 @@ class RemoteCreationThread(QThread):
         self._process: Optional[subprocess.Popen[str]] = None
         self._is_cancelled = False
 
+    @property
+    def is_cancelled(self) -> bool:
+        """True if the user cancelled the remote creation."""
+        return self._is_cancelled
+
     def run(self) -> None:
         """Executes the remote configuration command and streams log messages."""
         self.started_creation.emit(self.remote_name)
         try:
             rclone_bin = get_rclone_path()
         except FileNotFoundError as fnf:
-            self.finished_creation.emit(False, str(fnf))
+            self.finished_creation.emit(False, tr(str(fnf)))
             return
 
-        cmd = [rclone_bin, "config", "create", self.remote_name, self.remote_type]
         params: Dict[str, str] = {}
         if self.remote_type in ("drive", "onedrive", "dropbox", "box", "pcloud"):
             params["config_is_local"] = "true"
         params.update(self.extra_params)
+
+        cmd = [rclone_bin, "config", "create"]
+        if "pass" in params and self.remote_type in ("mega", "ftp", "sftp", "webdav"):
+            cmd.append("--obscure")
+        cmd.extend(["--", self.remote_name, self.remote_type])
         for key, value in params.items():
             cmd.extend([key, str(value)])
-        if self.remote_type in ("mega", "ftp", "sftp", "webdav"):
-            cmd.append("--obscure")
 
         logger.info("Starting background creation: %s", mask_command(cmd))
         try:
@@ -295,6 +343,11 @@ class RemoteCreationThread(QThread):
 
                 while True:
                     if self._is_cancelled:
+                        if self._process.poll() is None:
+                            try:
+                                self._process.terminate()
+                            except Exception:
+                                pass
                         break
                     if time.time() > deadline:
                         timed_out = True
@@ -325,31 +378,38 @@ class RemoteCreationThread(QThread):
                         
                 self._process.stdout.close()
 
-            self._process.wait(timeout=5)
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    self._process.kill()
+                    self._process.wait(timeout=2)
+                except Exception:
+                    pass
             ret_code = self._process.returncode
 
             if timed_out:
-                self.finished_creation.emit(False, f"Operation timed out after {self.timeout}s.")
+                self.finished_creation.emit(False, tr("A operação excedeu o tempo limite de %ds.") % self.timeout)
                 return
 
             if self._is_cancelled:
-                self.finished_creation.emit(False, f"Creation of '{self.remote_name}' was cancelled.")
+                self.finished_creation.emit(False, tr("A criação de '%s' foi cancelada.") % self.remote_name)
                 return
 
             if ret_code == 0:
-                self.finished_creation.emit(True, f"Remote '{self.remote_name}' configured successfully.")
+                self.finished_creation.emit(True, tr("Nuvem '%s' configurada com sucesso.") % self.remote_name)
             else:
-                err_summary = "\n".join(output_lines[-5:]) if output_lines else "Unknown error"
+                err_summary = "\n".join(output_lines[-5:]) if output_lines else tr("Erro desconhecido")
                 self.finished_creation.emit(
                     False,
-                    f"Configuration failed (code {ret_code}):\n{err_summary}",
+                    tr("Falha na configuração (código %s):\n%s") % (ret_code, err_summary),
                 )
 
         except subprocess.TimeoutExpired:
             self.cancel()
-            self.finished_creation.emit(False, f"Operation timed out after {self.timeout}s.")
+            self.finished_creation.emit(False, tr("A operação excedeu o tempo limite de %ds.") % self.timeout)
         except Exception as exc:
-            self.finished_creation.emit(False, f"Exception while configuring remote: {str(exc)}")
+            self.finished_creation.emit(False, tr("Erro inesperado ao configurar nuvem: %s") % str(exc))
 
     def cancel(self) -> None:
         """Cancels and terminates the active process if running."""
@@ -383,7 +443,7 @@ def delete_remote(remote_name: str) -> bool:
     try:
         rclone_bin = get_rclone_path()
         clean_name = remote_name.rstrip(":")
-        cmd = [rclone_bin, "config", "delete", clean_name]
+        cmd = [rclone_bin, "config", "delete", "--", clean_name]
         logger.info("Executing rclone config delete: %s", " ".join(cmd))
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=get_clean_env())
         if res.returncode == 0:

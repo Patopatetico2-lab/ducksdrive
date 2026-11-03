@@ -103,15 +103,16 @@ def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
     Adds a URI entry to GTK 3.0 bookmarks file.
     Format: file:///home/user/Path Label
     """
+    bookmarks_path = _get_gtk_bookmarks_path()
     path = os.path.abspath(os.path.expanduser(path))
     uri = f"file://{urllib.parse.quote(path)}"
     entry = f"{uri} {label}"
 
-    os.makedirs(os.path.dirname(GTK_BOOKMARKS_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(bookmarks_path), exist_ok=True)
 
     lines = []
-    if os.path.exists(GTK_BOOKMARKS_PATH):
-        with open(GTK_BOOKMARKS_PATH, "r", encoding="utf-8") as f:
+    if os.path.exists(bookmarks_path):
+        with open(bookmarks_path, "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f.readlines() if line.strip()]
 
     if any(line == uri or line.startswith(uri + " ") for line in lines):
@@ -120,7 +121,7 @@ def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
 
     lines.append(entry)
     try:
-        _atomic_write_text(GTK_BOOKMARKS_PATH, "\n".join(lines) + "\n")
+        _atomic_write_text(bookmarks_path, "\n".join(lines) + "\n")
         logger.info("Added GTK bookmark: %s", entry)
         return True
     except Exception as e:
@@ -130,14 +131,15 @@ def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
 
 def remove_gtk_bookmark(path: str) -> bool:
     """Removes the exact URI entry (with or without label) from GTK bookmarks."""
-    if not os.path.exists(GTK_BOOKMARKS_PATH):
+    bookmarks_path = _get_gtk_bookmarks_path()
+    if not os.path.exists(bookmarks_path):
         return True
 
     path = os.path.abspath(os.path.expanduser(path))
     uri = f"file://{urllib.parse.quote(path)}"
 
     try:
-        with open(GTK_BOOKMARKS_PATH, "r", encoding="utf-8") as f:
+        with open(bookmarks_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         new_lines = [line for line in lines if not (line.strip() == uri or line.strip().startswith(uri + " "))]
@@ -145,7 +147,7 @@ def remove_gtk_bookmark(path: str) -> bool:
         if len(lines) == len(new_lines):
             return True
 
-        _atomic_write_text(GTK_BOOKMARKS_PATH, "".join(new_lines))
+        _atomic_write_text(bookmarks_path, "".join(new_lines))
         logger.info("Removed GTK bookmark for %s", path)
         return True
     except Exception as e:
@@ -162,8 +164,9 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
         <metadata owner="http://www.kde.org"><ID/><isSystemItem/></metadata>
       </info></bookmark>
     """
-    if not os.path.exists(KDE_PLACES_PATH):
-        logger.debug("KDE places file not found at %s", KDE_PLACES_PATH)
+    kde_places_path = _get_kde_places_path()
+    if not os.path.exists(kde_places_path):
+        logger.debug("KDE places file not found at %s", kde_places_path)
         return False
 
     path = os.path.abspath(os.path.expanduser(path))
@@ -171,7 +174,7 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
 
     try:
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
-        tree = ET.parse(KDE_PLACES_PATH, parser=parser)
+        tree = ET.parse(kde_places_path, parser=parser)
         root = tree.getroot()
 
         for bookmark in root.findall("bookmark"):
@@ -179,7 +182,7 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
                 logger.info("KDE place for %s already exists.", path)
                 return True
 
-        _backup_once(KDE_PLACES_PATH)
+        _backup_once(kde_places_path)
 
         new_bookmark = ET.SubElement(root, "bookmark", {"href": uri})
         title = ET.SubElement(new_bookmark, "title")
@@ -194,7 +197,7 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
         ET.SubElement(meta_kde, "ID").text = hashlib.sha1(path.encode("utf-8")).hexdigest()
         ET.SubElement(meta_kde, "isSystemItem").text = "false"
 
-        _atomic_write_tree(tree, KDE_PLACES_PATH)
+        _atomic_write_tree(tree, kde_places_path)
         logger.info("Added KDE place: %s", label)
         return True
     except Exception as e:
@@ -204,7 +207,8 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
 
 def remove_kde_place(path: str) -> bool:
     """Removes the bookmark entry for the given path from user-places.xbel."""
-    if not os.path.exists(KDE_PLACES_PATH):
+    kde_places_path = _get_kde_places_path()
+    if not os.path.exists(kde_places_path):
         return True
 
     path = os.path.abspath(os.path.expanduser(path))
@@ -212,19 +216,19 @@ def remove_kde_place(path: str) -> bool:
 
     try:
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
-        tree = ET.parse(KDE_PLACES_PATH, parser=parser)
+        tree = ET.parse(kde_places_path, parser=parser)
         root = tree.getroot()
 
         to_remove = [b for b in root.findall("bookmark") if b.get("href") == uri]
         if not to_remove:
             return True
 
-        _backup_once(KDE_PLACES_PATH)
+        _backup_once(kde_places_path)
 
         for bookmark in to_remove:
             root.remove(bookmark)
 
-        _atomic_write_tree(tree, KDE_PLACES_PATH)
+        _atomic_write_tree(tree, kde_places_path)
         logger.info("Removed KDE place for %s", path)
         return True
     except Exception as e:

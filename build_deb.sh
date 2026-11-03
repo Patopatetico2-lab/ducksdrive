@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PKG_NAME="ducksdrive"
-PKG_VER="1.0.7"
+PKG_VER="1.0.8"
 PKG_REL="1"
 DEB_FILE="${PKG_NAME}_${PKG_VER}-${PKG_REL}_all.deb"
 WORK_DIR="$(mktemp -d)"
@@ -20,7 +20,7 @@ mkdir -p "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "$ROOT_DIR/usr/share/doc/$PKG_NAME"
 mkdir -p "$CTRL_DIR"
 
-install -Dm644 ./*.py -t "$ROOT_DIR/usr/share/$PKG_NAME/"
+install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py -t "$ROOT_DIR/usr/share/$PKG_NAME/"
 install -Dm644 ./icon.svg "$ROOT_DIR/usr/share/$PKG_NAME/icon.svg"
 install -Dm644 ./icon.svg "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps/$PKG_NAME.svg"
 install -Dm644 ./LICENSE "$ROOT_DIR/usr/share/doc/$PKG_NAME/copyright"
@@ -57,7 +57,7 @@ Section: utils
 Priority: optional
 Architecture: all
 Installed-Size: $INSTALLED_SIZE
-Depends: python3, rclone, fuse3 | fuse, python3-pyside6.qtwidgets | python3-venv, python3-pyside6.qtgui | python3-pip, python3-pyside6.qtcore | python3-pip, python3-pyside6.qtsvg | libxcb-cursor0
+Depends: python3, rclone, fuse3 | fuse, python3-pyside6.qtwidgets | python3-venv, python3-pyside6.qtgui | python3-pip, python3-pyside6.qtcore | python3-pip, python3-pyside6.qtsvg | python3-venv, libxcb-cursor0
 Maintainer: DucksDrive <https://github.com/Patopatetico2-lab/ducksdrive>
 Homepage: https://github.com/Patopatetico2-lab/ducksdrive
 Description: Lightweight Linux system tray client for Rclone FUSE mounts
@@ -75,7 +75,7 @@ if ! /usr/bin/python3 -c "import PySide6" >/dev/null 2>&1; then
         echo "PySide6 not found in system python3; creating isolated venv in /usr/share/ducksdrive/venv..."
         /usr/bin/python3 -m venv /usr/share/ducksdrive/venv
         /usr/share/ducksdrive/venv/bin/pip install --upgrade pip >/dev/null 2>&1 || true
-        /usr/share/ducksdrive/venv/bin/pip install "PySide6>=6.6,<7"
+        /usr/share/ducksdrive/venv/bin/pip install "PySide6>=6.6,<7" || echo "Warning: Failed to download PySide6 via pip. Install python3-pyside6 packages via apt." >&2
     fi
 fi
 update-desktop-database /usr/share/applications >/dev/null 2>&1 || true

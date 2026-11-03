@@ -36,7 +36,7 @@ from rclone_settings import (
     load_config,
     save_config,
 )
-from rclone_stats import fetch_vfs_queue, format_bytes
+from rclone_stats import fetch_rclone_stats, fetch_vfs_queue, format_bytes
 from i18n import set_language, tr
 
 logger = logging.getLogger(__name__)
@@ -48,10 +48,17 @@ class SettingsDialog(QDialog):
     and system integration preferences using safe controls instead of free text inputs.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None, daemon: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        daemon: Optional[Any] = None,
+        runner: Optional[TaskRunner] = None,
+    ) -> None:
         super().__init__(parent)
         self.daemon = daemon
+        self.runner = runner or getattr(daemon, "_integration_runner", None)
         self._cache_runner = TaskRunner(self)
+        self._clearing_cache = False
         self.language_changed = False
         self.bwlimit_changed = False
         self.theme_changed = False
@@ -282,7 +289,10 @@ class SettingsDialog(QDialog):
             usage = get_vfs_cache_usage_bytes()
             pending = 0
             if usage > 0 and rc_creds is not None:
-                pending = int(fetch_vfs_queue(rc_creds) or 0)
+                q_count = int(fetch_vfs_queue(rc_creds) or 0)
+                st = fetch_rclone_stats(rc_creds, timeout=2.0)
+                active_count = len(st.active_transfers) if st.is_online else 0
+                pending = max(q_count, active_count)
             return usage, pending
 
         self._cache_runner.submit(_check_before_clear, creds, callback=self._on_pre_clear_checked)
@@ -319,19 +329,43 @@ class SettingsDialog(QDialog):
             self.btn_clear_cache.setEnabled(True)
             return
 
+        self._clearing_cache = True
+
         def _do_clear() -> int:
             clear_vfs_cache_files()
             return get_vfs_cache_usage_bytes()
 
-        self._cache_runner.submit(_do_clear, callback=self._on_cache_cleared)
+        if self.daemon is not None and self.daemon.is_running():
+            active_remote = self.daemon.current_remote
+            active_read_only = bool(getattr(self.daemon, "current_read_only", False))
+            active_extra_args = getattr(self.daemon, "current_extra_args", None)
+
+            def _after_stop() -> None:
+                def _on_cleared_remount(remaining: Any) -> None:
+                    if active_remote and self.daemon is not None:
+                        self.daemon.start(
+                            active_remote,
+                            extra_args=active_extra_args,
+                            read_only=active_read_only,
+                        )
+                    self._on_cache_cleared(remaining)
+
+                self._cache_runner.submit(_do_clear, callback=_on_cleared_remount)
+
+            self.daemon.stop_async(on_done=_after_stop)
+        else:
+            self._cache_runner.submit(_do_clear, callback=self._on_cache_cleared)
 
     def _on_cache_cleared(self, remaining_bytes: Any) -> None:
+        self._clearing_cache = False
         self.cache_usage_label.setText(format_bytes(int(remaining_bytes or 0)))
         self.btn_clear_cache.setEnabled(True)
-        QMessageBox.information(self, tr("Cache Limpo"), tr("O cache VFS local foi limpo com sucesso."))
+        if self.isVisible():
+            QMessageBox.information(self, tr("Cache Limpo"), tr("O cache VFS local foi limpo com sucesso."))
 
     def done(self, r: int) -> None:
-        self._cache_runner.wait_all(2000)
+        if not self._clearing_cache:
+            self._cache_runner.wait_all(2000)
         super().done(r)
 
     def _save_and_accept(self) -> None:
@@ -412,6 +446,7 @@ class SettingsDialog(QDialog):
             return
 
         import subprocess
+        import urllib.parse
         from rclone_daemon import unmount_fuse_path, is_path_mounted
         from rclone_config import get_rclone_conf_path
 
@@ -421,6 +456,20 @@ class SettingsDialog(QDialog):
                 if hasattr(self.daemon, "health_timer") and self.daemon.health_timer:
                     self.daemon.health_timer.stop()
                 self.daemon.stop()
+            except Exception:
+                pass
+
+        # Ensure any asynchronous sidebar/cache cleanup tasks queued on stop() have completed
+        self._cache_runner.wait_all(3000)
+        if self.runner is not None:
+            try:
+                self.runner.wait_all(5000)
+            except Exception:
+                pass
+        daemon_runner = getattr(self.daemon, "_integration_runner", None) if self.daemon is not None else None
+        if daemon_runner is not None and daemon_runner is not self.runner:
+            try:
+                daemon_runner.wait_all(5000)
             except Exception:
                 pass
 
@@ -437,6 +486,17 @@ class SettingsDialog(QDialog):
         desktop_file = os.path.join(xdg_data, "applications", "ducksdrive.desktop")
         bin_file = os.path.expanduser("~/.local/bin/ducksdrive")
         appimage_path = os.environ.get("APPIMAGE")
+
+        wipe_rclone = False
+        if (rclone_conf_file and os.path.exists(rclone_conf_file)) or os.path.isdir(rclone_cache_dir):
+            rc_res = QMessageBox.question(
+                self,
+                tr("Remover Configurações do Rclone?"),
+                tr("Deseja também apagar todas as nuvens configuradas no Rclone (%s) e o cache VFS?\n\nEscolha 'Não' se você utiliza o Rclone em outros programas ou scripts.") % rclone_conf_file,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            wipe_rclone = (rc_res == QMessageBox.Yes)
 
         # 2. Unmount and remove all directories under ~/CloudDrives
         cloud_drives_base = os.path.expanduser("~/CloudDrives")
@@ -484,7 +544,8 @@ class SettingsDialog(QDialog):
                     lines = f.readlines()
                 with open(gtk_bookmarks, "w", encoding="utf-8") as f:
                     for line in lines:
-                        if "CloudDrives" not in line and "GoogleDrive" not in line:
+                        unquoted = urllib.parse.unquote(line)
+                        if "CloudDrives" not in line and "GoogleDrive" not in line and "CloudDrives" not in unquoted and "GoogleDrive" not in unquoted:
                             f.write(line)
             except Exception:
                 pass
@@ -506,16 +567,17 @@ class SettingsDialog(QDialog):
                 os.remove(autostart_file)
             if os.path.isdir(config_dir):
                 shutil.rmtree(config_dir)
-            for rc_file in (rclone_conf_file, f"{rclone_conf_file}.bak"):
-                if rc_file and os.path.exists(rc_file):
-                    try:
-                        os.remove(rc_file)
-                    except OSError:
-                        pass
-            if os.path.isdir(rclone_config_dir):
-                shutil.rmtree(rclone_config_dir, ignore_errors=True)
-            if os.path.isdir(rclone_cache_dir):
-                shutil.rmtree(rclone_cache_dir, ignore_errors=True)
+            if wipe_rclone:
+                for rc_file in (rclone_conf_file, f"{rclone_conf_file}.bak"):
+                    if rc_file and os.path.exists(rc_file):
+                        try:
+                            os.remove(rc_file)
+                        except OSError:
+                            pass
+                if os.path.isdir(rclone_config_dir):
+                    shutil.rmtree(rclone_config_dir, ignore_errors=True)
+                if os.path.isdir(rclone_cache_dir):
+                    shutil.rmtree(rclone_cache_dir, ignore_errors=True)
             if os.path.isdir(app_share_dir):
                 shutil.rmtree(app_share_dir)
             if os.path.exists(desktop_file):
@@ -531,11 +593,16 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover alguns ficheiros:") + f"\n{e}")
             return
 
-        if os.path.exists("/usr/bin/ducksdrive") and not appimage_path:
+        is_system_pkg = (
+            os.path.exists("/usr/bin/ducksdrive")
+            or os.path.exists("/.flatpak-info")
+            or bool(os.environ.get("FLATPAK_ID"))
+        )
+        if is_system_pkg and not appimage_path:
             QMessageBox.information(
                 self,
                 tr("Desinstalar DucksDrive"),
-                tr("Dados e montagens removidos.\nComo o pacote foi instalado via gerenciador do sistema, execute no terminal:\nsudo pacman -R ducksdrive")
+                tr("Dados e montagens do usuário foram removidos.\nComo o pacote foi instalado no sistema, remova-o pelo gerenciador de pacotes da sua distribuição (ex: apt, pacman, dnf ou flatpak).")
             )
 
         self.reject()

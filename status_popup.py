@@ -6,7 +6,6 @@ progress bars, active file info, a rolling speed history chart, and quick action
 """
 
 import logging
-import os
 import time
 from collections import deque
 from typing import Any, Optional
@@ -29,6 +28,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QProgressBar,
     QVBoxLayout,
@@ -163,7 +163,7 @@ class QuotaWorkerThread(QThread):
                 total = int(data.get("total") or 0)
                 used = int(data.get("used") or 0)
 
-            if total > 0 or used > 0:
+            if (data.get("total") is not None or data.get("used") is not None) and (total >= 0 and used >= 0):
                 self.quota_fetched.emit(total, used)
             else:
                 self.quota_failed.emit()
@@ -225,10 +225,13 @@ class StatusPopup(QWidget):
         # Note: quota timer is started in showEvent and stopped in hideEvent to avoid background polling when hidden
 
         self._quota_worker: Optional[QuotaWorkerThread] = None
+        self._old_quota_workers: list[QuotaWorkerThread] = []
+        self._last_quota_values: Optional[tuple[int, int]] = None
         self._pause_runner = TaskRunner(self)
+        self._pause_busy = False
         self.is_dark = False
         self._theme_pref: Optional[str] = None
-        self._applied_theme_state: Optional[tuple[bool, str]] = None
+        self._applied_theme_state: Optional[tuple[bool, str, str]] = None
         self._latest_stats: Optional[StatsData] = None
         self._drag_pos: Optional[QPoint] = None
         self._user_moved = False
@@ -394,7 +397,7 @@ class StatusPopup(QWidget):
         if theme_pref is not None:
             self._theme_pref = theme_pref
         effective_dark = is_dark_theme_active(self._theme_pref)
-        theme_state = (effective_dark, tr("● Offline"))
+        theme_state = (effective_dark, self._theme_pref or "auto", tr("Desconectado"))
         if self._applied_theme_state == theme_state:
             return
         self._applied_theme_state = theme_state
@@ -516,7 +519,9 @@ class StatusPopup(QWidget):
         self.btn_open.setText(tr("Abrir Pasta Local"))
         if self.daemon.is_running():
             self.status_badge.setText(tr("● Online"))
-            if self._last_quota_update == 0:
+            if self._last_quota_values is not None:
+                self._on_quota_success(*self._last_quota_values)
+            elif self._last_quota_update == 0:
                 self.quota_label.setText(tr("Calculando espaço..."))
             else:
                 self._fetch_quota()
@@ -529,16 +534,43 @@ class StatusPopup(QWidget):
         if self.isVisible():
             self.chart_widget.update()
 
+    def _detach_quota_worker(self) -> None:
+        """Detaches signals from active quota worker so it never updates UI after remote/state switch."""
+        if self._quota_worker is not None:
+            w = self._quota_worker
+            self._quota_worker = None
+            try:
+                w.quota_fetched.disconnect(self._on_quota_success)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                w.quota_failed.disconnect(self._on_quota_error)
+            except (RuntimeError, TypeError):
+                pass
+            if w.isRunning():
+                self._old_quota_workers.append(w)
+                w.finished.connect(lambda worker=w: self._cleanup_old_quota_worker(worker))
+            else:
+                w.deleteLater()
+
+    def _cleanup_old_quota_worker(self, worker: QuotaWorkerThread) -> None:
+        if worker in self._old_quota_workers:
+            self._old_quota_workers.remove(worker)
+        worker.deleteLater()
+
     @Slot(str)
     def _on_daemon_state_changed(self, state: str) -> None:
         """Resets pause state, quota cache, and popup widgets when unmounting or switching cloud remotes."""
         if state in ("stopped", "unmounting", "starting", "error") or self.daemon.current_remote != self._quota_remote:
             self.is_paused = False
             self.daemon.is_user_paused = False
+            self._pause_busy = False
             self._last_quota_update = 0
+            self._last_quota_values = None
+            self._detach_quota_worker()
             if state in ("stopped", "unmounting", "error"):
                 self._quota_remote = None
-                self._latest_stats = StatsData(is_online=False, status_text="Drive not connected")
+                self._latest_stats = StatsData(is_online=False, status_text=tr("Drive não conectado"))
                 self._render_stats(self._latest_stats)
             elif state == "starting":
                 self._quota_remote = None
@@ -549,8 +581,8 @@ class StatusPopup(QWidget):
                 self._apply_pause_button_ui()
             else:
                 self._quota_remote = self.daemon.current_remote
-                self.quota_label.setText(tr("Calculando espaço..."))
-                self._apply_pause_button_ui()
+                self._latest_stats = StatsData(is_online=True, status_text=tr("Sincronizado / Ocioso"))
+                self._render_stats(self._latest_stats)
                 if self.isVisible():
                     self._fetch_quota()
 
@@ -585,7 +617,7 @@ class StatusPopup(QWidget):
         if hasattr(self, "_quota_worker") and self._quota_worker:
             if self._quota_worker.isRunning():
                 return
-            self._quota_worker.deleteLater()
+        self._detach_quota_worker()
 
         self._quota_remote = self.daemon.current_remote
         self._quota_worker = QuotaWorkerThread(self.daemon.rc_credentials, self.daemon.current_remote or "gdrive", self)
@@ -598,6 +630,9 @@ class StatusPopup(QWidget):
         """Synchronizes the action button label, enabled state, and color with daemon and pause state."""
         disabled_bg = "#2d3238" if self.is_dark else "#ecf0f1"
         disabled_fg = "#a1a9b1" if self.is_dark else "#7f8c8d"
+
+        if self._pause_busy:
+            self.btn_pause.setEnabled(False)
 
         if not self.daemon.is_running():
             if self.daemon.state == "starting":
@@ -678,10 +713,13 @@ class StatusPopup(QWidget):
         from rclone_config import list_remote_names
         from rclone_settings import load_config
 
+        self._pause_busy = True
         self.btn_pause.setEnabled(False)
 
         def _on_remotes(remotes: Any) -> None:
+            self._pause_busy = False
             if self.daemon.is_running() or self.daemon.state in ("starting", "unmounting"):
+                self._apply_pause_button_ui()
                 return
             names = remotes if isinstance(remotes, list) else []
             if not names:
@@ -710,24 +748,35 @@ class StatusPopup(QWidget):
 
         target_pause = not self.is_paused
         creds = self.daemon.rc_credentials
+        self._pause_busy = True
         self.btn_pause.setEnabled(False)
 
         def do_request(pause_state: bool) -> bool:
             original_limit = str(load_config().get("bwlimit") or "off")
-            limit_val = "1B" if pause_state else original_limit
+            if pause_state:
+                rx_limit = original_limit.split(":", 1)[1] if ":" in original_limit else original_limit
+                limit_val = f"1B:{rx_limit}"
+            else:
+                limit_val = original_limit
             return set_rc_bwlimit(creds, limit_val, timeout=5.0)
 
         def on_done(ok: Any) -> None:
+            self._pause_busy = False
             self.btn_pause.setEnabled(True)
             if ok and self.daemon.is_running():
                 self.is_paused = target_pause
                 self.daemon.is_user_paused = target_pause
-                self._apply_pause_button_ui()
+            self._apply_pause_button_ui()
 
         self._pause_runner.submit(do_request, target_pause, callback=on_done)
 
     @Slot(object, object)
     def _on_quota_success(self, total: int, used: int) -> None:
+        if not self.daemon.is_running():
+            return
+        if self._quota_remote and self.daemon.current_remote != self._quota_remote:
+            return
+        self._last_quota_values = (total, used)
         from rclone_stats import format_bytes
         
         if total > 0:
@@ -743,6 +792,9 @@ class StatusPopup(QWidget):
 
     @Slot()
     def _on_quota_error(self) -> None:
+        if not self.daemon.is_running():
+            return
+        self._last_quota_values = None
         self.quota_label.setText(tr("Quota indisponível"))
         self.quota_bar.hide()
         self._last_quota_update = time.time() - 540  # Retry after 60s (600 - 540)
@@ -781,31 +833,24 @@ class StatusPopup(QWidget):
 
             if stats.active_transfers:
                 self.empty_label.hide()
-                # Use a dictionary to match TransferItems by name
-                existing_items = {}
-                for i in reversed(range(self.scroll_layout.count())):
+                existing_widgets: list[TransferItem] = []
+                for i in range(self.scroll_layout.count()):
                     w = self.scroll_layout.itemAt(i).widget()
                     if isinstance(w, TransferItem):
-                        existing_items[w.file_name] = w
+                        existing_widgets.append(w)
 
-                active_names = set()
-                for t in stats.active_transfers:
+                for idx, t in enumerate(stats.active_transfers):
                     name = t.get("name", tr("Arquivo"))
-                    pct = min(99, int(t.get("percentage") or 0))
-                    active_names.add(name)
-                    
-                    if name in existing_items:
-                        existing_items[name].update_data(name, pct)
+                    pct = max(0, min(99, int(t.get("percentage") or 0)))
+                    if idx < len(existing_widgets):
+                        existing_widgets[idx].update_data(name, pct)
                     else:
                         item = TransferItem(name, pct, is_dark=self.is_dark)
                         self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
-                        existing_items[name] = item
 
-                # Remove items that are no longer active
-                for name, w in existing_items.items():
-                    if name not in active_names:
-                        self.scroll_layout.removeWidget(w)
-                        w.deleteLater()
+                for extra_w in existing_widgets[len(stats.active_transfers):]:
+                    self.scroll_layout.removeWidget(extra_w)
+                    extra_w.deleteLater()
             else:
                 if stats.vfs_queue_count > 0:
                     self.empty_label.setText(tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % stats.vfs_queue_count)
@@ -818,7 +863,10 @@ class StatusPopup(QWidget):
             self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
-            self.quota_label.setText(tr("Desconectado"))
+            if self.daemon.state == "starting":
+                self.quota_label.setText(tr("Calculando espaço..."))
+            else:
+                self.quota_label.setText(tr("Desconectado"))
             self.quota_bar.setValue(0)
             self.quota_bar.hide()
             self._last_quota_update = 0
@@ -830,12 +878,14 @@ class StatusPopup(QWidget):
     def _open_cloud_folder(self) -> None:
         """Opens the mount point in the file manager using QDesktopServices and closes popup."""
         path = self.daemon.mount_point
+        self.close()
         if is_path_mounted(path):
             try:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             except Exception as e:
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
-        self.close()
+        else:
+            QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
 
     def show_near_cursor(self) -> None:
         """
@@ -850,9 +900,13 @@ class StatusPopup(QWidget):
             x = cursor_pos.x() - self.width() // 2
             y = cursor_pos.y() - self.height() - 15
 
-            if x < screen_geo.left(): x = screen_geo.left() + 10
-            elif x + self.width() > screen_geo.right(): x = screen_geo.right() - self.width() - 10
-            if y < screen_geo.top(): y = cursor_pos.y() + 20
+            if x < screen_geo.left() + 10:
+                x = screen_geo.left() + 10
+            elif x + self.width() > screen_geo.right() - 10:
+                x = screen_geo.right() - self.width() - 10
+            if y < screen_geo.top() + 10:
+                y = cursor_pos.y() + 20
+            y = max(screen_geo.top() + 10, min(y, screen_geo.bottom() - self.height() - 10))
 
             self.move(x, y)
         self.show()
@@ -915,12 +969,13 @@ class StatusPopup(QWidget):
     def shutdown_workers(self) -> None:
         """Waits for the background quota and pause workers. Call only when the app is exiting."""
         self._pause_runner.wait_all()
-        if self._quota_worker:
+        self._detach_quota_worker()
+        for worker in list(self._old_quota_workers):
             try:
-                if self._quota_worker.isRunning():
-                    self._quota_worker.wait(4500)
+                if worker.isRunning():
+                    worker.wait(2000)
             except RuntimeError:
-                pass  # C++ object already deleted
+                pass
 
     def closeEvent(self, event: Any) -> None:
         """Closing the popup never blocks the GUI thread; the quota worker finishes on its own."""

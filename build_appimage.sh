@@ -16,7 +16,7 @@ pip install --user pyinstaller
 
 # Run PyInstaller
 echo "Running PyInstaller..."
-python3 -m pyinstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." main.py
+python3 -m pyinstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." --hidden-import PySide6.QtSvg main.py
 
 # Create AppDir
 echo "Creating AppDir structure..."
@@ -49,6 +49,7 @@ Terminal=false
 Type=Application
 Categories=Network;Utility;
 StartupNotify=true
+StartupWMClass=ducksdrive
 DESKTOP
 cp AppDir/usr/share/applications/ducksdrive.desktop AppDir/
 
@@ -57,6 +58,7 @@ cat << 'APPRUN' > AppDir/AppRun
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export PATH="${HERE}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
 exec "${HERE}/usr/bin/ducksdrive" "$@"
 APPRUN
 chmod +x AppDir/AppRun
@@ -68,6 +70,6 @@ chmod +x appimagetool-x86_64.AppImage
 
 # Build AppImage
 echo "Building AppImage..."
-./appimagetool-x86_64.AppImage AppDir DucksDrive-x86_64.AppImage
+./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir DucksDrive-x86_64.AppImage
 
 echo "=== Done! AppImage created as DucksDrive-x86_64.AppImage ==="

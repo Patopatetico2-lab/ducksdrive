@@ -8,6 +8,7 @@ context menus, status notifications, and dialogs for remote management.
 import logging
 import os
 import re
+import sys
 import time
 from typing import Callable, Optional
 
@@ -60,7 +61,7 @@ def get_app_icon() -> QIcon:
     Returns the application icon by loading the physical icon.svg file
     using an absolute path based on the script location.
     """
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+    current_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     icon_path = os.path.join(current_dir, "icon.svg")
     if os.path.exists(icon_path):
         icon = QIcon(icon_path)
@@ -158,17 +159,20 @@ class NewRemoteDialog(QDialog):
         self.s3_secret_input = QLineEdit()
         self.s3_secret_input.setPlaceholderText("Secret Access Key")
         self.s3_secret_input.setEchoMode(QLineEdit.Password)
+        self.s3_region_input = QLineEdit()
+        self.s3_region_input.setPlaceholderText(tr("Vazio = us-east-1 / auto; ou ex: sa-east-1"))
         self.s3_endpoint_input = QLineEdit()
         self.s3_endpoint_input.setPlaceholderText(tr("Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc."))
         self.conditional_layout.addRow(tr("S3 Access Key:"), self.s3_key_input)
         self.conditional_layout.addRow(tr("S3 Secret Key:"), self.s3_secret_input)
+        self.conditional_layout.addRow(tr("S3 Region:"), self.s3_region_input)
         self.conditional_layout.addRow(tr("S3 Endpoint:"), self.s3_endpoint_input)
 
         # Mega Fields
         self.mega_user_input = QLineEdit()
         self.mega_user_input.setPlaceholderText("email@example.com")
         self.mega_pass_input = QLineEdit()
-        self.mega_pass_input.setPlaceholderText("Password")
+        self.mega_pass_input.setPlaceholderText(tr("Password"))
         self.mega_pass_input.setEchoMode(QLineEdit.Password)
         self.conditional_layout.addRow(tr("Mega Email:"), self.mega_user_input)
         self.conditional_layout.addRow(tr("Mega Password:"), self.mega_pass_input)
@@ -177,9 +181,9 @@ class NewRemoteDialog(QDialog):
         self.ftp_host_input = QLineEdit()
         self.ftp_host_input.setPlaceholderText(tr("ftp.example.com ou ip"))
         self.ftp_user_input = QLineEdit()
-        self.ftp_user_input.setPlaceholderText("Username")
+        self.ftp_user_input.setPlaceholderText(tr("Username"))
         self.ftp_pass_input = QLineEdit()
-        self.ftp_pass_input.setPlaceholderText("Password")
+        self.ftp_pass_input.setPlaceholderText(tr("Password"))
         self.ftp_pass_input.setEchoMode(QLineEdit.Password)
         self.conditional_layout.addRow(tr("Host:"), self.ftp_host_input)
         self.conditional_layout.addRow(tr("User:"), self.ftp_user_input)
@@ -214,6 +218,7 @@ class NewRemoteDialog(QDialog):
         self.conditional_layout.setRowVisible(self.webdav_url_input, False)
         self.conditional_layout.setRowVisible(self.s3_key_input, False)
         self.conditional_layout.setRowVisible(self.s3_secret_input, False)
+        self.conditional_layout.setRowVisible(self.s3_region_input, False)
         self.conditional_layout.setRowVisible(self.s3_endpoint_input, False)
         self.conditional_layout.setRowVisible(self.mega_user_input, False)
         self.conditional_layout.setRowVisible(self.mega_pass_input, False)
@@ -222,6 +227,7 @@ class NewRemoteDialog(QDialog):
         self.conditional_layout.setRowVisible(self.ftp_pass_input, False)
 
         if rtype == "webdav":
+            self.ftp_pass_input.setPlaceholderText(tr("Password"))
             self.conditional_layout.setRowVisible(self.webdav_url_input, True)
             self.conditional_layout.setRowVisible(self.ftp_user_input, True)
             self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
@@ -229,6 +235,7 @@ class NewRemoteDialog(QDialog):
         elif rtype == "s3":
             self.conditional_layout.setRowVisible(self.s3_key_input, True)
             self.conditional_layout.setRowVisible(self.s3_secret_input, True)
+            self.conditional_layout.setRowVisible(self.s3_region_input, True)
             self.conditional_layout.setRowVisible(self.s3_endpoint_input, True)
             self.btn_create.setText(tr("Criar Nuvem S3"))
         elif rtype == "mega":
@@ -236,6 +243,9 @@ class NewRemoteDialog(QDialog):
             self.conditional_layout.setRowVisible(self.mega_pass_input, True)
             self.btn_create.setText(tr("Criar Nuvem Mega"))
         elif rtype in ("ftp", "sftp"):
+            self.ftp_pass_input.setPlaceholderText(
+                tr("Opcional se usar chave SSH / ssh-agent") if rtype == "sftp" else tr("Password")
+            )
             self.conditional_layout.setRowVisible(self.ftp_host_input, True)
             self.conditional_layout.setRowVisible(self.ftp_user_input, True)
             self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
@@ -264,19 +274,23 @@ class NewRemoteDialog(QDialog):
 
         rtype = self.type_combo.currentData()
         if rtype == "webdav":
-            if not (self.webdav_url_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text()):
+            if not (self.webdav_url_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text().strip("\r\n")):
                 QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
                 return
         elif rtype == "s3":
-            if not (self.s3_key_input.text().strip() and self.s3_secret_input.text()):
+            if not (self.s3_key_input.text().strip() and self.s3_secret_input.text().strip("\r\n")):
                 QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
                 return
         elif rtype == "mega":
-            if not (self.mega_user_input.text().strip() and self.mega_pass_input.text()):
+            if not (self.mega_user_input.text().strip() and self.mega_pass_input.text().strip("\r\n")):
                 QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
                 return
-        elif rtype in ("ftp", "sftp"):
-            if not (self.ftp_host_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text()):
+        elif rtype == "ftp":
+            if not (self.ftp_host_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text().strip("\r\n")):
+                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
+                return
+        elif rtype == "sftp":
+            if not (self.ftp_host_input.text().strip() and self.ftp_user_input.text().strip()):
                 QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
                 return
 
@@ -288,7 +302,7 @@ class NewRemoteDialog(QDialog):
         if rtype == "webdav":
             url = self.webdav_url_input.text().strip()
             user = self.ftp_user_input.text().strip()
-            password = self.ftp_pass_input.text()
+            password = self.ftp_pass_input.text().strip("\r\n")
             extra_params["vendor"] = "other"
             if url:
                 extra_params["url"] = url
@@ -298,7 +312,8 @@ class NewRemoteDialog(QDialog):
                 extra_params["pass"] = password
         elif rtype == "s3":
             key = self.s3_key_input.text().strip()
-            secret = self.s3_secret_input.text()  # secrets are never stripped
+            secret = self.s3_secret_input.text().strip("\r\n")
+            region = self.s3_region_input.text().strip()
             endpoint = self.s3_endpoint_input.text().strip()
             # A custom endpoint needs provider "Other"; without one, plain Amazon S3
             extra_params["provider"] = "Other" if endpoint else "AWS"
@@ -306,11 +321,13 @@ class NewRemoteDialog(QDialog):
                 extra_params["access_key_id"] = key
             if secret:
                 extra_params["secret_access_key"] = secret
+            if region:
+                extra_params["region"] = region
             if endpoint:
                 extra_params["endpoint"] = endpoint
         elif rtype == "mega":
             user = self.mega_user_input.text().strip()
-            password = self.mega_pass_input.text()
+            password = self.mega_pass_input.text().strip("\r\n")
             if user:
                 extra_params["user"] = user
             if password:
@@ -318,7 +335,7 @@ class NewRemoteDialog(QDialog):
         elif rtype in ("ftp", "sftp"):
             host = self.ftp_host_input.text().strip()
             user = self.ftp_user_input.text().strip()
-            password = self.ftp_pass_input.text()
+            password = self.ftp_pass_input.text().strip("\r\n")
             if host:
                 extra_params["host"] = host
             if user:
@@ -336,8 +353,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def __init__(self, daemon: RcloneDaemon, parent: Optional[QWidget] = None) -> None:
         super().__init__(get_tray_icon("idle"), parent)
         self.daemon = daemon
-        self.setToolTip(f"{APP_NAME}: Idle")
+        self.setToolTip(f"{APP_NAME}: {tr('Desconectado')}")
         self._pending_remote_name: Optional[str] = None
+        self._creation_thread: Optional[RemoteCreationThread] = None
+        self._old_creation_threads: list[RemoteCreationThread] = []
+        self._settings_dialog: Optional[SettingsDialog] = None
+        self._new_remote_dialog: Optional[NewRemoteDialog] = None
         self.latest_stats: Optional[StatsData] = None
         self._was_syncing = False
         self._idle_confirm_polls = 0
@@ -429,8 +450,19 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.refresh_remotes()
 
     def shutdown_workers(self) -> None:
-        """Waits for pending background rclone calls. Call only when the app is exiting."""
+        """Waits for pending background rclone calls and creation threads. Call only when the app is exiting."""
         self.runner.wait_all()
+        if hasattr(self, "_creation_thread") and self._creation_thread is not None:
+            self._creation_thread.cancel()
+            if self._creation_thread.isRunning():
+                self._creation_thread.wait(2000)
+        for t in list(getattr(self, "_old_creation_threads", [])):
+            try:
+                if t.isRunning():
+                    t.wait(2000)
+            except RuntimeError:
+                pass
+        self.status_popup.shutdown_workers()
 
     def _unmount_current(self) -> None:
         """Menu handler: unmount without freezing the GUI."""
@@ -511,7 +543,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _show_settings_dialog(self) -> None:
         """Opens the settings configuration dialog and applies language/bwlimit changes live."""
-        dialog = SettingsDialog(parent=None, daemon=self.daemon)
+        if hasattr(self, "_settings_dialog") and self._settings_dialog is not None and self._settings_dialog.isVisible():
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
+        dialog = SettingsDialog(parent=None, daemon=self.daemon, runner=self.runner)
+        self._settings_dialog = dialog
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         if dialog.exec() == QDialog.Accepted:
             self.apply_theme(str(dialog.config.get("theme") or "auto"))
@@ -541,6 +578,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Updates UI elements based on daemon state."""
         is_mounted = state == "mounted"
         self.action_open.setEnabled(is_mounted)
+        if not is_mounted:
+            self._was_syncing = False
+            self._idle_confirm_polls = 0
+            self.latest_stats = None
         
         status_map = {
             "stopped": tr("Desconectado"),
@@ -605,8 +646,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
                     name = t.get("name", tr("Arquivo"))
-                    pct = min(99, int(t.get("percentage") or 0))
-                    tooltip_detail = f"{tr('A enviar:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
+                    pct = max(0, min(99, int(t.get("percentage") or 0)))
+                    tooltip_detail = f"{tr('Transferindo:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                     self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {tooltip_detail}")
                 else:
                     self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
@@ -634,7 +675,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self._idle_confirm_polls = 0
             self.update_tray_icon("error")
             if self.daemon.state == "mounted":
-                self._set_status_and_tooltip(tr("Status: Conexão Perdida"), None)
+                self._set_status_and_tooltip(
+                    f"{clean_name} • {tr('Status: Conexão Perdida')}",
+                    f"{APP_NAME}: {tr('Status: Conexão Perdida')}",
+                )
 
         # Forward telemetry to floating status popup
         self.status_popup.update_stats(stats)
@@ -665,16 +709,20 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _confirm_quit(self) -> None:
         """
         Checks (off the GUI thread) whether files are still waiting in the VFS upload queue
-        before exiting, so the user can wait for them instead of relying on the 10s kill timeout.
+        before exiting, so the user can wait for them instead of relying on the 15s kill timeout.
         """
+        if getattr(self, "_upload_dialog", None) is not None or getattr(self, "_quit_dialog_open", False):
+            return
         creds = self.daemon.rc_credentials if self.daemon.is_running() else None
         if creds is None:
             self.request_exit.emit()
             return
+        self._quit_dialog_open = True
         self.runner.submit(fetch_vfs_queue, creds, callback=self._on_quit_queue_checked)
 
     def _on_quit_queue_checked(self, pending: Optional[int]) -> None:
         """GUI-thread continuation of _confirm_quit with the number of files still queued for upload."""
+        self._quit_dialog_open = False
         pending_count = int(pending or 0)
 
         if pending_count > 0:
@@ -713,6 +761,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Shows a cancellable progress dialog and exits once the VFS upload queue is empty."""
         if self._upload_dialog is not None:
             return
+        creds = self.daemon.rc_credentials
+        if (self.status_popup.is_paused or self.daemon.is_user_paused) and creds is not None:
+            self.status_popup.is_paused = False
+            self.daemon.is_user_paused = False
+            self.status_popup._apply_pause_button_ui()
+            orig_rate = str(load_config().get("bwlimit") or "off")
+            self.runner.submit(set_rc_bwlimit, creds, orig_rate)
+
         dialog = QProgressDialog(
             tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % pending,
             tr("Cancelar"), 0, 0, None
@@ -735,7 +791,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _poll_upload_queue(self) -> None:
         creds = self.daemon.rc_credentials
-        if creds is None:
+        if creds is None or not self.daemon.is_running():
             self._finish_upload_wait(proceed=True)  # mount is gone; nothing left to wait for
             return
         if self._upload_poll_busy:
@@ -748,7 +804,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog = self._upload_dialog
         if dialog is None:
             return  # cancelled meanwhile
-        if not pending:  # 0 = queue drained, None = RC unreachable (rclone gone)
+        if pending is None:
+            if not self.daemon.is_running():
+                self._finish_upload_wait(proceed=True)
+            return
+        if pending <= 0:
             self._finish_upload_wait(proceed=True)
         else:
             dialog.setLabelText(tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % pending)
@@ -836,10 +896,19 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _show_new_remote_dialog(self) -> None:
         """Handles the flow for creating a new remote via background thread."""
+        if hasattr(self, "_new_remote_dialog") and self._new_remote_dialog is not None and self._new_remote_dialog.isVisible():
+            self._new_remote_dialog.raise_()
+            self._new_remote_dialog.activateWindow()
+            return
+        if hasattr(self, "_progress_box") and self._progress_box is not None and self._progress_box.isVisible():
+            self._progress_box.raise_()
+            self._progress_box.activateWindow()
+            return
         self.refresh_remotes(self._open_new_remote_dialog)
 
     def _open_new_remote_dialog(self, existing_names: list[str]) -> None:
         dialog = NewRemoteDialog(parent=None, existing_names=existing_names)
+        self._new_remote_dialog = dialog
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.raise_()
         dialog.activateWindow()
@@ -850,6 +919,13 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 return
 
             self._pending_remote_name = name
+            if hasattr(self, "_creation_thread") and self._creation_thread is not None:
+                old_t = self._creation_thread
+                if old_t.isRunning():
+                    if not hasattr(self, "_old_creation_threads"):
+                        self._old_creation_threads = []
+                    self._old_creation_threads.append(old_t)
+                    old_t.finished.connect(lambda t=old_t: self._cleanup_old_creation_thread(t))
             self._creation_thread = RemoteCreationThread(name, rtype, extra_params=extra_params)
             
             is_oauth = rtype in ("drive", "onedrive", "dropbox", "box", "pcloud")
@@ -861,11 +937,24 @@ class RcloneTrayIcon(QSystemTrayIcon):
             # Cancel button and the window "X" both end up in rejected()
             progress.rejected.connect(self._creation_thread.cancel)
             
+            self._creation_thread.output_line.connect(self._on_creation_output_line)
             self._creation_thread.finished_creation.connect(self._close_progress)
             self._creation_thread.finished_creation.connect(self._on_creation_finished)
             
             self._creation_thread.start()
             progress.exec()
+
+    def _cleanup_old_creation_thread(self, thread: RemoteCreationThread) -> None:
+        if hasattr(self, "_old_creation_threads") and thread in self._old_creation_threads:
+            self._old_creation_threads.remove(thread)
+        thread.deleteLater()
+
+    @Slot(str)
+    def _on_creation_output_line(self, line: str) -> None:
+        """Displays any OAuth URL emitted by rclone inside the progress dialog so the user can copy it if needed."""
+        progress = getattr(self, "_progress_box", None)
+        if progress is not None and ("http://" in line or "https://" in line):
+            progress.setInformativeText(line)
 
     @Slot(bool, str)
     def _close_progress(self, success: bool, message: str) -> None:
@@ -886,6 +975,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         silent background FUSE mount after a 1-second delay to ensure config file flush.
         """
         if success:
+            self.refresh_remotes()
             logger.info("Remote successfully configured. Starting silent mount for '%s'", self._pending_remote_name)
             if self._pending_remote_name:
                 remote_name = self._pending_remote_name
@@ -907,5 +997,5 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 QTimer.singleShot(1000, lambda: self.daemon.start(remote_name))
         else:
             self._pending_remote_name = None
-            if "cancelled" not in message.lower():
+            if not getattr(self._creation_thread, "is_cancelled", False):
                 QMessageBox.critical(None, tr("Falha na Configuração"), message)

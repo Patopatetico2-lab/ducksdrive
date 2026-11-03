@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
+from i18n import tr
 from rclone_daemon import RCCredentials, is_path_mounted
 
 logger = logging.getLogger(__name__)
@@ -37,10 +38,9 @@ class StatsData:
     total_bytes_transferred: int = 0
     total_bytes_str: str = "0 B"
     errors_count: int = 0
-    status_text: str = "Disconnected"
+    status_text: str = field(default_factory=lambda: tr("Desconectado"))
     active_transfers: List[Dict[str, Any]] = field(default_factory=list)
     vfs_queue_count: int = 0
-    is_burst_paused: bool = False
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -141,11 +141,15 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
 
                 # Determine high-level descriptive status
                 if len(active_transfers) > 0:
-                    status_text = f"Syncing ({len(active_transfers)} active) • {speed_str} • ETA {eta_str}"
+                    status_text = tr("Sincronizando (%d ativo(s)) • %s • ETA %s") % (
+                        len(active_transfers),
+                        speed_str,
+                        eta_str,
+                    )
                 elif errors > 0:
-                    status_text = f"Idle with {errors} error(s)"
+                    status_text = tr("Ocioso com %d erro(s)") % errors
                 else:
-                    status_text = "Synchronized / Idle"
+                    status_text = tr("Sincronizado / Ocioso")
 
                 return StatsData(
                     is_online=True,
@@ -170,29 +174,49 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
     except Exception as exc:
         logger.debug("Unexpected error polling rclone stats: %s", exc)
 
-    return StatsData(is_online=False, status_text="Drive not connected")
+    return StatsData(is_online=False, status_text=tr("Drive não conectado"))
 
 
 def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]:
     """
-    Returns how many files are still waiting in the VFS write-back (upload) queue
-    via `vfs/queue`, or None if the RC API could not be queried.
+    Returns how many files are still pending upload in the VFS write-back cache
+    (both `uploadsInProgress` and `uploadsQueued` via `vfs/stats`, falling back to `vfs/queue`),
+    or None if the RC API could not be queried.
 
     Blocking call: run it outside the GUI thread.
     """
-    req = urllib.request.Request(
-        url=f"{creds.url}/vfs/queue",
+    headers = {
+        "Authorization": _get_auth_header(creds),
+        "Content-Type": "application/json",
+    }
+    req_stats = urllib.request.Request(
+        url=f"{creds.url}/vfs/stats",
         data=b"{}",
-        headers={
-            "Authorization": _get_auth_header(creds),
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req_stats, timeout=timeout) as response:
             if response.status == 200:
                 data: Dict[str, Any] = json.loads(response.read().decode("utf-8"))
+                disk_cache = data.get("diskCache")
+                if isinstance(disk_cache, dict):
+                    in_prog = int(disk_cache.get("uploadsInProgress") or 0)
+                    queued = int(disk_cache.get("uploadsQueued") or 0)
+                    return in_prog + queued
+    except Exception as exc:
+        logger.debug("Could not query vfs/stats: %s", exc)
+
+    req_queue = urllib.request.Request(
+        url=f"{creds.url}/vfs/queue",
+        data=b"{}",
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req_queue, timeout=timeout) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode("utf-8"))
                 return len(data.get("queue") or [])
     except Exception as exc:
         logger.debug("Could not query vfs/queue: %s", exc)
@@ -225,9 +249,7 @@ def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> boo
 class RcloneStatsPoller(QThread):
     """
     Dedicated background worker thread that polls Rclone RC `/core/stats`
-    every 1 second, tracks the VFS upload queue, and automatically yields
-    background upload bandwidth during active local FUSE directory/file bursts
-    so file managers (Dolphin/Nautilus) never freeze.
+    every 1 second and tracks the VFS write-back upload queue.
     """
 
     stats_updated = Signal(object)  # Emits StatsData instance
@@ -295,7 +317,11 @@ class RcloneStatsPoller(QThread):
 
                 stats.vfs_queue_count = vfs_queue_count
                 if len(stats.active_transfers) == 0 and vfs_queue_count > 0:
-                    stats.status_text = f"Syncing ({vfs_queue_count} queued) • {stats.speed_str} • ETA {stats.eta_str}"
+                    stats.status_text = tr("Sincronizando (%d na fila) • %s • ETA %s") % (
+                        vfs_queue_count,
+                        stats.speed_str,
+                        stats.eta_str,
+                    )
 
                 last_valid_stats = stats
                 self.stats_updated.emit(stats)

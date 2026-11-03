@@ -195,11 +195,46 @@ _TRANSLATIONS = {
         "Desconectar": "Disconnect",
         "Remover": "Remove",
         "Conectar / Reconectar": "Connect / Reconnect",
-        "Recomendado: 4 a 6 para Google Drive/OneDrive (valores muito altos podem causar rate-limit da API em pastas com milhares de arquivos).": "Recommended: 4 to 6 for Google Drive/OneDrive (very high values may trigger API rate-limiting on folders with thousands of files)."
+        "Recomendado: 4 a 6 para Google Drive/OneDrive (valores muito altos podem causar rate-limit da API em pastas com milhares de arquivos).": "Recommended: 4 to 6 for Google Drive/OneDrive (very high values may trigger API rate-limiting on folders with thousands of files).",
+        "Transferindo:": "Transferring:",
+        "Sincronizando (%d ativo(s)) • %s • ETA %s": "Syncing (%d active) • %s • ETA %s",
+        "Sincronizando (%d na fila) • %s • ETA %s": "Syncing (%d queued) • %s • ETA %s",
+        "Ocioso com %d erro(s)": "Idle with %d error(s)",
+        "Sincronizado / Ocioso": "Synchronized / Idle",
+        "Drive não conectado": "Drive not connected",
+        "A operação excedeu o tempo limite de %ds.": "Operation timed out after %ds.",
+        "A criação de '%s' foi cancelada.": "Creation of '%s' was cancelled.",
+        "Nuvem '%s' configurada com sucesso.": "Remote '%s' configured successfully.",
+        "Falha na configuração (código %s):\n%s": "Configuration failed (code %s):\n%s",
+        "Erro inesperado ao configurar nuvem: %s": "Exception while configuring remote: %s",
+        "Erro desconhecido": "Unknown error",
+        "A montagem do Rclone encerrou durante a inicialização:\n%s": "Rclone mount exited during startup:\n%s",
+        "A montagem do Rclone excedeu o tempo limite de %ds para o caminho '%s'.": "Rclone mount timed out after %ds for path '%s'.",
+        "Falha ao criar o diretório de montagem '%s': %s": "Failed to create mount directory '%s': %s",
+        "Falha ao abrir o arquivo de log do Rclone '%s': %s": "Failed to open rclone log file '%s': %s",
+        "Falha ao iniciar o processo de montagem do Rclone: %s": "Failed to spawn rclone mount: %s",
+        "S3 Region:": "S3 Region:",
+        "Vazio = us-east-1 / auto; ou ex: sa-east-1": "Empty = us-east-1 / auto; or e.g. sa-east-1",
+        "Opcional se usar chave SSH / ssh-agent": "Optional if using SSH key / ssh-agent",
+        "Remover Configurações do Rclone?": "Remove Rclone Configurations?",
+        "Deseja também apagar todas as nuvens configuradas no Rclone (%s) e o cache VFS?\n\nEscolha 'Não' se você utiliza o Rclone em outros programas ou scripts.": "Do you also want to delete all configured Rclone remotes (%s) and the VFS cache?\n\nChoose 'No' if you use Rclone in other programs or scripts.",
+        "Dados e montagens do usuário foram removidos.\nComo o pacote foi instalado no sistema, remova-o pelo gerenciador de pacotes da sua distribuição (ex: apt, pacman, dnf ou flatpak).": "User data and mounts have been removed.\nSince the package was installed system-wide, remove it using your distribution's package manager (e.g., apt, pacman, dnf, or flatpak).",
+        "The 'rclone' executable was not found in system PATH.": "The 'rclone' executable was not found in system PATH.",
+        "Username": "Username",
+        "Password": "Password",
+        "Usuário:": "User:",
+        "Senha:": "Password:",
+        "Senha Mega:": "Mega Password:"
     },
     "pt_BR": {
         "Rclone mount process died unexpectedly.": "O processo de montagem do Rclone encerrou inesperadamente.",
-        "Rclone executable not found in PATH.": "Executável do Rclone não encontrado no PATH."
+        "Rclone executable not found in PATH.": "Executável do Rclone não encontrado no PATH.",
+        "The 'rclone' executable was not found in system PATH.": "O executável 'rclone' não foi encontrado no PATH do sistema.",
+        "Username": "Nome de usuário",
+        "Password": "Senha",
+        "User:": "Usuário:",
+        "Password:": "Senha:",
+        "Mega Password:": "Senha Mega:"
     }
 }
 

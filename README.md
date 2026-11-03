@@ -13,7 +13,7 @@ Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
 Clicando no ícone da bandeja, abre um painel flutuante com o uso de espaço da nuvem (quota), um botão para pausar ou retomar os envios na hora e a lista de transferências ativas: barra de progresso por arquivo, velocidade em MB/s, tempo restante (HH:MM:SS) e um gráfico com o histórico de velocidade de transferência, desenhado com `QPainter`.
 
-A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir a montagem, o app confere por até 10 segundos se ela realmente aconteceu, sem travar. Um `QTimer` fica de olho no processo do FUSE em segundo plano, e se ele cair do nada o estado do app é atualizado. Ao fechar, o app espera até 10 segundos para o cache terminar de ser gravado na nuvem.
+A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir a montagem, o app confere por até 30 segundos se ela realmente aconteceu, sem travar. Um `QTimer` fica de olho no processo do FUSE em segundo plano, e se ele cair do nada o estado do app é atualizado. Ao fechar, o app espera até 15 segundos para o cache terminar de ser gravado na nuvem.
 
 Na barra lateral do Dolphin (KDE) e dos gerenciadores GTK (Nautilus, Thunar, Nemo) ele cria um atalho com o nome do remoto. No KDE, antes de mexer no arquivo de favoritos, o app salva uma cópia em `user-places.xbel.bak`.
 
@@ -48,7 +48,7 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 ### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
 Instalação direta em 1 comando via Pacman:
 ```bash
-curl -Lo /tmp/ducksdrive-1.0.7-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.7/ducksdrive-1.0.7-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.0.7-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.0.7-1-any.pkg.tar.zst
+curl -Lo /tmp/ducksdrive-1.0.8-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.8/ducksdrive-1.0.8-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.0.8-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.0.8-1-any.pkg.tar.zst
 ```
 Ou compilando direto do repositório com `makepkg`:
 ```bash
@@ -58,7 +58,7 @@ git clone https://github.com/Patopatetico2-lab/ducksdrive.git && cd ducksdrive &
 ### Debian / Ubuntu / Linux Mint / Zorin OS (Nativo via .deb)
 Instalação direta em 1 comando via `apt`:
 ```bash
-curl -Lo /tmp/ducksdrive_1.0.7-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.7/ducksdrive_1.0.7-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.0.7-1_all.deb && rm -f /tmp/ducksdrive_1.0.7-1_all.deb
+curl -Lo /tmp/ducksdrive_1.0.8-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.8/ducksdrive_1.0.8-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.0.8-1_all.deb && rm -f /tmp/ducksdrive_1.0.8-1_all.deb
 ```
 
 ### Pelo script (instala no sistema)

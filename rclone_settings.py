@@ -8,7 +8,9 @@ with safe default values and automatic system autostart synchronization.
 import json
 import logging
 import os
+import re
 import shutil
+import sys
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -190,30 +192,32 @@ def _detect_system_dark() -> bool:
         from PySide6.QtGui import QGuiApplication, QPalette
         from PySide6.QtWidgets import QApplication
 
-        if SYSTEM_DEFAULT_PALETTE is not None:
-            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
-            if win_col.isValid():
-                _SYSTEM_DARK_CACHE = win_col.lightness() < 128
-                return _SYSTEM_DARK_CACHE
-
         hints = QGuiApplication.styleHints()
         if hasattr(hints, "colorScheme") and hasattr(Qt, "ColorScheme"):
             scheme = hints.colorScheme()
             if scheme == Qt.ColorScheme.Dark:
+                _SYSTEM_DARK_CACHE = True
                 return True
             if scheme == Qt.ColorScheme.Light:
+                _SYSTEM_DARK_CACHE = False
                 return False
+
+        if SYSTEM_DEFAULT_PALETTE is not None:
+            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
+            if win_col.isValid() and win_col.lightness() < 128:
+                _SYSTEM_DARK_CACHE = True
+                return True
 
         app = QApplication.instance()
         if app is not None:
             window_color = app.palette().color(QPalette.Window)
-            if window_color.isValid():
-                _SYSTEM_DARK_CACHE = window_color.lightness() < 128
-                return _SYSTEM_DARK_CACHE
+            if window_color.isValid() and window_color.lightness() < 128:
+                _SYSTEM_DARK_CACHE = True
+                return True
     except Exception:
         pass
 
-    # 2. Fallback check in KDE kdeglobals
+    # 2. Check KDE kdeglobals
     kdeglobals = os.path.join(
         os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
         "kdeglobals",
@@ -221,14 +225,27 @@ def _detect_system_dark() -> bool:
     if os.path.exists(kdeglobals):
         try:
             with open(kdeglobals, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read().lower()
-            if "breezedark" in content or "dark" in content:
+                content = f.read()
+            if re.search(r"^(?:ColorScheme|Name|LookAndFeelPackage)\s*=\s*.*dark", content, re.IGNORECASE | re.MULTILINE):
+                _SYSTEM_DARK_CACHE = True
                 return True
-            if "breezelight" in content or "breeze" in content:
+            m = re.search(r"^\s*BackgroundNormal\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", content, re.MULTILINE)
+            if m:
+                r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                lum = 0.299 * r + 0.587 * g + 0.114 * b
+                _SYSTEM_DARK_CACHE = lum < 128
+                return _SYSTEM_DARK_CACHE
+            if re.search(r"^(?:ColorScheme|Name|LookAndFeelPackage)\s*=\s*.*(?:light|breeze)", content, re.IGNORECASE | re.MULTILINE):
+                _SYSTEM_DARK_CACHE = False
                 return False
         except Exception:
             pass
 
+    if "dark" in os.environ.get("GTK_THEME", "").lower():
+        _SYSTEM_DARK_CACHE = True
+        return True
+
+    _SYSTEM_DARK_CACHE = False
     return False
 
 
@@ -250,7 +267,6 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
     Applies the chosen theme ('light', 'dark', or 'auto') natively via QPalette
     on QApplication (with zero QSS on controls) and updates StatusPopup.
     """
-    global SYSTEM_DEFAULT_PALETTE
     mode = (theme_mode or load_config().get("theme") or "auto").lower()
 
     try:
@@ -305,8 +321,31 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
             palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6c737a"))
             app.setPalette(palette)
         else:
-            palette = QPalette(SYSTEM_DEFAULT_PALETTE)
-            app.setPalette(SYSTEM_DEFAULT_PALETTE)
+            is_dark = _detect_system_dark()
+            sys_is_dark = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window).lightness() < 128
+            if is_dark and not sys_is_dark:
+                palette = QPalette()
+                palette.setColor(QPalette.Window, QColor("#202326"))
+                palette.setColor(QPalette.WindowText, QColor("#eff0f1"))
+                palette.setColor(QPalette.Base, QColor("#181a1c"))
+                palette.setColor(QPalette.AlternateBase, QColor("#232629"))
+                palette.setColor(QPalette.Text, QColor("#eff0f1"))
+                palette.setColor(QPalette.Button, QColor("#292c30"))
+                palette.setColor(QPalette.ButtonText, QColor("#eff0f1"))
+                palette.setColor(QPalette.Mid, QColor("#3b4045"))
+                palette.setColor(QPalette.Dark, QColor("#121415"))
+                palette.setColor(QPalette.Light, QColor("#454a4f"))
+                palette.setColor(QPalette.Highlight, QColor("#3daee9"))
+                palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+                palette.setColor(QPalette.ToolTipBase, QColor("#202326"))
+                palette.setColor(QPalette.ToolTipText, QColor("#eff0f1"))
+                palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#6c737a"))
+                palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#6c737a"))
+                palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6c737a"))
+                app.setPalette(palette)
+            else:
+                palette = QPalette(SYSTEM_DEFAULT_PALETTE)
+                app.setPalette(SYSTEM_DEFAULT_PALETTE)
 
         for top in app.topLevelWidgets():
             if hasattr(top, "_applied_theme_state") and hasattr(top, "apply_theme"):
@@ -339,12 +378,17 @@ def _sync_autostart(enabled: bool) -> None:
         local_venv = os.path.join(local_dir, "venv")
         user_bin = os.path.expanduser("~/.local/bin/ducksdrive")
         appimage_path = os.environ.get("APPIMAGE")
+        is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
 
-        if appimage_path and os.path.exists(appimage_path):
-            bin_path = appimage_path
+        if is_flatpak:
+            flatpak_id = os.environ.get("FLATPAK_ID") or "com.github.patopatetico2.ducksdrive"
+            exec_cmd = f"flatpak run {flatpak_id}"
+            icon_path = flatpak_id
+        elif appimage_path and os.path.exists(appimage_path):
+            exec_cmd = f'"{appimage_path}"'
             icon_path = os.path.join(local_dir, "icon.svg")
             if not os.path.exists(icon_path):
-                bundled_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg")
+                bundled_icon = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "icon.svg")
                 if os.path.exists(bundled_icon):
                     try:
                         os.makedirs(local_dir, exist_ok=True)
@@ -355,20 +399,22 @@ def _sync_autostart(enabled: bool) -> None:
                     icon_path = "ducksdrive"
         elif os.path.exists(local_bin) or os.path.exists(local_venv):
             bin_path = local_bin if os.path.exists(local_bin) else user_bin
+            exec_cmd = f'"{bin_path}"'
             icon_path = os.path.join(local_dir, "icon.svg")
             if not os.path.exists(icon_path):
                 icon_path = "ducksdrive"
         elif os.path.exists("/usr/bin/ducksdrive"):
-            bin_path = "/usr/bin/ducksdrive"
+            exec_cmd = '"/usr/bin/ducksdrive"'
             icon_path = "ducksdrive"
         else:
             bin_path = shutil.which("ducksdrive") or user_bin
+            exec_cmd = f'"{bin_path}"'
             icon_path = "ducksdrive"
         
         content = f"""[Desktop Entry]
 Name=DucksDrive
 Comment=Manage cloud drives with Rclone
-Exec="{bin_path}"
+Exec={exec_cmd}
 Icon={icon_path}
 Terminal=false
 Type=Application

@@ -1,17 +1,20 @@
 #!/bin/bash
 APP_NAME="ducksdrive"
-INSTALL_DIR="$HOME/.local/share/$APP_NAME"
-BIN_FILE="$HOME/.local/bin/$APP_NAME"
-DESKTOP_FILE="$HOME/.local/share/applications/$APP_NAME.desktop"
-AUTOSTART_FILE="$HOME/.config/autostart/$APP_NAME.desktop"
-CONFIG_DIR="$HOME/.config/$APP_NAME"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+INSTALL_DIR="$XDG_DATA_HOME/$APP_NAME"
+BIN_FILE="${XDG_BIN_HOME:-$HOME/.local/bin}/$APP_NAME"
+DESKTOP_FILE="$XDG_DATA_HOME/applications/$APP_NAME.desktop"
+AUTOSTART_FILE="$XDG_CONFIG_HOME/autostart/$APP_NAME.desktop"
+CONFIG_DIR="$XDG_CONFIG_HOME/$APP_NAME"
 CLOUD_DRIVES_BASE="$HOME/CloudDrives"
 
 echo "=== Uninstalling $APP_NAME ==="
 echo "Stopping running application and rclone instances..."
-pkill -f "python3.*ducksdrive" 2>/dev/null || true
-pkill -f "rclone mount.*CloudDrives" 2>/dev/null || true
-pkill -f "rclone mount.*GoogleDrive" 2>/dev/null || true
+pkill -f "[p]ython3.*ducksdrive" 2>/dev/null || true
+pkill -x "ducksdrive" 2>/dev/null || true
+pkill -f "[r]clone mount.*CloudDrives" 2>/dev/null || true
+pkill -f "[r]clone mount.*GoogleDrive" 2>/dev/null || true
 sleep 1 
 
 # Dynamically unmount and clean up all mount points under ~/CloudDrives/
@@ -58,8 +61,11 @@ fi
 echo "Removing orphaned GUI bookmarks..."
 
 python3 - <<'PYEOF' 2>/dev/null || true
-import os, re
-for p in [os.path.expanduser("~/.local/share/user-places.xbel"), os.path.expanduser("~/.config/user-places.xbel")]:
+import os, re, urllib.parse
+xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+
+for p in [os.path.join(xdg_data, "user-places.xbel"), os.path.join(xdg_config, "user-places.xbel")]:
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f: s = f.read()
         s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
@@ -68,19 +74,35 @@ for p in [os.path.expanduser("~/.local/share/user-places.xbel"), os.path.expandu
     bak = p + ".bak"
     if os.path.exists(bak):
         os.remove(bak)
+
+gtk_bookmarks = os.path.join(xdg_config, "gtk-3.0", "bookmarks")
+if os.path.exists(gtk_bookmarks):
+    with open(gtk_bookmarks, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    with open(gtk_bookmarks, "w", encoding="utf-8") as f:
+        for line in lines:
+            unquoted = urllib.parse.unquote(line)
+            if "CloudDrives" not in line and "GoogleDrive" not in line and "CloudDrives" not in unquoted and "GoogleDrive" not in unquoted:
+                f.write(line)
 PYEOF
 
-GTK_BOOKMARKS="$HOME/.config/gtk-3.0/bookmarks"
-if [ -f "$GTK_BOOKMARKS" ]; then
-    # Double quotes on purpose: $HOME must be expanded before sed sees the pattern
-    sed -i "\~^file://$HOME/CloudDrives/~d" "$GTK_BOOKMARKS" 2>/dev/null || true
-    sed -i "\~^file://$HOME/GoogleDrive\([[:space:]]\|\$\)~d" "$GTK_BOOKMARKS" 2>/dev/null || true
-fi
-
-
 echo "Removing application files and configuration..."
+rm -rf "$INSTALL_DIR" "$BIN_FILE" "$DESKTOP_FILE" "$AUTOSTART_FILE" "$CONFIG_DIR"
+
 RCLONE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclone"
 RCLONE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/rclone"
-rm -rf "$INSTALL_DIR" "$BIN_FILE" "$DESKTOP_FILE" "$AUTOSTART_FILE" "$CONFIG_DIR" "$RCLONE_CONFIG_DIR" "$RCLONE_CACHE_DIR"
-update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
+if [ -d "$RCLONE_CONFIG_DIR" ] || [ -d "$RCLONE_CACHE_DIR" ]; then
+    wipe_rclone=""
+    if [ -t 0 ]; then
+        read -r -p "Deseja remover também as configurações globais do Rclone ($RCLONE_CONFIG_DIR) e o cache VFS? (s/N): " wipe_rclone || true
+    fi
+    if [ "${wipe_rclone:-}" = "s" ] || [ "${wipe_rclone:-}" = "S" ] || [ "${wipe_rclone:-}" = "y" ] || [ "${wipe_rclone:-}" = "Y" ]; then
+        rm -rf "$RCLONE_CONFIG_DIR" "$RCLONE_CACHE_DIR"
+        echo "Removed global Rclone config and VFS cache."
+    else
+        echo "Kept global Rclone config ($RCLONE_CONFIG_DIR)."
+    fi
+fi
+
+update-desktop-database "$XDG_DATA_HOME/applications/" 2>/dev/null || true
 echo "=== Uninstallation Complete ==="

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 from rclone_config import TaskRunner, get_clean_env
 from rclone_daemon import RcloneDaemon
 from rclone_settings import (
+    CONFIG_DIR,
     _sync_autostart,
     apply_app_theme,
     load_config,
@@ -34,7 +35,7 @@ from rclone_settings import (
 from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
-from gui_tray import RcloneTrayIcon
+from gui_tray import RcloneTrayIcon, get_app_icon
 
 # Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
 xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -91,7 +92,9 @@ class RcloneAppController(QObject):
         self._old_pollers: list[RcloneStatsPoller] = []
         # Serial background runner for file-manager sidebar I/O (keeps add/remove in order, off the GUI thread)
         self.runner = TaskRunner(self)
+        self.daemon._integration_runner = self.runner
         self._is_shutting_down = False
+        self._threads_cleaned = False
 
         # Connect signals
         self.daemon.state_changed.connect(self._handle_state_change)
@@ -185,6 +188,9 @@ class RcloneAppController(QObject):
 
     def _cleanup_threads(self) -> None:
         """Stops all background worker threads cleanly."""
+        if self._threads_cleaned:
+            return
+        self._threads_cleaned = True
         self._stop_poller(wait=True)
         for poller in self._old_pollers:
             poller.wait(2000)
@@ -199,8 +205,9 @@ class RcloneAppController(QObject):
             return
         self._is_shutting_down = True
         logger.info("Shutting down application...")
+        self._stop_poller(wait=True)
+        self.daemon.stop()  # Blocking on purpose (exiting); queues clean_integration via the state signal
         self._cleanup_threads()
-        self.daemon.stop()  # Blocking on purpose (exiting); also queues clean_integration via the state signal
         self.app.quit()
 
 
@@ -210,7 +217,8 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("DucksDrive")
     app.setApplicationDisplayName("DucksDrive")
-    app.setDesktopFileName("ducksdrive")
+    app.setDesktopFileName(os.environ.get("FLATPAK_ID") or "ducksdrive")
+    app.setWindowIcon(get_app_icon())
     app.setQuitOnLastWindowClosed(False)
 
     SYSTEM_DEFAULT_PALETTE = QApplication.instance().palette()
@@ -224,7 +232,7 @@ def main() -> None:
 
 
     # 1. Enforce Single Instance via QLockFile
-    lock_dir = os.path.expanduser("~/.config/ducksdrive")
+    lock_dir = CONFIG_DIR
     os.makedirs(lock_dir, exist_ok=True)
     lock_file_path = os.path.join(lock_dir, "app.lock")
     
@@ -240,9 +248,9 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # 2. System Tray Availability Check (with small retry loop during desktop startup)
+    # 2. System Tray Availability Check (with retry loop up to 30s during desktop startup)
     tray_available = False
-    for _ in range(10):
+    for _ in range(60):
         if QSystemTrayIcon.isSystemTrayAvailable():
             tray_available = True
             break
