@@ -7,6 +7,7 @@ remaining time ETA in HH:MM:SS, and descriptive status text.
 """
 
 import base64
+from collections import deque
 import json
 import logging
 import time
@@ -40,6 +41,7 @@ class StatsData:
     errors_count: int = 0
     status_text: str = field(default_factory=lambda: tr("Desconectado"))
     active_transfers: List[Dict[str, Any]] = field(default_factory=list)
+    recent_transfers: List[Dict[str, Any]] = field(default_factory=list)
     vfs_queue_count: int = 0
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
@@ -177,6 +179,39 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
     return StatsData(is_online=False, status_text=tr("Drive não conectado"))
 
 
+def fetch_rclone_transferred(creds: RCCredentials, timeout: float = 2.0) -> List[Dict[str, Any]]:
+    """
+    Executes a single HTTP POST query to `http://<host>:<port>/core/transferred`
+    using HTTP Basic Auth.
+
+    Args:
+        creds: In-memory credentials for the Rclone RC API.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        List[Dict[str, Any]]: List of completed transfer items.
+    """
+    endpoint = f"{creds.url}/core/transferred"
+    req = urllib.request.Request(
+        url=endpoint,
+        data=b"{}",
+        headers={
+            "Authorization": _get_auth_header(creds),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            if response.status == 200:
+                raw_json = response.read().decode("utf-8")
+                data: Dict[str, Any] = json.loads(raw_json)
+                return data.get("transferred") or []
+    except Exception as exc:
+        logger.debug("Error querying rclone /core/transferred: %s", exc)
+    return []
+
+
 def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]:
     """
     Returns how many files are still pending upload in the VFS write-back cache
@@ -223,6 +258,28 @@ def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]
     return None
 
 
+def rc_vfs_refresh(creds: RCCredentials, timeout: float = 15.0) -> bool:
+    """
+    Sends a POST request to `/vfs/refresh` via RC to reload the directory cache
+    without unmounting. Blocking call: run outside the GUI thread.
+    """
+    req = urllib.request.Request(
+        url=f"{creds.url}/vfs/refresh",
+        data=b"{}",
+        headers={
+            "Authorization": _get_auth_header(creds),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception as exc:
+        logger.debug("Failed to refresh VFS directory cache via RC: %s", exc)
+        return False
+
+
 def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> bool:
     """
     Sets the active bandwidth limit on the running rclone daemon via RC `/core/bwlimit`.
@@ -267,6 +324,8 @@ class RcloneStatsPoller(QThread):
         self.poll_interval = poll_interval
         self.daemon = daemon
         self._running = False
+        self._recent_transfers: deque[Dict[str, Any]] = deque(maxlen=10)
+        self._seen_transfers_keys: set[str] = set()
 
     def _is_daemon_mount_alive(self) -> bool:
         """Checks whether the underlying rclone daemon process and mount point are still active."""
@@ -315,7 +374,28 @@ class RcloneStatsPoller(QThread):
                         vfs_queue_count = q_len
                     last_queue_check = now
 
+                    # Track recently completed file transfers
+                    transferred_items = fetch_rclone_transferred(self.credentials, timeout=2.0)
+                    for item in transferred_items:
+                        if not isinstance(item, dict):
+                            continue
+                        name = item.get("name")
+                        if not name or item.get("error"):
+                            continue
+                        key = f"{name}_{item.get('size', 0)}_{item.get('completed_at', '')}"
+                        if key not in self._seen_transfers_keys:
+                            self._seen_transfers_keys.add(key)
+                            self._recent_transfers.appendleft({
+                                "name": name,
+                                "size": int(item.get("size") or item.get("bytes") or 0),
+                                "completed_at": item.get("completed_at", ""),
+                            })
+                    if len(self._seen_transfers_keys) > 100:
+                        valid_keys = {f"{it['name']}_{it['size']}_{it.get('completed_at', '')}" for it in self._recent_transfers}
+                        self._seen_transfers_keys.intersection_update(valid_keys)
+
                 stats.vfs_queue_count = vfs_queue_count
+                stats.recent_transfers = list(self._recent_transfers)
                 if len(stats.active_transfers) == 0 and vfs_queue_count > 0:
                     stats.status_text = tr("Sincronizando (%d na fila) • %s • ETA %s") % (
                         vfs_queue_count,
@@ -330,6 +410,7 @@ class RcloneStatsPoller(QThread):
                 # If rclone is simply busy with heavy FUSE/VFS locks, do not falsely report "Offline"
                 if self._is_daemon_mount_alive() and consecutive_failures < 10:
                     if last_valid_stats is not None:
+                        last_valid_stats.recent_transfers = list(self._recent_transfers)
                         self.stats_updated.emit(last_valid_stats)
                 elif consecutive_failures >= 3:
                     if was_online:

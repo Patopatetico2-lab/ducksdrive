@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from rclone_config import TaskRunner
 from rclone_daemon import RcloneDaemon, is_path_mounted
 from rclone_settings import is_dark_theme_active
-from rclone_stats import StatsData, set_rc_bwlimit
+from rclone_stats import StatsData, format_bytes, rc_vfs_refresh, set_rc_bwlimit
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,10 @@ class SpeedChartWidget(QWidget):
         painter.end()
 
 
+# In-memory quota cache per remote to prevent UI flicker and "Quota indisponível" on transient network hiccups
+_quota_cache: dict[str, tuple[int, int]] = {}
+
+
 class QuotaWorkerThread(QThread):
     """Background worker thread to fetch cloud storage quota without blocking UI."""
     quota_fetched = Signal(object, object)  # total, used
@@ -143,6 +147,8 @@ class QuotaWorkerThread(QThread):
         import json
         import urllib.request
         import base64
+        import time
+
         try:
             creds = self.credentials
             auth_str = f"{creds.user}:{creds.password}"
@@ -157,16 +163,26 @@ class QuotaWorkerThread(QThread):
                 headers=headers,
                 method="POST"
             )
-            
-            with urllib.request.urlopen(req_about, timeout=10) as response:
-                data = json.loads(response.read().decode("utf-8"))
-                total = int(data.get("total") or 0)
-                used = int(data.get("used") or 0)
 
-            if (data.get("total") is not None or data.get("used") is not None) and (total >= 0 and used >= 0):
-                self.quota_fetched.emit(total, used)
-            else:
-                self.quota_failed.emit()
+            # Up to 2 retries (3 total attempts) with a short delay on transient failures
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(req_about, timeout=8) as response:
+                        data = json.loads(response.read().decode("utf-8"))
+                        total = int(data.get("total") or 0)
+                        used = int(data.get("used") or 0)
+
+                    if (data.get("total") is not None or data.get("used") is not None) and (total >= 0 and used >= 0):
+                        self.quota_fetched.emit(total, used)
+                        return
+                    else:
+                        break
+                except Exception as attempt_err:
+                    logger.debug("Quota attempt %d/3 failed: %s", attempt + 1, attempt_err)
+                    if attempt < 2:
+                        time.sleep(1.5)
+
+            self.quota_failed.emit()
         except Exception as e:
             logger.debug("Failed to fetch quota: %s", e)
             self.quota_failed.emit()
@@ -202,6 +218,35 @@ class TransferItem(QWidget):
         self.file_name = name
         self.name_label.setText(name)
         self.progress.setValue(percentage)
+
+
+class RecentTransferItem(QWidget):
+    """Small widget representing a completed file transfer in recent history."""
+
+    def __init__(self, name: str, size_str: str, is_dark: bool = False, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 3, 0, 3)
+        layout.setSpacing(6)
+
+        self.name_label = QLabel(f"✓  {name}")
+        self.name_label.setWordWrap(False)
+        self.size_label = QLabel(size_str)
+        self.size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        layout.addWidget(self.name_label, 1)
+        layout.addWidget(self.size_label, 0)
+        self.apply_theme(is_dark)
+
+    def apply_theme(self, is_dark: bool) -> None:
+        name_col = "#ecf0f1" if is_dark else "#2c3e50"
+        size_col = "#95a5a6" if is_dark else "#7f8c8d"
+        self.name_label.setStyleSheet(f"font-size: 8.5pt; color: {name_col};")
+        self.size_label.setStyleSheet(f"font-size: 8pt; color: {size_col};")
+
+    def update_data(self, name: str, size_str: str) -> None:
+        self.name_label.setText(f"✓  {name}")
+        self.size_label.setText(size_str)
 
 
 class StatusPopup(QWidget):
@@ -387,10 +432,19 @@ class StatusPopup(QWidget):
         main_layout.addWidget(self.chart_widget)
 
         # Footer
+        footer_layout = QHBoxLayout()
         self.btn_open = QPushButton(tr("Abrir Pasta Local"))
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_cloud_folder)
-        main_layout.addWidget(self.btn_open)
+        footer_layout.addWidget(self.btn_open, 2)
+
+        self.btn_refresh = QPushButton(tr("Atualizar"))
+        self.btn_refresh.setEnabled(False)
+        self.btn_refresh.setToolTip(tr("Recarregar cache de pastas (vfs/refresh)"))
+        self.btn_refresh.clicked.connect(self._refresh_vfs)
+        footer_layout.addWidget(self.btn_refresh, 1)
+
+        main_layout.addLayout(footer_layout)
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
         """Applies Dark or Light theme styling to the popup, transfer items, and speed chart."""
@@ -506,7 +560,7 @@ class StatusPopup(QWidget):
             self.chart_widget.update()
         for i in range(self.scroll_layout.count()):
             w = self.scroll_layout.itemAt(i).widget()
-            if isinstance(w, TransferItem):
+            if isinstance(w, (TransferItem, RecentTransferItem)):
                 w.apply_theme(self.is_dark)
 
     def retranslate_ui(self) -> None:
@@ -517,14 +571,20 @@ class StatusPopup(QWidget):
         self.speed_title_label.setText(tr("Velocidade:"))
         self.eta_title_label.setText(tr("Restam:"))
         self.btn_open.setText(tr("Abrir Pasta Local"))
+        self.btn_refresh.setText(tr("Atualizar"))
+        self.btn_refresh.setToolTip(tr("Recarregar cache de pastas (vfs/refresh)"))
         if self.daemon.is_running():
             self.status_badge.setText(tr("● Online"))
             if self._last_quota_values is not None:
                 self._on_quota_success(*self._last_quota_values)
-            elif self._last_quota_update == 0:
-                self.quota_label.setText(tr("Calculando espaço..."))
             else:
-                self._fetch_quota()
+                clean_r = (self.daemon.current_remote or "").rstrip(":")
+                if clean_r in _quota_cache:
+                    self._on_quota_success(*_quota_cache[clean_r])
+                elif self._last_quota_update == 0:
+                    self.quota_label.setText(tr("Calculando espaço..."))
+                else:
+                    self._fetch_quota()
         else:
             self.status_badge.setText(tr("● Offline"))
             if self.daemon.state == "starting":
@@ -583,6 +643,9 @@ class StatusPopup(QWidget):
                 self._quota_remote = self.daemon.current_remote
                 self._latest_stats = StatsData(is_online=True, status_text=tr("Sincronizado / Ocioso"))
                 self._render_stats(self._latest_stats)
+                clean_r = (self.daemon.current_remote or "").rstrip(":")
+                if clean_r in _quota_cache:
+                    self._on_quota_success(*_quota_cache[clean_r])
                 if self.isVisible():
                     self._fetch_quota()
 
@@ -754,8 +817,7 @@ class StatusPopup(QWidget):
         def do_request(pause_state: bool) -> bool:
             original_limit = str(load_config().get("bwlimit") or "off")
             if pause_state:
-                rx_limit = original_limit.split(":", 1)[1] if ":" in original_limit else original_limit
-                limit_val = f"1B:{rx_limit}"
+                limit_val = "1B:1B"
             else:
                 limit_val = original_limit
             return set_rc_bwlimit(creds, limit_val, timeout=5.0)
@@ -777,6 +839,9 @@ class StatusPopup(QWidget):
         if self._quota_remote and self.daemon.current_remote != self._quota_remote:
             return
         self._last_quota_values = (total, used)
+        clean_remote = (self.daemon.current_remote or "").rstrip(":")
+        if clean_remote:
+            _quota_cache[clean_remote] = (total, used)
         from rclone_stats import format_bytes
         
         if total > 0:
@@ -794,6 +859,14 @@ class StatusPopup(QWidget):
     def _on_quota_error(self) -> None:
         if not self.daemon.is_running():
             return
+        clean_remote = (self.daemon.current_remote or "").rstrip(":")
+        if clean_remote and clean_remote in _quota_cache:
+            # Fall back to cached quota instead of overwriting UI with "Quota indisponível"
+            cached_total, cached_used = _quota_cache[clean_remote]
+            self._on_quota_success(cached_total, cached_used)
+            self._last_quota_update = time.time() - 300  # Retry in 5 minutes
+            return
+
         self._last_quota_values = None
         self.quota_label.setText(tr("Quota indisponível"))
         self.quota_bar.hide()
@@ -814,7 +887,7 @@ class StatusPopup(QWidget):
         def clear_transfers():
             for i in reversed(range(self.scroll_layout.count())):
                 widget = self.scroll_layout.itemAt(i).widget()
-                if isinstance(widget, TransferItem):
+                if isinstance(widget, (TransferItem, RecentTransferItem)):
                     self.scroll_layout.removeWidget(widget)
                     widget.deleteLater()
             self.empty_label.show()
@@ -833,6 +906,13 @@ class StatusPopup(QWidget):
 
             if stats.active_transfers:
                 self.empty_label.hide()
+                # Remove any leftover recent transfer widgets while active transfers are running
+                for i in reversed(range(self.scroll_layout.count())):
+                    w = self.scroll_layout.itemAt(i).widget()
+                    if isinstance(w, RecentTransferItem):
+                        self.scroll_layout.removeWidget(w)
+                        w.deleteLater()
+
                 existing_widgets: list[TransferItem] = []
                 for i in range(self.scroll_layout.count()):
                     w = self.scroll_layout.itemAt(i).widget()
@@ -841,7 +921,7 @@ class StatusPopup(QWidget):
 
                 for idx, t in enumerate(stats.active_transfers):
                     name = t.get("name", tr("Arquivo"))
-                    pct = max(0, min(99, int(t.get("percentage") or 0)))
+                    pct = max(0, min(100, int(t.get("percentage") or 0)))
                     if idx < len(existing_widgets):
                         existing_widgets[idx].update_data(name, pct)
                     else:
@@ -852,11 +932,46 @@ class StatusPopup(QWidget):
                     self.scroll_layout.removeWidget(extra_w)
                     extra_w.deleteLater()
             else:
+                # Remove active transfer widgets
+                for i in reversed(range(self.scroll_layout.count())):
+                    w = self.scroll_layout.itemAt(i).widget()
+                    if isinstance(w, TransferItem):
+                        self.scroll_layout.removeWidget(w)
+                        w.deleteLater()
+
                 if stats.vfs_queue_count > 0:
+                    for i in reversed(range(self.scroll_layout.count())):
+                        w = self.scroll_layout.itemAt(i).widget()
+                        if isinstance(w, RecentTransferItem):
+                            self.scroll_layout.removeWidget(w)
+                            w.deleteLater()
                     self.empty_label.setText(tr("Aguardando o envio de %d arquivo(s) para a nuvem...") % stats.vfs_queue_count)
+                    self.empty_label.show()
+                elif stats.recent_transfers:
+                    self.empty_label.setText(tr("Arquivos Recentes"))
+                    self.empty_label.show()
+
+                    existing_recent: list[RecentTransferItem] = []
+                    for i in range(self.scroll_layout.count()):
+                        w = self.scroll_layout.itemAt(i).widget()
+                        if isinstance(w, RecentTransferItem):
+                            existing_recent.append(w)
+
+                    for idx, r in enumerate(stats.recent_transfers):
+                        name = r.get("name", tr("Arquivo"))
+                        size_str = format_bytes(int(r.get("size") or 0))
+                        if idx < len(existing_recent):
+                            existing_recent[idx].update_data(name, size_str)
+                        else:
+                            item = RecentTransferItem(name, size_str, is_dark=self.is_dark)
+                            self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
+
+                    for extra_w in existing_recent[len(stats.recent_transfers):]:
+                        self.scroll_layout.removeWidget(extra_w)
+                        extra_w.deleteLater()
                 else:
                     self.empty_label.setText(tr("Nenhum arquivo sendo transferido"))
-                clear_transfers()
+                    clear_transfers()
         else:
             self.title_label.setText("<b>DucksDrive</b>")
             self.status_badge.setText(tr("● Offline"))
@@ -874,6 +989,26 @@ class StatusPopup(QWidget):
 
         self._apply_pause_button_ui()
         self.btn_open.setEnabled(self.daemon.is_running())
+        self.btn_refresh.setEnabled(self.daemon.is_running())
+
+    def _refresh_vfs(self) -> None:
+        """Sends POST /vfs/refresh via TaskRunner and provides visual feedback."""
+        creds = self.daemon.rc_credentials if self.daemon.is_running() else None
+        if creds is None:
+            return
+        self.btn_refresh.setEnabled(False)
+        self.btn_refresh.setText(tr("Atualizando..."))
+
+        def _done(ok: bool) -> None:
+            if self.daemon.is_running():
+                self.btn_refresh.setEnabled(True)
+                if ok:
+                    self.btn_refresh.setText(tr("✓ Atualizado"))
+                    QTimer.singleShot(2000, lambda: self.btn_refresh.setText(tr("Atualizar")))
+                else:
+                    self.btn_refresh.setText(tr("Atualizar"))
+
+        self._pause_runner.submit(rc_vfs_refresh, creds, callback=_done)
 
     def _open_cloud_folder(self) -> None:
         """Opens the mount point in the file manager using QDesktopServices and closes popup."""

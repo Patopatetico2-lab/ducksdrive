@@ -520,8 +520,13 @@ class RcloneDaemon(QObject):
             vfs_cache_mode,
             "--vfs-cache-max-size",
             cache_size,
+            "--vfs-cache-max-age",
+            "24h",
             "--vfs-write-back",
-            "15s",
+            "5s",
+            "--vfs-read-ahead",
+            "128M",
+            "--vfs-fast-fingerprint",
             "--vfs-read-chunk-size",
             "8M",
             "--vfs-read-chunk-size-limit",
@@ -827,3 +832,10 @@ class RcloneDaemon(QObject):
     def is_running(self) -> bool:
         """Checks if the mount process is actively running and path is mounted."""
         return self.process is not None and self.process.poll() is None
+
+    def refresh_vfs(self, timeout: float = 15.0) -> bool:
+        """Sends POST /vfs/refresh to active daemon via RC API. Blocking call."""
+        if not self.is_running() or not self.rc_credentials:
+            return False
+        from rclone_stats import rc_vfs_refresh
+        return rc_vfs_refresh(self.rc_credentials, timeout=timeout)

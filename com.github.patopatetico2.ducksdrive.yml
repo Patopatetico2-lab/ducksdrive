@@ -111,6 +111,5 @@ modules:
         StartupWMClass=ducksdrive
         EOF
     sources:
-      - type: archive
-        url: https://github.com/Patopatetico2-lab/ducksdrive/archive/refs/tags/v1.0.8.tar.gz
-        sha256: 7cd6a71ee605463eedc48dc7fe7306cd2f267a49a1373262c9170a3ff4f1385c
+      - type: dir
+        path: .

@@ -454,3 +454,76 @@ def delete_remote(remote_name: str) -> bool:
     except Exception as exc:
         logger.error("Exception deleting remote '%s': %s", remote_name, exc)
         return False
+
+
+def check_remote_connection(remote_name: str) -> Tuple[bool, str, bool]:
+    """
+    Executes 'rclone about <remote>: --json --timeout 5s --contimeout 5s --retries 1 --low-level-retries 1'
+    with stdin=subprocess.DEVNULL to test remote connectivity and OAuth health.
+
+    Returns:
+        Tuple[is_healthy: bool, message: str, is_oauth_expired: bool]
+    """
+    rclone_bin = get_rclone_path()
+    clean_name = remote_name.rstrip(":")
+    formatted = f"{clean_name}:"
+    cmd = [
+        rclone_bin,
+        "about",
+        formatted,
+        "--json",
+        "--timeout", "5s",
+        "--contimeout", "5s",
+        "--retries", "1",
+        "--low-level-retries", "1",
+    ]
+    try:
+        res = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            env=get_clean_env(),
+        )
+        if res.returncode == 0:
+            return True, tr("A conexão com '%s' está saudável e autenticada com sucesso.") % clean_name, False
+
+        err = (res.stderr or "").lower()
+        is_oauth = any(x in err for x in ("invalid_grant", "token expired", "token has expired", "token revoked", "oauth"))
+        if is_oauth:
+            msg = tr("O token de autenticação OAuth para '%s' está expirado ou revogado (invalid_grant).") % clean_name
+            return False, msg, True
+        else:
+            clean_err = res.stderr.strip() if res.stderr else tr("Código de erro: %d") % res.returncode
+            return False, tr("Falha na conexão com '%s':\n%s") % (clean_name, clean_err), False
+    except subprocess.TimeoutExpired:
+        return False, tr("Tempo limite esgotado (timeout de 5s) ao conectar com '%s'. Verifique a sua conexão com a internet.") % clean_name, False
+    except Exception as exc:
+        return False, tr("Erro ao testar conexão com '%s': %s") % (clean_name, exc), False
+
+
+def reconnect_remote(remote_name: str) -> Tuple[int, str]:
+    """
+    Reauthorizes an expired OAuth remote via non-blocking 'rclone config reconnect <remote>:'.
+    Answers 'y\\ny\\n\\n' automatically into stdin to refresh token and open web browser.
+
+    Returns:
+        Tuple[returncode: int, output_or_error: str]
+    """
+    rclone_bin = get_rclone_path()
+    clean_name = remote_name.rstrip(":")
+    formatted = f"{clean_name}:"
+    cmd = [rclone_bin, "config", "reconnect", formatted]
+    try:
+        res = subprocess.run(
+            cmd,
+            input="y\ny\n\n",
+            text=True,
+            capture_output=True,
+            timeout=120,
+            env=get_clean_env(),
+        )
+        return res.returncode, res.stderr or res.stdout or ""
+    except Exception as exc:
+        return -1, str(exc)

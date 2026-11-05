@@ -77,9 +77,9 @@
   <content_rating type="oars-1.1" />
 
   <releases>
-    <release version="1.0.8" date="2026-10-29">
+    <release version="1.0.8" date="2026-11-04">
       <description>
-        <p>Restored native KDE Breeze rendering across all dialogs and controls using QPalette instead of destructive QSS stylesheets, with live theme switching and StatusPopup synchronization.</p>
+        <p>Recent files history in floating panel via core/transferred, VFS write-back upload queue data loss prevention, OAuth connectivity diagnostic and reconnect flow, quota caching and transient retry, bilateral bandwidth pausing, and VFS refresh directory cache action.</p>
       </description>
     </release>
     <release version="1.0.7" date="2026-10-29">

@@ -11,12 +11,23 @@ for cmd in pip curl unzip; do
     fi
 done
 
-# Install PyInstaller
-pip install --user pyinstaller
+# Detect Python environment
+PYTHON_BIN="python3"
+if [ -x "$HOME/.local/share/ducksdrive/venv/bin/python3" ]; then
+    PYTHON_BIN="$HOME/.local/share/ducksdrive/venv/bin/python3"
+elif [ -x "/usr/share/ducksdrive/venv/bin/python3" ]; then
+    PYTHON_BIN="/usr/share/ducksdrive/venv/bin/python3"
+fi
+
+# Ensure PyInstaller is installed
+if ! "$PYTHON_BIN" -m PyInstaller --version &> /dev/null; then
+    echo "Installing PyInstaller..."
+    "$PYTHON_BIN" -m pip install pyinstaller || pip install --user pyinstaller || pip install --user pyinstaller --break-system-packages
+fi
 
 # Run PyInstaller
 echo "Running PyInstaller..."
-python3 -m pyinstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." --hidden-import PySide6.QtSvg main.py
+"$PYTHON_BIN" -m PyInstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." --hidden-import PySide6.QtSvg --noconfirm main.py
 
 # Create AppDir
 echo "Creating AppDir structure..."

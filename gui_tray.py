@@ -10,7 +10,7 @@ import os
 import re
 import sys
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from i18n import tr
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
@@ -43,11 +43,13 @@ from rclone_config import (
     TaskRunner,
     list_remote_names,
     RemoteCreationThread,
-    delete_remote
+    delete_remote,
+    check_remote_connection,
+    reconnect_remote,
 )
 from rclone_daemon import RcloneDaemon, is_path_mounted
 from rclone_settings import apply_app_theme, load_config, save_last_remote
-from rclone_stats import StatsData, fetch_vfs_queue, set_rc_bwlimit
+from rclone_stats import StatsData, fetch_vfs_queue, rc_vfs_refresh, set_rc_bwlimit
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
 
@@ -389,6 +391,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_open.triggered.connect(self._open_folder)
         self._menu.addAction(self.action_open)
 
+        self.action_refresh_vfs = QAction(tr("Atualizar Pastas"), self)
+        self.action_refresh_vfs.setEnabled(False)
+        self.action_refresh_vfs.triggered.connect(self._refresh_vfs)
+        self._menu.addAction(self.action_refresh_vfs)
+
         self.action_panel = QAction(tr("Abrir Painel de Transferências"), self)
         self.action_panel.triggered.connect(self._show_transfer_panel)
         self._menu.addAction(self.action_panel)
@@ -464,9 +471,53 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 pass
         self.status_popup.shutdown_workers()
 
+    def _safe_unmount_or_switch(self, on_confirmed: Callable[[], None]) -> None:
+        """
+        Verifies if there are files waiting in the VFS queue or actively transferring
+        before stopping or switching remotes. If files are pending, asks confirmation.
+        """
+        if not self.daemon.is_running():
+            on_confirmed()
+            return
+
+        creds = self.daemon.rc_credentials
+        if creds is None:
+            on_confirmed()
+            return
+
+        def _on_queue_checked(pending: Optional[int]) -> None:
+            pending_count = int(pending or 0)
+            has_active = self._has_active_transfer()
+            if pending_count > 0 or has_active:
+                if pending_count > 0:
+                    msg = (
+                        tr("Ainda existem %d arquivo(s) sendo sincronizados com a nuvem.\n"
+                           "Desconectar agora pode causar perda de dados ou envios incompletos.\n\n"
+                           "Tem certeza de que deseja desconectar?")
+                        % pending_count
+                    )
+                else:
+                    msg = tr(
+                        "Transferências de arquivos estão em andamento.\n"
+                        "Desconectar agora pode causar perda de dados ou envios incompletos.\n\n"
+                        "Tem certeza de que deseja desconectar?"
+                    )
+                res = QMessageBox.warning(
+                    None,
+                    tr("Transferências Pendentes"),
+                    msg,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if res != QMessageBox.StandardButton.Yes:
+                    return
+            on_confirmed()
+
+        self.runner.submit(fetch_vfs_queue, creds, callback=_on_queue_checked)
+
     def _unmount_current(self) -> None:
-        """Menu handler: unmount without freezing the GUI."""
-        self.daemon.stop_async()
+        """Menu handler: unmount safely without freezing the GUI."""
+        self._safe_unmount_or_switch(self.daemon.stop_async)
 
     def _populate_remotes_menu(self) -> None:
         """Dynamically populates the 'Gerenciar Nuvens' submenu without leaking memory."""
@@ -493,14 +544,26 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     remote_menu.addAction(action_disconnect)
                 else:
                     action_mount = QAction(tr("Montar"), remote_menu)
-                    action_mount.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=False))
+                    action_mount.triggered.connect(
+                        lambda checked=False, r=remote: self._safe_unmount_or_switch(
+                            lambda: self.daemon.start(r, read_only=False)
+                        )
+                    )
                     remote_menu.addAction(action_mount)
 
                     action_mount_ro = QAction(tr("Montar (Somente Leitura)"), remote_menu)
-                    action_mount_ro.triggered.connect(lambda checked=False, r=remote: self.daemon.start(r, read_only=True))
+                    action_mount_ro.triggered.connect(
+                        lambda checked=False, r=remote: self._safe_unmount_or_switch(
+                            lambda: self.daemon.start(r, read_only=True)
+                        )
+                    )
                     remote_menu.addAction(action_mount_ro)
 
                 remote_menu.addSeparator()
+                action_test = QAction(tr("Testar Conexão"), remote_menu)
+                action_test.triggered.connect(lambda checked=False, r=remote: self._test_connection(r))
+                remote_menu.addAction(action_test)
+
                 action_delete_remote = QAction(tr("Remover"), remote_menu)
                 action_delete_remote.triggered.connect(lambda checked=False, r=remote: self._request_delete_remote(r))
                 remote_menu.addAction(action_delete_remote)
@@ -520,6 +583,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def retranslate_ui(self) -> None:
         """Updates all tray menu labels and the floating status popup in real time when language changes."""
         self.action_open.setText(tr("Abrir Pasta Local"))
+        self.action_refresh_vfs.setText(tr("Atualizar Pastas"))
         self.action_panel.setText(tr("Abrir Painel de Transferências"))
         self.menu_remotes.setTitle(tr("Gerenciar Nuvens"))
         self.action_settings.setText(tr("Configurações..."))
@@ -578,6 +642,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Updates UI elements based on daemon state."""
         is_mounted = state == "mounted"
         self.action_open.setEnabled(is_mounted)
+        self.action_refresh_vfs.setEnabled(is_mounted)
         if not is_mounted:
             self._was_syncing = False
             self._idle_confirm_polls = 0
@@ -646,7 +711,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if stats.active_transfers:
                     t = stats.active_transfers[0]
                     name = t.get("name", tr("Arquivo"))
-                    pct = max(0, min(99, int(t.get("percentage") or 0)))
+                    pct = max(0, min(100, int(t.get("percentage") or 0)))
                     tooltip_detail = f"{tr('Transferindo:')} {name} ({pct}%) • {stats.speed_str} • {tr('ETA:')} {stats.eta_str}"
                     self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {tooltip_detail}")
                 else:
@@ -750,10 +815,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 None,
                 tr("Transferências Ativas"),
                 tr("Transferências de arquivos estão em andamento.\nTem certeza que deseja sair e interrompê-las?"),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
-            if res != QMessageBox.Yes:
+            if res != QMessageBox.StandardButton.Yes:
                 return
         self.request_exit.emit()
 
@@ -843,6 +908,101 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
             QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
+
+    def _refresh_vfs(self) -> None:
+        """Sends POST /vfs/refresh via TaskRunner and provides non-blocking tray notifications."""
+        creds = self.daemon.rc_credentials if self.daemon.is_running() else None
+        if creds is None:
+            return
+        self.action_refresh_vfs.setEnabled(False)
+        self.showMessage(APP_NAME, tr("Atualizando pastas da nuvem..."), QSystemTrayIcon.Information, 2000)
+
+        def _done(ok: bool) -> None:
+            self.action_refresh_vfs.setEnabled(self.daemon.is_running())
+            if ok:
+                self.showMessage(APP_NAME, tr("Pastas atualizadas com sucesso."), QSystemTrayIcon.Information, 3000)
+            else:
+                self.showMessage(APP_NAME, tr("Não foi possível atualizar as pastas."), QSystemTrayIcon.Warning, 3000)
+
+        self.runner.submit(rc_vfs_refresh, creds, callback=_done)
+
+    def _test_connection(self, remote: str) -> None:
+        """Executes non-blocking rclone about diagnostic in background."""
+        clean_remote = remote.rstrip(":")
+        self.showMessage(APP_NAME, tr("Testando conexão com '%s'...") % clean_remote, QSystemTrayIcon.Information, 2000)
+        self.runner.submit(
+            check_remote_connection,
+            clean_remote,
+            callback=lambda res, r=clean_remote: self._on_connection_tested(r, res),
+        )
+
+    def _on_connection_tested(self, remote: str, result: Any) -> None:
+        """GUI-thread callback for connection test results."""
+        if not isinstance(result, tuple) or len(result) != 3:
+            return
+        is_healthy, message, is_oauth_expired = result
+        if is_healthy:
+            QMessageBox.information(None, tr("Teste de Conexão"), message)
+        elif is_oauth_expired:
+            box = QMessageBox(
+                QMessageBox.Icon.Warning,
+                tr("Token OAuth Expirado"),
+                message + "\n\n" + tr("Deseja reautorizar o acesso à sua conta agora através do navegador?"),
+                parent=None,
+            )
+            btn_reauth = box.addButton(tr("Reautorizar no Navegador"), QMessageBox.ButtonRole.AcceptRole)
+            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(btn_reauth)
+            box.setEscapeButton(btn_cancel)
+            box.exec()
+            if box.clickedButton() is btn_reauth:
+                self._reauthorize_oauth(remote)
+        else:
+            QMessageBox.warning(None, tr("Falha na Conexão"), message)
+
+    def _reauthorize_oauth(self, remote: str) -> None:
+        """Handles non-blocking OAuth reauthorization in background, unmounting first if active."""
+        clean_remote = remote.rstrip(":")
+        was_mounted = bool(
+            self.daemon.is_running()
+            and self.daemon.current_remote
+            and self.daemon.current_remote.rstrip(":") == clean_remote
+        )
+        if was_mounted:
+            self.daemon.stop()
+
+        self.showMessage(
+            APP_NAME,
+            tr("Abrindo o navegador para reautorizar '%s'...") % clean_remote,
+            QSystemTrayIcon.Information,
+            5000,
+        )
+        self.runner.submit(
+            reconnect_remote,
+            clean_remote,
+            callback=lambda res, r=clean_remote, wm=was_mounted: self._on_reconnect_done(r, wm, res),
+        )
+
+    def _on_reconnect_done(self, remote: str, was_mounted: bool, result: Any) -> None:
+        """GUI-thread handler after rclone config reconnect finishes."""
+        if not isinstance(result, tuple):
+            return
+        ret_code, output = result
+        if ret_code == 0:
+            QMessageBox.information(
+                None,
+                tr("Reautorização Concluída"),
+                tr("A nuvem '%s' foi reautorizada com sucesso!") % remote,
+            )
+            if was_mounted:
+                self.daemon.start(remote)
+        else:
+            clean_out = output.strip() if output else tr("Código de erro %d") % ret_code
+            QMessageBox.warning(
+                None,
+                tr("Falha na Reautorização"),
+                tr("Não foi possível reautorizar '%s':\n%s") % (remote, clean_out),
+            )
 
     def _request_delete_remote(self, remote: str) -> None:
         """Initiates deletion of the selected remote, checking pending uploads first if active."""

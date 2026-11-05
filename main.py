@@ -53,7 +53,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ducksdrive")
 
-REQUIRED_RCLONE_VERSION = (1, 73, 5)
+REQUIRED_RCLONE_VERSION = (1, 63, 0)
 
 
 def get_rclone_version() -> Optional[tuple[int, int, int]]:

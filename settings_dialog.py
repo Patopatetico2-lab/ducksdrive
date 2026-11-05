@@ -291,7 +291,7 @@ class SettingsDialog(QDialog):
             if usage > 0 and rc_creds is not None:
                 q_count = int(fetch_vfs_queue(rc_creds) or 0)
                 st = fetch_rclone_stats(rc_creds, timeout=2.0)
-                active_count = len(st.active_transfers) if st.is_online else 0
+                active_count = len(st.active_transfers) if (st and st.is_online) else 0
                 pending = max(q_count, active_count)
             return usage, pending
 
@@ -314,7 +314,11 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(
                 self,
                 tr("Cache VFS em Uso"),
-                tr("Existem %d arquivo(s) aguardando envio para a nuvem.\nAguarde o término dos envios antes de limpar o cache.") % pending,
+                tr(
+                    "O cache não pode ser limpo enquanto houver arquivos aguardando envio para a nuvem.\n"
+                    "Existem %d arquivo(s) na fila ou em transferência ativa.\n"
+                    "Aguarde o término dos envios para evitar perda de dados."
+                ) % pending,
             )
             return
 
@@ -435,6 +439,37 @@ class SettingsDialog(QDialog):
 
     def _on_uninstall(self) -> None:
         """Asks for confirmation, stops active mounts, removes all app/rclone configs, caches, shortcuts, and quits."""
+        if os.path.exists("/.flatpak-info"):
+            cmd_uninstall = "flatpak uninstall --delete-data com.github.patopatetico2.ducksdrive"
+            box = QMessageBox(
+                QMessageBox.Icon.Information,
+                tr("Desinstalar DucksDrive"),
+                tr(
+                    "O DucksDrive está sendo executado como pacote Flatpak.\n\n"
+                    "Devido ao isolamento da sandbox, a desinstalação deve ser concluída pelo terminal do sistema com o comando:\n\n"
+                    "%s"
+                ) % cmd_uninstall,
+                parent=self,
+            )
+            btn_copy_exit = box.addButton(tr("Copiar Comando e Sair"), QMessageBox.ButtonRole.AcceptRole)
+            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(btn_copy_exit)
+            box.setEscapeButton(btn_cancel)
+            box.exec()
+
+            if box.clickedButton() is btn_copy_exit:
+                clipboard = QApplication.clipboard()
+                if clipboard is not None:
+                    clipboard.setText(cmd_uninstall)
+                if self.daemon is not None and self.daemon.is_running():
+                    try:
+                        self.daemon.stop()
+                    except Exception:
+                        pass
+                self.reject()
+                QApplication.quit()
+            return
+
         res = QMessageBox.question(
             self,
             tr("Desinstalar DucksDrive"),
