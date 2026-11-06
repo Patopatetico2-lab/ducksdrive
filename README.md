@@ -5,7 +5,7 @@ Interface gráfica em Python (PySide6/Qt) para montar e gerenciar nuvens e unida
 
 Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
 
-[Página do projeto](https://patopatetico2-lab.github.io/ducksdrive/) • [Releases (AppImage)](https://github.com/Patopatetico2-lab/ducksdrive/releases)
+[Página do projeto](https://patopatetico2-lab.github.io/ducksdrive/) • [Releases (AppImage, Flatpak, .deb, pacman)](https://github.com/Patopatetico2-lab/ducksdrive/releases)
 
 <img width="780" alt="Demonstração do DucksDrive" src="docs/assets/demo.gif" />
 
@@ -17,7 +17,18 @@ A nuvem é montada via FUSE em `~/CloudDrives/{nome_do_remoto}`. Depois de pedir
 
 Na barra lateral do Dolphin (KDE) e dos gerenciadores GTK (Nautilus, Thunar, Nemo) ele cria um atalho com o nome do remoto. No KDE, antes de mexer no arquivo de favoritos, o app salva uma cópia em `user-places.xbel.bak`.
 
-Só uma instância roda por vez (`QLockFile`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`).
+Quando não tem nada sendo transferido, o painel mostra os **arquivos enviados recentemente**. Se o drive estiver desconectado, o mesmo botão de pausar vira **Conectar / Reconectar**. O painel pode ser arrastado para qualquer lugar da tela (funciona no Wayland e no X11).
+
+Antes de desconectar, trocar de nuvem ou sair, o app verifica se ainda tem arquivo na fila de envio do cache VFS. Se tiver, ele avisa e oferece a opção **Aguardar e sair**, que só fecha depois que tudo subiu.
+
+No submenu de cada nuvem também dá para:
+- **Montar (Somente Leitura)**, para não correr o risco de apagar ou alterar nada sem querer;
+- **Testar Conexão**, que diz se a nuvem está respondendo e, se o token OAuth tiver expirado, oferece **reautorizar pelo navegador** na hora;
+- **Remover** a nuvem (o `rclone.conf` ganha um backup `.bak` antes).
+
+E no menu principal tem **Atualizar Pastas**, que recarrega a listagem da nuvem (`vfs/refresh`) sem precisar desmontar.
+
+Só uma instância roda por vez (`QLockFile`), para não dar conflito na porta do RC. Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação automática de até 5 MB (`RotatingFileHandler`). Cada montagem também gera um log do rclone (`rclone-{remoto}-{data}.log`) na mesma pasta, e só os 5 mais recentes são mantidos.
 
 <img width="360" alt="Painel em transferência" src="docs/assets/status-popup-active.png" /> <img width="360" alt="Painel conectado" src="docs/assets/status-popup-idle.png" />
 
@@ -42,6 +53,12 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 - Iniciar com o sistema (autostart): liga e desliga pelo mesmo menu.
 
 <img width="540" alt="Tela de configurações" src="docs/assets/settings-dialog.png" />
+
+## Requisitos
+
+- Linux com **FUSE3** (`fuse3`)
+- **rclone 1.63 ou mais novo** (o AppImage e o Flatpak já trazem o rclone embutido)
+- Para os pacotes nativos e o script: **Python 3.10+** e **PySide6 6.6+**
 
 ## Instalação
 
@@ -70,16 +87,39 @@ chmod +x install.sh
 ```
 O script detecta se a distro usa `apt` (Debian/Ubuntu), `pacman` (Arch), `dnf` (Fedora/RHEL) ou `zypper` (openSUSE), instala o `rclone` e o `fuse3`, cria um venv, instala o PySide6 e registra o atalho e o ícone do app.
 
+### Pelo Flatpak
+Baixe o `ducksdrive.flatpak` da aba de [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases) e instale (o rclone já vem junto; o runtime `org.kde.Platform 6.8` é baixado do Flathub automaticamente):
+```bash
+curl -Lo /tmp/ducksdrive.flatpak https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.8/ducksdrive.flatpak && flatpak install --user -y /tmp/ducksdrive.flatpak && rm -f /tmp/ducksdrive.flatpak
+```
+> Para montar via FUSE e criar os atalhos no gerenciador de arquivos, o Flatpak precisa de acesso amplo ao sistema (`--filesystem=host` e `--device=all`).
+
 ### Pelo AppImage (portátil)
-Você também pode baixar o `.AppImage` direto na aba de [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases) (ele já traz o binário do `rclone` junto) ou gerar um localmente rodando `./build_appimage.sh`.
+Baixe o `.AppImage` direto na aba de [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases) (ele já traz o binário do `rclone` junto), dê permissão de execução e rode:
+```bash
+curl -Lo DucksDrive-x86_64.AppImage https://github.com/Patopatetico2-lab/ducksdrive/releases/latest/download/DucksDrive-x86_64.AppImage
+chmod +x DucksDrive-x86_64.AppImage
+./DucksDrive-x86_64.AppImage
+```
+Ou gere um localmente rodando `./build_appimage.sh`.
 
 ## Desinstalação
 
-Dá para desinstalar clicando no botão **Desinstalar** dentro da tela de configurações do próprio app (ele desmonta as nuvens, limpa os atalhos e apaga os arquivos), ou rodando o script na pasta do projeto:
+O botão **Desinstalar** na tela de configurações do app desmonta as nuvens, limpa os atalhos e apaga as configurações. Ele pergunta antes se você quer apagar também as nuvens do rclone. Depois disso, remova o pacote de acordo com o jeito que você instalou:
 
-```bash
-./uninstall.sh
-```
+| Instalado via | Como remover |
+|---|---|
+| pacman / makepkg | `sudo pacman -R ducksdrive` |
+| .deb | `sudo apt remove ducksdrive` |
+| Flatpak | `flatpak uninstall --delete-data com.github.patopatetico2.ducksdrive` |
+| Script `install.sh` | `./uninstall.sh` na pasta do projeto |
+| AppImage | o próprio botão **Desinstalar** já apaga o arquivo `.AppImage` |
+
+## Solução de problemas
+
+- **Logs:** `~/.local/share/ducksdrive/ducksdrive.log` (app) e `~/.local/share/ducksdrive/rclone-*.log` (rclone). Anexe esses arquivos ao abrir uma [issue](https://github.com/Patopatetico2-lab/ducksdrive/issues).
+- **Pasta travada / "Transport endpoint is not connected":** feche o app e rode `fusermount3 -uz ~/CloudDrives/NOME_DA_NUVEM`.
+- **Nuvem parou de conectar do nada:** use **Gerenciar Nuvens → (sua nuvem) → Testar Conexão**. Se o token OAuth tiver expirado, o app oferece reautorizar pelo navegador.
 
 ---
 
@@ -95,8 +135,15 @@ Designed as a modern, lightweight alternative to **Insync**, **RaiDrive**, **Rcl
 - Floating system tray panel with cloud storage quota, a 1-click pause/resume transfers button, per-file progress bars, transfer speed (MB/s), ETA, and a live speed history graph drawn with `QPainter`.
 - Mounts remotes on demand in `~/CloudDrives/{remote_name}` and automatically adds sidebar shortcuts in **Dolphin (KDE)** (backing up `user-places.xbel.bak`), **Nautilus (GNOME)**, **Thunar (XFCE)**, and **Nemo (Cinnamon)**.
 - Built-in setup dialog for OAuth clouds (**Google Drive**, **Microsoft OneDrive**, **Dropbox**, **Box**, **pCloud**) and direct-credential providers (**Amazon S3 / MinIO / Wasabi**, **Nextcloud / WebDAV**, **Mega**, **FTP**, **SFTP**).
-- GUI settings for gamer-friendly bandwidth limiting (`--bwlimit`), SSD VFS cache control (`--vfs-cache-mode`, `--vfs-cache-max-size`), parallel transfers (`--transfers`), language (PT-BR / EN-US), and system autostart.
+- GUI settings for gamer-friendly bandwidth limiting (`--bwlimit`, applied live via the RC API), SSD VFS cache control (`--vfs-cache-mode`, `--vfs-cache-max-size`) with a usage meter and 1-click cache cleaner, parallel transfers (`--transfers`), Light/Dark/Auto theme, language (PT-BR / EN-US), and system autostart.
+- Recent files history, read-only mounts, connection test with 1-click OAuth re-authorization, folder refresh (`vfs/refresh`) without unmounting, and a pending-upload check that offers to **wait for uploads to finish** before disconnecting or quitting.
+
+### Requirements
+Linux with FUSE3 and rclone 1.63+ (bundled in the AppImage and Flatpak). Native packages and the install script need Python 3.10+ and PySide6 6.6+.
 
 ### Install
-Run `./install.sh` (supports `apt`, `pacman`, `dnf`, `zypper`) or grab the portable `.AppImage` (with `rclone` bundled) from [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases).
+Grab the `.pkg.tar.zst` (Arch), `.deb` (Debian/Ubuntu), `.flatpak`, or the portable `.AppImage` (with `rclone` bundled) from [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases), or run `./install.sh` (supports `apt`, `pacman`, `dnf`, `zypper`).
+
+### Troubleshooting
+Logs live in `~/.local/share/ducksdrive/` (`ducksdrive.log` and `rclone-*.log`). If a mount gets stuck, quit the app and run `fusermount3 -uz ~/CloudDrives/REMOTE_NAME`.
 </details>

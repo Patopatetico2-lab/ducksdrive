@@ -1,0 +1,42 @@
+name: 💡 Sugestão de Recurso / Feature Request
+description: Sugira uma nova funcionalidade ou melhoria para o DucksDrive
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tem uma ideia para tornar o DucksDrive ainda melhor? Conte para nós!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: A sua sugestão está relacionada a algum problema?
+      description: Uma descrição clara e concisa de qual é a limitação ou frustração atual.
+      placeholder: Eu gostaria de poder sincronizar pastas específicas sem...
+    validations:
+      required: false
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solução Proposta / Proposed Feature
+      description: Descreva detalhadamente o que você gostaria que o aplicativo fizesse.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas Consideradas
+      description: Alguma outra solução ou ferramenta existente que você considerou.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto Adicional
+      description: Capturas de tela, mockups ou links para documentações do Rclone que ajudem a contextualizar a ideia.
+    validations:
+      required: false

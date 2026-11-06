@@ -1,0 +1,81 @@
+name: 🐛 Relato de Bug / Bug Report
+description: Relate um problema ou comportamento inesperado no DucksDrive
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por ajudar a melhorar o DucksDrive! Antes de enviar, certifique-se de que o problema ainda ocorre na versão mais recente.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Descrição do Problema / Description
+      description: Uma explicação clara e concisa do que aconteceu.
+      placeholder: Ao tentar montar a nuvem X, o ícone ficou vermelho e...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para Reproduzir / Steps to Reproduce
+      description: Como reproduzir o problema passo a passo.
+      placeholder: |
+        1. Abra o DucksDrive
+        2. Clique em 'Gerenciar Nuvens' -> 'Adicionar Nova Nuvem'
+        3. Preencha os campos e confirme
+        4. O erro ocorre
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versão do DucksDrive
+      placeholder: "ex: 1.0.8"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Método de Instalação / Installation Method
+      options:
+        - "AppImage"
+        - "Flatpak"
+        - "Pacote Nativo (.deb)"
+        - "Pacote Nativo Arch (pacman / .pkg.tar.zst)"
+        - "Script install.sh"
+        - "Execução direta via código-fonte (git clone)"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Ambiente / Environment
+      description: Distribuição Linux e interface gráfica utilizada (DE)
+      placeholder: "ex: CachyOS / KDE Plasma 6 (Wayland) ou Ubuntu 24.04 / GNOME (X11)"
+    validations:
+      required: true
+
+  - type: input
+    id: rclone_version
+    attributes:
+      label: Versão do Rclone (`rclone version`)
+      placeholder: "ex: rclone v1.75.2"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs Relevantes
+      description: |
+        Conteúdo de `~/.local/share/ducksdrive/ducksdrive.log` ou logs do terminal.
+        (Atenção: verifique se não há dados pessoais antes de postar).
+      render: shell
+    validations:
+      required: false

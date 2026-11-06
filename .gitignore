@@ -17,6 +17,16 @@ pkg/
 *.pkg.tar*
 *.deb
 
-# Logs and patches
+# Flatpak build artifacts
+.flatpak-builder/
+build-dir/
+repo/
+*.flatpak
+
+# Linters / tool caches
+.ruff_cache/
+
+# Logs, backups and patches
 *.log
+*.bak
 patch_*.py
