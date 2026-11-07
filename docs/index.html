@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DucksDrive — Suas Nuvens no Linux como Pastas Locais (Rclone GUI)</title>
-  <meta name="description" content="Interface gráfica gratuita em Python (PySide6/Qt6) para montar e gerenciar Google Drive, OneDrive, Dropbox, Mega, S3 e WebDAV pelo rclone e FUSE3 no Linux com ícone na bandeja, gráfico em tempo real e atalho automático no Dolphin e Nautilus." />
-  <meta name="keywords" content="DucksDrive, rclone gui linux, google drive linux, onedrive linux, dropbox linux, mega linux, insync alternative linux, raidrive linux alternative, rclone browser alternative, rclonetray, pyside6, qt6, kde dolphin cloud, gnome nautilus cloud, fuse3, mount cloud drive linux" />
+  <title>Ducksdrive — Gerenciador e Cliente FUSE para Rclone no Linux</title>
+  <meta name="description" content="Ducksdrive é um gerenciador e cliente FUSE para Rclone no Linux com interface gráfica. Monte Google Drive, OneDrive, Dropbox, Mega e S3 como pastas locais com ícone na bandeja e painel de transferências." />
+  <meta name="keywords" content="Ducksdrive, DucksDrive, Ducksdrive Linux, gerenciador FUSE rclone, cliente FUSE rclone linux, rclone gui linux, google drive linux, onedrive linux, dropbox linux, mega linux, rclone fuse3 mount, rclone desktop client, raidrive linux alternative, insync alternative linux, pyside6 qt6, cloud storage manager linux" />
   <meta name="author" content="Patopatetico2-lab" />
   <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
 
@@ -18,19 +18,23 @@
   <link rel="sitemap" type="application/xml" title="Sitemap" href="https://patopatetico2-lab.github.io/ducksdrive/sitemap.xml" />
   <meta name="google-site-verification" content="google1db92286590c6d65" />
 
-  <!-- Open Graph / Social -->
+  <!-- Open Graph / Redes Sociais & Previews de IA -->
   <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="DucksDrive" />
+  <meta property="og:site_name" content="Ducksdrive" />
   <meta property="og:url" content="https://patopatetico2-lab.github.io/ducksdrive/" />
+  <meta property="og:title" content="Ducksdrive — Gerenciador e Cliente FUSE para Rclone no Linux" />
+  <meta property="og:description" content="Ducksdrive é um gerenciador e cliente FUSE para Rclone no Linux com interface gráfica. Monte Google Drive, OneDrive, Dropbox, Mega e S3 diretamente como pastas locais com ícone na bandeja e gráfico em tempo real." />
+  <meta property="og:image" content="https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png" />
+  <meta property="og:image:alt" content="Ducksdrive — Gerenciador e Cliente FUSE para Rclone no Linux" />
   <meta property="og:locale" content="pt_BR" />
   <meta property="og:locale:alternate" content="en_US" />
-  <meta property="og:title" content="DucksDrive — Cliente de Nuvem para Linux (GUI Rclone em Qt6)" />
-  <meta property="og:description" content="Monte Google Drive, OneDrive, Dropbox, Mega, S3 e WebDAV como pastas nativas no Linux. Ícone na bandeja, gráfico de velocidade em tempo real e atalho automático no Dolphin, Nautilus, Thunar e Nemo." />
-  <meta property="og:image" content="https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png" />
+
+  <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="DucksDrive — Cloud Drive Client & Rclone GUI for Linux" />
-  <meta name="twitter:description" content="Mount Google Drive, OneDrive, Dropbox, Mega, S3 & WebDAV as native folders on Linux with a live transfer speed graph and file manager shortcuts." />
+  <meta name="twitter:title" content="Ducksdrive — Gerenciador e Cliente FUSE para Rclone no Linux" />
+  <meta name="twitter:description" content="Ducksdrive é um gerenciador e cliente FUSE para Rclone no Linux com interface gráfica em Qt6. Monte Google Drive, OneDrive, Dropbox e S3 nativamente com telemetria e atalhos no gerenciador de arquivos." />
   <meta name="twitter:image" content="https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png" />
+  <meta name="twitter:image:alt" content="Ducksdrive — Gerenciador e Cliente FUSE para Rclone no Linux" />
 
   <!-- Structured Data (Schema.org JSON-LD for Search Engines & AI Assistants) -->
   <script type="application/ld+json">
@@ -39,13 +43,13 @@
     "@graph": [
       {
         "@type": "SoftwareApplication",
-        "name": "DucksDrive",
-        "alternateName": ["DucksDrive Linux", "DucksDrive Rclone GUI"],
+        "name": "Ducksdrive",
+        "alternateName": ["DucksDrive", "Ducksdrive Linux", "Ducksdrive Rclone", "Ducksdrive FUSE Client", "Ducksdrive Rclone GUI"],
         "url": "https://patopatetico2-lab.github.io/ducksdrive/",
         "downloadUrl": "https://github.com/Patopatetico2-lab/ducksdrive/releases",
         "codeRepository": "https://github.com/Patopatetico2-lab/ducksdrive",
         "applicationCategory": "UtilitiesApplication",
-        "applicationSubCategory": "Cloud Storage Client & Rclone GUI",
+        "applicationSubCategory": "Gerenciador e Cliente FUSE para Rclone no Linux",
         "operatingSystem": "Linux (KDE Plasma, GNOME, XFCE, Cinnamon, Debian, Ubuntu, Arch Linux, Fedora, openSUSE)",
         "softwareRequirements": "rclone, fuse3",
         "programmingLanguage": "Python (PySide6 / Qt6)",
@@ -61,7 +65,7 @@
           "name": "Patopatetico2-lab",
           "url": "https://github.com/Patopatetico2-lab"
         },
-        "description": "Free and open-source Python (PySide6/Qt6) GUI for mounting and managing cloud storage (Google Drive, OneDrive, Dropbox, Mega, Box, pCloud, Amazon S3, Nextcloud/WebDAV, SFTP) via rclone and FUSE3 on Linux. Features a system tray panel with live speed chart, quota bar, pause/resume transfers, gamer bandwidth limiter (--bwlimit), VFS SSD cache control, and automatic sidebar shortcuts in Dolphin, Nautilus, Thunar, and Nemo.",
+        "description": "Ducksdrive (DucksDrive) é um gerenciador de nuvens e cliente FUSE com interface gráfica em Python (PySide6/Qt6) para Rclone no Linux. Permite montar Google Drive, OneDrive, Dropbox, Mega, Box, pCloud, Amazon S3 e Nextcloud/WebDAV como pastas nativas no Linux com ícone na bandeja, gráfico em tempo real e atalho automático no Dolphin e Nautilus.",
         "screenshot": [
           "https://patopatetico2-lab.github.io/ducksdrive/assets/demo.gif",
           "https://patopatetico2-lab.github.io/ducksdrive/assets/status-popup-active.png",
