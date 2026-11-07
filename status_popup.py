@@ -1,6 +1,10 @@
 """
 status_popup.py - Native-like floating status panel for DucksDrive.
 
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
+
 Provides a frameless popup window (Qt.Tool) displaying real-time transfer metrics,
 progress bars, active file info, a rolling speed history chart, and quick actions.
 """

@@ -1,0 +1,10 @@
+# DucksDrive - robots.txt
+# Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+# Repository: https://github.com/Patopatetico2-lab/ducksdrive
+
+User-agent: *
+Allow: /
+Allow: /docs/
+Allow: /README.md
+
+Sitemap: https://patopatetico2-lab.github.io/ducksdrive/sitemap.xml

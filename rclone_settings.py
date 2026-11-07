@@ -1,6 +1,10 @@
 """
 rclone_settings.py - Configuration manager for DucksDrive.
 
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
+
 Manages loading and saving user preferences in ~/.config/ducksdrive/config.json
 with safe default values and automatic system autostart synchronization.
 """

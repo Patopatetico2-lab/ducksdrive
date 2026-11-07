@@ -1,10 +1,14 @@
 """
 main.py - Entrypoint for DucksDrive.
 
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
+
 Orchestrates the application lifecycle:
 1. Enforces single instance execution via QLockFile.
 2. Configures dual logging (StreamHandler + RotatingFileHandler).
-3. Validates system tray availability and rclone version (>= 1.73.5).
+3. Validates system tray availability and rclone version (>= 1.63.0).
 4. Initializes the Daemon, Stats Poller, and Tray UI.
 5. Manages OS signals (SIGINT/SIGTERM) for graceful FUSE unmount.
 """

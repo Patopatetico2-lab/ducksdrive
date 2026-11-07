@@ -1,3 +1,11 @@
+"""
+i18n.py - Internationalization and translations module for DucksDrive.
+
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
+"""
+
 _TRANSLATIONS = {
     "en_US": {
         "Configurar Novo Drive": "Configure New Drive",

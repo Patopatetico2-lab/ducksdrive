@@ -1,11 +1,38 @@
-# DucksDrive
-<img width="237" height="42" alt="Image" src="https://github.com/user-attachments/assets/6aa5909b-98e9-4117-a825-7c1d09ec7ce2" />
+# DucksDrive — Cliente de Nuvem e Interface Gráfica Rclone para Linux
 
-Interface gráfica em Python (PySide6/Qt) para montar e gerenciar nuvens e unidades de rede pelo rclone no Linux. A ideia é ter algo parecido com o cliente do Google Drive do Windows: ícone na bandeja, um painel com o andamento das transferências e a nuvem aparecendo como uma pasta normal no gerenciador de arquivos.
+<p align="center">
+  <img width="237" height="42" alt="DucksDrive Logo" src="https://github.com/user-attachments/assets/6aa5909b-98e9-4117-a825-7c1d09ec7ce2" />
+</p>
 
-Compatível com KDE Plasma, GNOME, XFCE e outros ambientes.
+<p align="center">
+  <a href="https://patopatetico2-lab.github.io/ducksdrive/"><img src="https://img.shields.io/badge/Site%20Oficial-patopatetico2--lab.github.io%2Fducksdrive-0078d4?style=flat&logo=googlechrome&logoColor=white" alt="Site Oficial" /></a>
+  <a href="https://github.com/Patopatetico2-lab/ducksdrive/releases"><img src="https://img.shields.io/github/v/release/Patopatetico2-lab/ducksdrive?color=2ea44f&label=Releases&logo=github" alt="GitHub Releases" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=flat&logo=python&logoColor=white" alt="Python 3.10+" /></a>
+  <a href="https://pypi.org/project/PySide6/"><img src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41cd52?style=flat&logo=qt&logoColor=white" alt="PySide6 / Qt6" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Licen%C3%A7a-MIT-yellow.svg" alt="MIT License" /></a>
+</p>
 
-[Página do projeto](https://patopatetico2-lab.github.io/ducksdrive/) • [Releases (AppImage, Flatpak, .deb, pacman)](https://github.com/Patopatetico2-lab/ducksdrive/releases)
+> 🌐 **Site Oficial e Demonstração:** [https://patopatetico2-lab.github.io/ducksdrive/](https://patopatetico2-lab.github.io/ducksdrive/)  
+> 📦 **Downloads e Pacotes Prontos (AppImage, Flatpak, .deb, Pacman):** [GitHub Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases)
+
+Interface gráfica em Python (PySide6/Qt6) para montar e gerenciar nuvens e unidades de rede pelo `rclone` e `FUSE3` no Linux. A experiência do cliente do Google Drive do Windows e do RaiDrive no Linux: ícone na bandeja do sistema, painel flutuante com telemetria em tempo real, controle de cache VFS e a nuvem integrada diretamente como uma pasta nativa no seu gerenciador de arquivos favorito.
+
+Compatível com KDE Plasma, GNOME, XFCE, Cinnamon e outros ambientes de desktop Linux.
+
+---
+
+### Conteúdo
+- [O que ele faz](#o-que-ele-faz)
+- [Como configurar uma nuvem](#como-configurar-uma-nuvem)
+- [Configurações](#configurações)
+- [Arquitetura e Módulos do Projeto](#arquitetura-e-módulos-do-projeto)
+- [Requisitos](#requisitos)
+- [Instalação](#instalação)
+- [Desinstalação](#desinstalação)
+- [Solução de problemas](#solução-de-problemas)
+- [English Summary](#english-summary)
+
+---
 
 <img width="780" alt="Demonstração do DucksDrive" src="docs/assets/demo.gif" />
 
@@ -53,6 +80,23 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 - Iniciar com o sistema (autostart): liga e desliga pelo mesmo menu.
 
 <img width="540" alt="Tela de configurações" src="docs/assets/settings-dialog.png" />
+
+## Arquitetura e Módulos do Projeto
+
+O DucksDrive é modular e orquestrado em Python puro com PySide6 (Qt6), dividindo as responsabilidades de forma desacoplada:
+
+| Módulo / Arquivo | Responsabilidade Técnica |
+|---|---|
+| [`main.py`](main.py) | **Ponto de Entrada e Ciclo de Vida**: trava de instância única com `QLockFile`, checagem de ambiente desktop e bandeja do sistema, verificação de versão mínima do Rclone (`>= 1.63.0`) e captura de sinais do sistema operacional (`SIGINT`/`SIGTERM`) para encerramento gracioso. |
+| [`rclone_daemon.py`](rclone_daemon.py) | **Daemon de Montagem FUSE e Ciclo de Vida do Drive Virtual**: gerencia o subprocesso de montagem em segundo plano via `rclone mount`, gera credenciais aleatórias em memória para a API RC, orquestra flags de cache VFS (`--vfs-cache-mode`, `--vfs-write-back`, etc.) e executa desmontagem segura com fallback dinâmico para `fusermount3` ou `fusermount`. |
+| [`gui_tray.py`](gui_tray.py) | **Interface da Bandeja (System Tray)**: ícone da área de notificação (`QSystemTrayIcon`), menus contextuais dinâmicos, checagem preventiva de uploads pendentes antes de desmontar ou sair e diálogos de autenticação OAuth no navegador. |
+| [`status_popup.py`](status_popup.py) | **Painel Flutuante de Telemetria**: janela frameless (`Qt.Tool`) compatível com Wayland e X11, medidor de quota de armazenamento, progresso individual de arquivos, botão pausar/retomar em 1 clique e gráfico histórico de velocidade desenhado nativamente com `QPainter`. |
+| [`rclone_stats.py`](rclone_stats.py) | **Coleta de Estatísticas RC**: faz polling periódico dos endpoints `/core/stats` e `/core/transferred` da API RC, calculando métricas de taxa de transferência (MB/s), ETA e histórico recente de uploads. |
+| [`rclone_config.py`](rclone_config.py) | **Gerenciador de Configuração do Rclone**: leitura direta do arquivo `rclone.conf`, criação assíncrona de remotos em background, teste de conectividade (`rclone about`) e reconexão automática de tokens OAuth expirados. |
+| [`rclone_settings.py`](rclone_settings.py) | **Persistência de Preferências**: carregamento e gravação em `~/.config/ducksdrive/config.json`, detecção de paleta e modo escuro/claro do sistema (incluindo KDE Plasma 6 e GNOME) e sincronização do autostart. |
+| [`settings_dialog.py`](settings_dialog.py) | **Janela de Configurações**: controle visual de limites de banda (`--bwlimit`), parâmetros de cache VFS em SSD, seleção de idioma em tempo de execução e rotina de desinstalação segura. |
+| [`filemanager_integration.py`](filemanager_integration.py) | **Integração com Gerenciadores de Arquivos**: injeção atômica de atalhos na barra lateral do Dolphin (KDE `user-places.xbel` com backup de segurança `.bak`) e gerenciadores GTK (GNOME Nautilus, XFCE Thunar, Nemo). |
+| [`i18n.py`](i18n.py) | **Internacionalização**: dicionário e função `tr()` para alternância instantânea entre Português (Brasil) e Inglês (EUA). |
 
 ## Requisitos
 
@@ -129,6 +173,9 @@ O botão **Desinstalar** na tela de configurações do app desmonta as nuvens, l
 ### About
 **DucksDrive** is a free, open-source Python (PySide6/Qt6) desktop client and GUI for mounting and managing cloud drives via `rclone` and `FUSE3` on Linux — bringing the Windows Google Drive for Desktop and RaiDrive experience to Linux. Works on KDE Plasma, GNOME, XFCE, Cinnamon, and other desktop environments.
 
+- 🌐 **Official Website:** [https://patopatetico2-lab.github.io/ducksdrive/](https://patopatetico2-lab.github.io/ducksdrive/)
+- 📦 **Download Releases:** [GitHub Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases)
+
 Designed as a modern, lightweight alternative to **Insync**, **RaiDrive**, **Rclone Browser**, and **RcloneTray** on Linux.
 
 ### Features
@@ -137,6 +184,18 @@ Designed as a modern, lightweight alternative to **Insync**, **RaiDrive**, **Rcl
 - Built-in setup dialog for OAuth clouds (**Google Drive**, **Microsoft OneDrive**, **Dropbox**, **Box**, **pCloud**) and direct-credential providers (**Amazon S3 / MinIO / Wasabi**, **Nextcloud / WebDAV**, **Mega**, **FTP**, **SFTP**).
 - GUI settings for gamer-friendly bandwidth limiting (`--bwlimit`, applied live via the RC API), SSD VFS cache control (`--vfs-cache-mode`, `--vfs-cache-max-size`) with a usage meter and 1-click cache cleaner, parallel transfers (`--transfers`), Light/Dark/Auto theme, language (PT-BR / EN-US), and system autostart.
 - Recent files history, read-only mounts, connection test with 1-click OAuth re-authorization, folder refresh (`vfs/refresh`) without unmounting, and a pending-upload check that offers to **wait for uploads to finish** before disconnecting or quitting.
+
+### Architecture & Project Structure
+- [`main.py`](main.py): Application entrypoint, single-instance lock (`QLockFile`), tray availability checks, and signal handling.
+- [`rclone_daemon.py`](rclone_daemon.py): Virtual drive lifecycle & FUSE mount daemon managing background `rclone mount` subprocesses, RC credentials, and VFS cache.
+- [`gui_tray.py`](gui_tray.py): System tray icon, menus, connection tests, and OAuth browser flow.
+- [`status_popup.py`](status_popup.py): Frameless telemetry panel with live speeds, quota bar, and rolling transfer history chart.
+- [`rclone_stats.py`](rclone_stats.py): RC API polling, transfer telemetry parser, and ETA calculator.
+- [`rclone_config.py`](rclone_config.py): Remote listing, configuration parser, and OAuth reconnect.
+- [`rclone_settings.py`](rclone_settings.py): JSON preference manager and desktop dark/light mode detection.
+- [`settings_dialog.py`](settings_dialog.py): Preferences dialog for bandwidth, VFS cache, and themes.
+- [`filemanager_integration.py`](filemanager_integration.py): Sidebar bookmarks for KDE Dolphin and GTK file managers.
+- [`i18n.py`](i18n.py): Lightweight internationalization engine (PT-BR / EN-US).
 
 ### Requirements
 Linux with FUSE3 and rclone 1.63+ (bundled in the AppImage and Flatpak). Native packages and the install script need Python 3.10+ and PySide6 6.6+.

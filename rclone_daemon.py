@@ -1,5 +1,9 @@
 """
-rclone_daemon.py - Virtual drive lifecycle and FUSE mount daemon.
+rclone_daemon.py - Virtual drive lifecycle and FUSE mount daemon for DucksDrive.
+
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
 
 Manages the background `rclone mount` subprocess with VFS cache controls,
 random in-memory Remote Control (RC) credentials, and robust FUSE unmounting

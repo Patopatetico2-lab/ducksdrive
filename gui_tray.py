@@ -1,5 +1,9 @@
 """
-gui_tray.py - PySide6 System Tray Interface and Dialogs.
+gui_tray.py - PySide6 System Tray Interface and Dialogs for DucksDrive.
+
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
 
 Provides the primary user interface including the System Tray icon,
 context menus, status notifications, and dialogs for remote management.

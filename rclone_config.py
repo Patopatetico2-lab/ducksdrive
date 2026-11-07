@@ -1,5 +1,9 @@
 """
-rclone_config.py - Module for managing Rclone remote configurations.
+rclone_config.py - Module for managing Rclone remote configurations in DucksDrive.
+
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
 
 Handles listing existing remotes and creating new OAuth-based cloud remotes
 in a background thread to prevent blocking the Qt event loop.

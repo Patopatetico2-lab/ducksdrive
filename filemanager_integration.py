@@ -1,5 +1,9 @@
 """
-filemanager_integration.py - Desktop integration for file manager sidebars.
+filemanager_integration.py - Desktop integration for file manager sidebars in DucksDrive.
+
+Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
+Official Website: https://patopatetico2-lab.github.io/ducksdrive/
+Source Repository: https://github.com/Patopatetico2-lab/ducksdrive
 
 Provides functions to inject and remove the virtual drive path from:
 1. KDE (Dolphin) sidebars via `~/.config/user-places.xbel` (XML) with a one-time .bak backup.
