@@ -648,7 +648,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._safe_unmount_daemon(d, _do_stop)
 
     def _unmount_all(self) -> None:
-        """Unmounts all running cloud drives after checking pending transfers."""
+        """Unmounts all running cloud drives after checking pending transfers across all active daemons."""
         active = list(self.active_daemons().values())
         if not active:
             return
@@ -660,7 +660,50 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 for d in active:
                     d.stop_async()
 
-        self._safe_unmount_daemon(active[0], _do_stop_all)
+        active_creds = [d.rc_credentials for d in active if d.rc_credentials]
+        if not active_creds:
+            _do_stop_all()
+            return
+
+        def _check_all() -> int:
+            total = 0
+            for creds in active_creds:
+                try:
+                    p = fetch_vfs_queue(creds)
+                    if p:
+                        total += int(p)
+                except Exception:
+                    pass
+            return total
+
+        def _on_queue_checked(pending: Optional[int]) -> None:
+            pending_count = int(pending or 0)
+            if pending_count > 0 or self._has_active_transfer():
+                if pending_count > 0:
+                    msg = (
+                        tr("Ainda existem %d arquivo(s) sendo sincronizados com a nuvem.\n"
+                           "Desconectar agora pode causar perda de dados ou envios incompletos.\n\n"
+                           "Tem certeza de que deseja desconectar todas as nuvens?")
+                        % pending_count
+                    )
+                else:
+                    msg = tr(
+                        "Transferências de arquivos estão em andamento.\n"
+                        "Desconectar agora pode causar perda de dados ou envios incompletos.\n\n"
+                        "Tem certeza de que deseja desconectar todas as nuvens?"
+                    )
+                res = QMessageBox.warning(
+                    None,
+                    tr("Transferências Pendentes"),
+                    msg,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if res != QMessageBox.StandardButton.Yes:
+                    return
+            _do_stop_all()
+
+        self.runner.submit(_check_all, callback=_on_queue_checked)
 
     def _safe_unmount_daemon(self, daemon: RcloneDaemon, on_confirmed: Callable[[], None]) -> None:
         """Checks pending uploads on a specific daemon before unmounting."""
@@ -1160,7 +1203,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
             d = next(iter(active.values()))
             path = d.mount_point
         elif len(active) > 1:
-            path = os.path.abspath(os.path.expanduser("~/CloudDrives"))
+            cd_path = os.path.abspath(os.path.expanduser("~/CloudDrives"))
+            path = cd_path if (os.path.exists(cd_path) or is_path_mounted(cd_path)) else next(iter(active.values())).mount_point
         else:
             path = self.daemon.mount_point
 

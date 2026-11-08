@@ -135,6 +135,7 @@ class UpdateCheckWorker(QThread):
     # Emits: (is_update_available: bool, latest_version: str, release_url: str, release_notes: str)
     check_finished = Signal(bool, str, str, str)
     check_failed = Signal(str)
+    update_available = Signal(str, str)
 
     def __init__(self, force: bool = False, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -144,5 +145,7 @@ class UpdateCheckWorker(QThread):
         try:
             has_update, latest_ver, url, notes = check_for_updates(force=self.force)
             self.check_finished.emit(has_update, latest_ver, url, notes)
+            if has_update:
+                self.update_available.emit(latest_ver, url)
         except Exception as exc:
             self.check_failed.emit(str(exc))

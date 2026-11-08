@@ -27,6 +27,32 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 _allocated_ports: Set[int] = set()
 
 
+def allocate_rc_port(host: str = "127.0.0.1", preferred_port: int = 5572) -> int:
+    """Finds a free port on host not currently in _allocated_ports, marks it allocated, and returns it."""
+    port = preferred_port
+    while port < 65535:
+        if port not in _allocated_ports:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind((host, port))
+                    _allocated_ports.add(port)
+                    return port
+                except OSError:
+                    pass
+        port += 1
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        allocated = int(s.getsockname()[1])
+        _allocated_ports.add(allocated)
+        return allocated
+
+
+def release_rc_port(port: int) -> None:
+    """Releases a previously allocated port so it can be reused."""
+    _allocated_ports.discard(port)
+
+
 def get_available_rc_port(host: str = "127.0.0.1", preferred_port: int = 5572) -> int:
     """Checks if preferred_port is free on host and not allocated; if in use, selects an available localhost port."""
     port = preferred_port

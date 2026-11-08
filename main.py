@@ -417,9 +417,6 @@ def main() -> None:
     # 5. Execute Loop
     sys.exit(app.exec())
 
-    # 5. Execute Loop
-    sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()

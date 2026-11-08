@@ -251,15 +251,20 @@ class LogViewerDialog(QDialog):
         if not self.isVisible():
             return
         target = self._active_file
-        if not target or target == "combined_rclone":
-            return
-        if not os.path.exists(target):
+        if not target:
             return
         try:
-            sz = os.path.getsize(target)
-            if sz != self._last_file_size:
-                self._last_file_size = sz
-                self._load_active_source()
+            if target == "combined_rclone":
+                rclone_logs = glob.glob(os.path.join(LOG_DIR, "rclone-*.log"))
+                total_sz = sum(os.path.getsize(lp) for lp in rclone_logs if os.path.exists(lp))
+                if total_sz != self._last_file_size:
+                    self._last_file_size = total_sz
+                    self._load_active_source()
+            elif os.path.exists(target):
+                sz = os.path.getsize(target)
+                if sz != self._last_file_size:
+                    self._last_file_size = sz
+                    self._load_active_source()
         except OSError:
             pass
 
@@ -308,8 +313,11 @@ class LogViewerDialog(QDialog):
             QTimer.singleShot(1800, lambda: self._restore_copy_button(original_text))
 
     def _restore_copy_button(self, original_text: str) -> None:
-        self.btn_copy.setText(original_text)
-        self.btn_copy.setEnabled(True)
+        try:
+            self.btn_copy.setText(original_text)
+            self.btn_copy.setEnabled(True)
+        except (RuntimeError, AttributeError):
+            pass
 
     def _open_log_folder(self) -> None:
         os.makedirs(LOG_DIR, exist_ok=True)

@@ -96,6 +96,19 @@ class TestUpdater:
                 avail, ver, _, _ = updater.check_for_updates(force=False)
                 assert avail is False
 
+    def test_update_worker_signals(self, qapp):
+        from updater import UpdateCheckWorker
+
+        worker = UpdateCheckWorker(force=True)
+        signals_received = []
+        worker.update_available.connect(lambda ver, url: signals_received.append((ver, url)))
+
+        with patch("updater.check_for_updates", return_value=(True, "1.1.0", "https://example.com/rel", "notes")):
+            worker.run()
+
+        assert len(signals_received) == 1
+        assert signals_received[0] == ("1.1.0", "https://example.com/rel")
+
 
 # ============================================================================
 # 2. Per-Remote and Global Settings Tests
@@ -147,6 +160,14 @@ class TestSettings:
         port1 = get_available_rc_port()
         assert isinstance(port1, int)
         assert 1024 < port1 < 65535
+
+    def test_port_allocation_lifecycle(self):
+        from rclone_settings import _allocated_ports, allocate_rc_port, release_rc_port
+
+        port = allocate_rc_port(preferred_port=5800)
+        assert port in _allocated_ports
+        release_rc_port(port)
+        assert port not in _allocated_ports
 
 
 # ============================================================================
@@ -343,6 +364,58 @@ class TestMultiMountUI:
         # Clean shutdown test
         controller.shutdown()
         assert controller._is_shutting_down is True
+
+    def test_status_popup_multi_mount_speed_chart(self, qapp):
+        from rclone_daemon import RcloneDaemon
+        from rclone_stats import StatsData
+        from status_popup import StatusPopup
+
+        d1 = RcloneDaemon(remote_name="gdrive")
+        d2 = RcloneDaemon(remote_name="onedrive")
+        popup = StatusPopup(daemon=d1, daemons={"gdrive": d1, "onedrive": d2})
+
+        # Telemetry for gdrive
+        stats1 = StatsData(is_online=True, speed_mb_s=15.5, status_text="15.5 MB/s")
+        popup.update_stats_for_remote("gdrive", stats1)
+        assert popup.chart_widget.speed_history[-1] == 15.5
+        assert popup._latest_stats is stats1
+
+        # Switch to onedrive
+        stats2 = StatsData(is_online=True, speed_mb_s=2.3, status_text="2.3 MB/s")
+        popup.update_stats_for_remote("onedrive", stats2)
+        idx = popup.remote_combo.findData("onedrive")
+        popup.remote_combo.setCurrentIndex(idx)
+        assert popup.current_remote_name == "onedrive"
+        assert popup._latest_stats is stats2
+        assert popup.chart_widget.speed_history[-1] == 2.3
+
+    def test_tray_unmount_all_checks_all_daemons(self, qapp):
+        from gui_tray import RcloneTrayIcon
+        from rclone_daemon import RCCredentials, RcloneDaemon
+
+        d1 = RcloneDaemon(remote_name="d1")
+        d2 = RcloneDaemon(remote_name="d2")
+        d1.rc_credentials = RCCredentials(user="u1", password="p1", host="127.0.0.1", port=5572)
+        d2.rc_credentials = RCCredentials(user="u2", password="p2", host="127.0.0.1", port=5573)
+        d1.is_running = lambda: True
+        d2.is_running = lambda: True
+
+        tray = RcloneTrayIcon(daemon=d1, daemons={"d1": d1, "d2": d2})
+
+        # Mock fetch_vfs_queue: d1 has 0 pending, d2 has 3 pending
+        def mock_fetch(creds):
+            return 3 if creds.port == 5573 else 0
+
+        with patch("gui_tray.fetch_vfs_queue", side_effect=mock_fetch):
+            with patch("gui_tray.QMessageBox.warning") as mock_box:
+                mock_box.return_value = 0  # No
+                tray._unmount_all()
+                if tray.runner._current:
+                    tray.runner._current.wait(1000)
+                qapp.processEvents()
+                # Ensure warning was triggered due to d2 pending transfers
+                mock_box.assert_called_once()
+
 
 
 # ============================================================================

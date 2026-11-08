@@ -826,16 +826,29 @@ class StatusPopup(QWidget):
             self.current_remote_name = selected
             d = self.get_active_daemon()
             self._on_daemon_state_changed(d.state if d else "stopped", remote_name=selected)
+            if hasattr(self, "_remote_speed_history") and selected in self._remote_speed_history:
+                self.chart_widget.speed_history = deque(self._remote_speed_history[selected], maxlen=self.chart_widget.max_points)
+                if self.isVisible():
+                    self.chart_widget.update()
             if selected in self._remote_stats:
-                self._render_stats(self._remote_stats[selected])
+                self._latest_stats = self._remote_stats[selected]
+                self._render_stats(self._latest_stats)
             self._fetch_quota()
 
     def update_stats_for_remote(self, remote_name: str, stats: StatsData) -> None:
         """Updates popup telemetry for a specific remote."""
         clean = remote_name.rstrip(":")
         self._remote_stats[clean] = stats
+        if not hasattr(self, "_remote_speed_history"):
+            self._remote_speed_history = {}
+        if clean not in self._remote_speed_history:
+            self._remote_speed_history[clean] = deque([0.0] * self.chart_widget.max_points, maxlen=self.chart_widget.max_points)
+        self._remote_speed_history[clean].append(stats.speed_mb_s if stats.is_online else 0.0)
+
         if not self.current_remote_name or self.current_remote_name == clean:
             self.current_remote_name = clean
+            self._latest_stats = stats
+            self.chart_widget.add_speed_point(stats.speed_mb_s if stats.is_online else 0.0)
             self._render_stats(stats)
 
     def _detach_quota_worker(self) -> None:
@@ -1023,7 +1036,7 @@ class StatusPopup(QWidget):
             """)
 
     def _reconnect_from_popup(self) -> None:
-        """Connects or reconnects the last/current cloud remote directly from the status panel."""
+        """Connects or reconnects the selected or last cloud remote directly from the status panel."""
         if self.daemon.state in ("starting", "unmounting"):
             return
         from rclone_config import list_remote_names
@@ -1041,21 +1054,25 @@ class StatusPopup(QWidget):
             if not names:
                 self._apply_pause_button_ui()
                 return
+            selected = (self.current_remote_name or "").rstrip(":")
             current = (self.daemon.current_remote or "").rstrip(":")
             last = str(load_config().get("last_remote") or "").rstrip(":")
-            if current and current in names:
+            if selected and selected in names:
+                target = selected
+            elif current and current in names:
                 target = current
             elif last and last in names:
                 target = last
             else:
                 target = names[0]
-            self.daemon.start(target)
+            if self._tray is not None and hasattr(self._tray, "_mount_remote"):
+                self._tray._mount_remote(target)
+            else:
+                self.daemon.start(target)
 
         self._pause_runner.submit(list_remote_names, callback=_on_remotes)
 
     def _toggle_pause(self) -> None:
-        from rclone_settings import load_config
-
         if not self.daemon.is_running():
             self._reconnect_from_popup()
             return
@@ -1068,7 +1085,10 @@ class StatusPopup(QWidget):
         self.btn_pause.setEnabled(False)
 
         def do_request(pause_state: bool) -> bool:
-            original_limit = str(load_config().get("bwlimit") or "off")
+            clean_r = (self.current_remote_name or self.daemon.current_remote or "").rstrip(":")
+            from rclone_settings import get_remote_config, load_config
+            remote_cfg = get_remote_config(clean_r) if clean_r else {}
+            original_limit = str(remote_cfg.get("bwlimit") or load_config().get("bwlimit") or "off")
             if pause_state:
                 limit_val = "1B:1B"
             else:
@@ -1267,7 +1287,7 @@ class StatusPopup(QWidget):
         """Opens the mount point in the file manager using QDesktopServices and closes popup."""
         path = self.daemon.mount_point
         self.close()
-        if is_path_mounted(path):
+        if os.path.exists(path) or is_path_mounted(path):
             try:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             except Exception as e:

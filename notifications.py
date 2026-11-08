@@ -58,38 +58,7 @@ def send_desktop_notification(
     """
     active_icon = icon or _find_notification_icon()
 
-    # 1. Try D-Bus org.freedesktop.Notifications
-    try:
-        from PySide6.QtDBus import QDBusConnection, QDBusMessage
-
-        bus = QDBusConnection.sessionBus()
-        if bus.isConnected():
-            msg = QDBusMessage.createMethodCall(
-                "org.freedesktop.Notifications",
-                "/org/freedesktop/Notifications",
-                "org.freedesktop.Notifications",
-                "Notify",
-            )
-            urgency_levels = {"low": 0, "normal": 1, "critical": 2}
-            hints = {"urgency": urgency_levels.get(urgency, 1)}
-            msg.setArguments([
-                "DucksDrive",
-                0,
-                active_icon,
-                title,
-                message,
-                [],
-                hints,
-                5000,
-            ])
-            reply = bus.call(msg, timeout=1200)
-            if reply.type() != QDBusMessage.MessageType.ErrorMessage:
-                logger.debug("Desktop notification sent via D-Bus: %s", title)
-                return True
-    except Exception as exc:
-        logger.debug("D-Bus notification failed: %s", exc)
-
-    # 2. Try notify-send command
+    # 1. Try notify-send command first (standard freedesktop CLI across GNOME, KDE, Wayland, X11)
     notify_send_bin = shutil.which("notify-send")
     if notify_send_bin:
         try:
@@ -111,6 +80,33 @@ def send_desktop_notification(
             return True
         except Exception as exc:
             logger.debug("notify-send execution failed: %s", exc)
+
+    # 2. Try gdbus CLI (calls org.freedesktop.Notifications.Notify directly via D-Bus)
+    gdbus_bin = shutil.which("gdbus")
+    if gdbus_bin:
+        try:
+            cmd = [
+                gdbus_bin,
+                "call",
+                "--session",
+                "--dest", "org.freedesktop.Notifications",
+                "--object-path", "/org/freedesktop/Notifications",
+                "--method", "org.freedesktop.Notifications.Notify",
+                "DucksDrive",
+                "0",
+                active_icon,
+                title,
+                message,
+                "[]",
+                "{}",
+                "5000",
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            if res.returncode == 0:
+                logger.debug("Desktop notification dispatched via gdbus: %s", title)
+                return True
+        except Exception as exc:
+            logger.debug("gdbus execution failed: %s", exc)
 
     # 3. Fallback to tray.showMessage if available
     if fallback_tray is not None and getattr(fallback_tray, "tray_available", True):

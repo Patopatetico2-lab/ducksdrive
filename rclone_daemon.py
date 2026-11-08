@@ -29,8 +29,9 @@ from i18n import tr
 from rclone_config import get_clean_env, get_remote_type_fast
 from rclone_settings import (
     _allocated_ports,
-    get_available_rc_port,
+    allocate_rc_port,
     get_remote_config,
+    release_rc_port,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,7 @@ class RcloneDaemon(QObject):
         clean_name = remote_name.rstrip(":") if remote_name else ""
         if mount_point == DEFAULT_MOUNT_POINT and clean_name:
             rc_cfg = get_remote_config(clean_name)
-            custom_mp = rc_cfg.get("mount_path")
+            custom_mp = rc_cfg.get("custom_mount_point") or rc_cfg.get("mount_path")
             if custom_mp:
                 self.mount_point = os.path.abspath(os.path.expanduser(custom_mp))
             else:
@@ -330,10 +331,10 @@ class RcloneDaemon(QObject):
             self.mount_point = os.path.abspath(os.path.expanduser(mount_point))
         self.rc_host = rc_host
         if rc_port == DEFAULT_RC_PORT:
-            self.rc_port = get_available_rc_port(self.rc_host, DEFAULT_RC_PORT)
+            self.rc_port = allocate_rc_port(self.rc_host, DEFAULT_RC_PORT)
         else:
             self.rc_port = rc_port
-        _allocated_ports.add(self.rc_port)
+            _allocated_ports.add(self.rc_port)
         self.rc_credentials: Optional[RCCredentials] = None
         self.process: Optional[subprocess.Popen[str]] = None
         self.current_read_only: bool = False
@@ -507,9 +508,10 @@ class RcloneDaemon(QObject):
             self._set_state("error")
             return False
 
-        # Generate fresh in-memory RC credentials on an available port
-        active_port = get_available_rc_port(self.rc_host, self.rc_port)
-        self.rc_credentials = generate_rc_credentials(self.rc_host, active_port)
+        # Generate fresh in-memory RC credentials on this daemon's allocated port
+        if self.rc_port not in _allocated_ports:
+            self.rc_port = allocate_rc_port(self.rc_host, self.rc_port)
+        self.rc_credentials = generate_rc_credentials(self.rc_host, self.rc_port)
         self.current_remote = remote_name
         self.current_read_only = read_only
         self.current_extra_args = list(extra_args) if extra_args else None
@@ -774,6 +776,7 @@ class RcloneDaemon(QObject):
         self.current_read_only = False
         self.current_extra_args = None
         self.is_user_paused = False
+        release_rc_port(self.rc_port)
         if self._pending_start is None:
             self._pre_unmount_attempted = False
         self._last_stop_result = unmounted
