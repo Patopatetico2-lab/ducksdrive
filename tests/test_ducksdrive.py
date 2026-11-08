@@ -436,3 +436,200 @@ class TestGnomeFallback:
         assert controller.tray_available is False
         assert controller.tray.status_popup._window_mode is True
         controller.shutdown()
+
+
+# ============================================================================
+# 8. File Manager Integration Tests (XBEL & GTK Bookmarks)
+# ============================================================================
+class TestFileManagerIntegration:
+    def test_gtk_bookmarks_add_and_remove(self, tmp_path, monkeypatch):
+        from filemanager_integration import add_gtk_bookmark, remove_gtk_bookmark
+
+        bookmarks_file = tmp_path / "gtk-3.0" / "bookmarks"
+        bookmarks_file.parent.mkdir(parents=True)
+        initial_content = "file:///home/user/Documents Docs\nfile:///home/user/Music\n"
+        bookmarks_file.write_text(initial_content, encoding="utf-8")
+
+        monkeypatch.setattr("filemanager_integration._get_gtk_bookmarks_path", lambda: str(bookmarks_file))
+
+        mount_path = "/home/user/CloudDrives/gdrive"
+        # 1. Add bookmark
+        assert add_gtk_bookmark(mount_path, "DucksDrive - gdrive") is True
+
+        content_after_add = bookmarks_file.read_text(encoding="utf-8")
+        assert "file:///home/user/Documents Docs" in content_after_add
+        assert "file:///home/user/Music" in content_after_add
+        assert f"file://{mount_path} DucksDrive - gdrive" in content_after_add
+
+        # 2. Add duplicate - should not duplicate entry
+        assert add_gtk_bookmark(mount_path, "DucksDrive - gdrive") is True
+        lines = [line for line in bookmarks_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len([line for line in lines if "DucksDrive - gdrive" in line]) == 1
+
+        # 3. Remove bookmark
+        assert remove_gtk_bookmark(mount_path) is True
+        content_after_remove = bookmarks_file.read_text(encoding="utf-8")
+        assert f"file://{mount_path}" not in content_after_remove
+        assert "file:///home/user/Documents Docs" in content_after_remove
+        assert "file:///home/user/Music" in content_after_remove
+
+    def test_kde_places_add_and_remove(self, tmp_path, monkeypatch):
+        import xml.etree.ElementTree as ET
+        from filemanager_integration import add_kde_place, remove_kde_place
+
+        places_file = tmp_path / "user-places.xbel"
+        initial_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<xbel xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"'
+            ' xmlns:kdepriv="http://www.kde.org/kdepriv">\n'
+            ' <bookmark href="file:///home/user">\n'
+            "  <title>Home</title>\n"
+            " </bookmark>\n"
+            "</xbel>\n"
+        )
+        places_file.write_text(initial_xml, encoding="utf-8")
+
+        monkeypatch.setattr("filemanager_integration._get_kde_places_path", lambda: str(places_file))
+
+        mount_path = "/home/user/CloudDrives/onedrive"
+        # 1. Add KDE place
+        assert add_kde_place(mount_path, "DucksDrive - onedrive") is True
+
+        # Check backup file exists
+        bak_file = tmp_path / "user-places.xbel.bak"
+        assert bak_file.exists()
+        assert "Home" in bak_file.read_text(encoding="utf-8")
+
+        # Parse modified XML and check integrity
+        tree = ET.parse(str(places_file))
+        root = tree.getroot()
+        bookmarks = root.findall("bookmark")
+        assert len(bookmarks) == 2
+        titles = [b.findtext("title") for b in bookmarks]
+        assert "Home" in titles
+        assert "DucksDrive - onedrive" in titles
+
+        # 2. Remove KDE place
+        assert remove_kde_place(mount_path) is True
+        tree_after = ET.parse(str(places_file))
+        root_after = tree_after.getroot()
+        bookmarks_after = root_after.findall("bookmark")
+        assert len(bookmarks_after) == 1
+        assert bookmarks_after[0].findtext("title") == "Home"
+
+
+# ============================================================================
+# 9. Password and Secret Masking Tests
+# ============================================================================
+class TestPasswordMasking:
+    def test_mask_command_sensitive_arguments(self):
+        from rclone_config import mask_command
+
+        cmd1 = ["rclone", "config", "create", "drive", "drive", "client_secret", "MY_SUPER_SECRET_TOKEN_12345"]
+        masked1 = mask_command(cmd1)
+        assert "MY_SUPER_SECRET_TOKEN_12345" not in masked1
+        assert "******" in masked1
+        assert "rclone config create drive drive client_secret ******" == masked1
+
+        cmd2 = ["rclone", "mount", "remote:", "/path", "--rc-pass", "secretpassword"]
+        masked2 = mask_command(cmd2)
+        assert "secretpassword" not in masked2
+        assert "--rc-pass ******" in masked2
+
+        cmd3 = ["rclone", "config", "create", "s3", "s3", "secret_access_key=MY_S3_KEY_ABCD"]
+        masked3 = mask_command(cmd3)
+        assert "MY_S3_KEY_ABCD" not in masked3
+        assert "secret_access_key=******" in masked3
+
+        cmd4 = ["rclone", "config", "create", "mega", "mega", "pass", "megapass123"]
+        masked4 = mask_command(cmd4)
+        assert "megapass123" not in masked4
+        assert "pass ******" in masked4
+
+    def test_mask_command_preserves_non_sensitive(self):
+        from rclone_config import mask_command
+
+        cmd = ["rclone", "mount", "gdrive:", "/home/user/CloudDrives/gdrive", "--vfs-cache-mode", "full", "--transfers", "4"]
+        masked = mask_command(cmd)
+        assert masked == " ".join(cmd)
+
+
+# ============================================================================
+# 10. Rclone Stats Telemetry Parsing Tests
+# ============================================================================
+class TestRcloneStatsTelemetry:
+    def test_format_bytes(self):
+        from rclone_stats import format_bytes
+
+        assert format_bytes(-5) == "0 B"
+        assert format_bytes(0) == "0 B"
+        assert format_bytes(500) == "500 B"
+        assert format_bytes(1024) == "1.00 KB"
+        assert format_bytes(1024 * 1024) == "1.00 MB"
+        assert format_bytes(15 * 1024 * 1024) == "15.00 MB"
+        assert format_bytes(2 * 1024 * 1024 * 1024) == "2.00 GB"
+        assert format_bytes(3 * 1024 * 1024 * 1024 * 1024) == "3.00 TB"
+
+    def test_format_eta(self):
+        from rclone_stats import format_eta
+
+        assert format_eta(None) == "--:--:--"
+        assert format_eta(-10) == "--:--:--"
+        assert format_eta(0) == "00:00:00"
+        assert format_eta(45) == "00:00:45"
+        assert format_eta(125) == "00:02:05"
+        assert format_eta(3661) == "01:01:01"
+
+    def test_stats_data_has_active_transfers_property(self):
+        from rclone_stats import StatsData
+
+        # Online with active transfer
+        s1 = StatsData(is_online=True, active_transfers=[{"name": "file.iso"}])
+        assert s1.has_active_transfers is True
+
+        # Online with pending VFS queue
+        s2 = StatsData(is_online=True, active_transfers=[], vfs_queue_count=5)
+        assert s2.has_active_transfers is True
+
+        # Offline with queued items (should not report active transfers)
+        s3 = StatsData(is_online=False, active_transfers=[{"name": "file.iso"}])
+        assert s3.has_active_transfers is False
+
+        # Online idle
+        s4 = StatsData(is_online=True, active_transfers=[], vfs_queue_count=0)
+        assert s4.has_active_transfers is False
+
+
+# ============================================================================
+# 11. Configuration Defaults and Migration Tests
+# ============================================================================
+class TestSettingsMigration:
+    def test_config_defaults_merging(self, tmp_path, monkeypatch):
+        import rclone_settings
+        from rclone_settings import DEFAULT_CONFIG, load_config, save_config
+
+        cfg_file = tmp_path / "ducksdrive" / "config.json"
+        monkeypatch.setattr(rclone_settings, "CONFIG_FILE", str(cfg_file))
+        monkeypatch.setattr(rclone_settings, "CONFIG_DIR", str(cfg_file.parent))
+        monkeypatch.setattr(rclone_settings, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(rclone_settings, "_CONFIG_MTIME", None)
+
+        # 1. Non-existent file returns copy of default config
+        loaded = load_config()
+        for k, v in DEFAULT_CONFIG.items():
+            assert loaded[k] == v
+
+        # 2. Save custom setting; missing default keys are preserved upon reload
+        partial_config = {"bwlimit": "15M", "custom_user_key": "duck_power"}
+        assert save_config(partial_config) is True
+
+        monkeypatch.setattr(rclone_settings, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(rclone_settings, "_CONFIG_MTIME", None)
+
+        reloaded = load_config()
+        assert reloaded["bwlimit"] == "15M"
+        assert reloaded["custom_user_key"] == "duck_power"
+        # Verify defaults were kept
+        assert reloaded["vfs_cache_mode"] == DEFAULT_CONFIG["vfs_cache_mode"]
+        assert reloaded["transfers"] == DEFAULT_CONFIG["transfers"]
+
