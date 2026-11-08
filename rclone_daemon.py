@@ -17,7 +17,6 @@ import logging
 import os
 import secrets
 import shutil
-import socket
 import subprocess
 import time
 import urllib.request
@@ -28,6 +27,11 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer, QCoreApplication, QThr
 
 from i18n import tr
 from rclone_config import get_clean_env, get_remote_type_fast
+from rclone_settings import (
+    _allocated_ports,
+    get_available_rc_port,
+    get_remote_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,17 +79,6 @@ def generate_rc_credentials(host: str = DEFAULT_RC_HOST, port: int = DEFAULT_RC_
     return RCCredentials(user=user, password=password, host=host, port=port)
 
 
-def get_available_rc_port(host: str = DEFAULT_RC_HOST, preferred_port: int = DEFAULT_RC_PORT) -> int:
-    """Checks if preferred_port is free on host; if in use, selects an available localhost port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind((host, preferred_port))
-            return preferred_port
-        except OSError:
-            pass
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return int(s.getsockname()[1])
 
 
 def get_unmount_binary() -> Optional[str]:
@@ -321,14 +314,28 @@ class RcloneDaemon(QObject):
         rc_host: str = DEFAULT_RC_HOST,
         rc_port: int = DEFAULT_RC_PORT,
         parent: Optional[Any] = None,
+        remote_name: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
-        self.mount_point = os.path.abspath(os.path.expanduser(mount_point))
+        self.current_remote: Optional[str] = remote_name
+        clean_name = remote_name.rstrip(":") if remote_name else ""
+        if mount_point == DEFAULT_MOUNT_POINT and clean_name:
+            rc_cfg = get_remote_config(clean_name)
+            custom_mp = rc_cfg.get("mount_path")
+            if custom_mp:
+                self.mount_point = os.path.abspath(os.path.expanduser(custom_mp))
+            else:
+                self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_name}"))
+        else:
+            self.mount_point = os.path.abspath(os.path.expanduser(mount_point))
         self.rc_host = rc_host
-        self.rc_port = rc_port
+        if rc_port == DEFAULT_RC_PORT:
+            self.rc_port = get_available_rc_port(self.rc_host, DEFAULT_RC_PORT)
+        else:
+            self.rc_port = rc_port
+        _allocated_ports.add(self.rc_port)
         self.rc_credentials: Optional[RCCredentials] = None
         self.process: Optional[subprocess.Popen[str]] = None
-        self.current_remote: Optional[str] = None
         self.current_read_only: bool = False
         self.current_extra_args: Optional[List[str]] = None
         self.state = "stopped"
@@ -462,9 +469,18 @@ class RcloneDaemon(QObject):
             self._set_state("error")
             return False
 
-        # Set dynamic mount point based on remote: ~/CloudDrives/{remote_name}
+        # Set dynamic mount point based on remote: custom mount point or ~/CloudDrives/{clean_remote_name}
         clean_remote_name = remote_name.rstrip(":")
-        self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_remote_name}"))
+        from rclone_settings import get_remote_config, load_config
+        remote_cfg = get_remote_config(clean_remote_name)
+        custom_mp = str(remote_cfg.get("custom_mount_point") or "").strip()
+        if custom_mp:
+            self.mount_point = os.path.abspath(os.path.expanduser(custom_mp))
+        else:
+            self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_remote_name}"))
+
+        if remote_cfg.get("read_only"):
+            read_only = True
 
         # Ensure directory is unmounted before mounting (off the GUI thread via _TeardownWorker)
         if is_path_mounted(self.mount_point) and not self._pre_unmount_attempted:
@@ -501,11 +517,10 @@ class RcloneDaemon(QObject):
 
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
 
-        # Load dynamic configuration preferences
-        from rclone_settings import load_config
+        # Load dynamic configuration preferences (with per-remote overrides)
         cfg = load_config()
-        bwlimit = str(cfg.get("bwlimit", "off"))
-        cache_size = str(cfg.get("vfs_cache_max_size", "2G"))
+        bwlimit = str(remote_cfg.get("bwlimit") or cfg.get("bwlimit", "off"))
+        cache_size = str(remote_cfg.get("vfs_cache_max_size") or cfg.get("vfs_cache_max_size", "2G"))
         try:
             transfers_int = max(1, int(cfg.get("transfers", 4)))
         except (ValueError, TypeError):
@@ -569,9 +584,19 @@ class RcloneDaemon(QObject):
             "--rc-addr",
             f"{self.rc_credentials.host}:{self.rc_credentials.port}",
         ])
-        
+
         if read_only:
             cmd.append("--read-only")
+
+        # Add per-remote custom flags (e.g. --drive-shared-with-me)
+        raw_flags = str(remote_cfg.get("custom_flags") or "").strip()
+        if raw_flags:
+            import shlex
+            try:
+                per_remote_flags = shlex.split(raw_flags)
+                cmd.extend(per_remote_flags)
+            except Exception as e:
+                logger.warning("Failed to parse custom flags '%s': %s", raw_flags, e)
 
         if extra_args:
             cmd.extend(extra_args)

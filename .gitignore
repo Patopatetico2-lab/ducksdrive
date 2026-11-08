@@ -25,6 +25,7 @@ repo/
 
 # Linters / tool caches
 .ruff_cache/
+.pytest_cache/
 
 # Logs, backups and patches
 *.log

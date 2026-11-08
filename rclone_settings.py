@@ -14,14 +14,36 @@ import logging
 import os
 import re
 import shutil
+import socket
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 logger = logging.getLogger(__name__)
 
 xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 CONFIG_DIR = os.path.join(xdg_config, "ducksdrive")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+_allocated_ports: Set[int] = set()
+
+
+def get_available_rc_port(host: str = "127.0.0.1", preferred_port: int = 5572) -> int:
+    """Checks if preferred_port is free on host and not allocated; if in use, selects an available localhost port."""
+    port = preferred_port
+    while port < 65535:
+        if port not in _allocated_ports:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind((host, port))
+                    return port
+                except OSError:
+                    pass
+        port += 1
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return int(s.getsockname()[1])
+
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "bwlimit": "off",
@@ -32,6 +54,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "language": "pt_BR",
     "last_remote": "",
     "theme": "auto",
+    "remotes_config": {},
+}
+
+DEFAULT_REMOTE_CONFIG: Dict[str, Any] = {
+    "custom_mount_point": "",
+    "mount_path": "",
+    "read_only": False,
+    "custom_flags": "",
+    "bwlimit": "",
+    "vfs_cache_max_size": "",
 }
 
 
@@ -86,7 +118,7 @@ def save_config(config: Dict[str, Any]) -> bool:
         merged.update(config)
         _CONFIG_CACHE = merged
         logger.info("Saved configuration successfully to %s", CONFIG_FILE)
-        
+
         # Synchronize system autostart state
         _sync_autostart(bool(config.get("autostart", True)))
         return True
@@ -373,7 +405,7 @@ def _sync_autostart(enabled: bool) -> None:
     xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
     autostart_dir = os.path.join(xdg_config, "autostart")
     autostart_file = os.path.join(autostart_dir, "ducksdrive.desktop")
-    
+
     if enabled:
         os.makedirs(autostart_dir, exist_ok=True)
         xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -414,7 +446,7 @@ def _sync_autostart(enabled: bool) -> None:
             bin_path = shutil.which("ducksdrive") or user_bin
             exec_cmd = f'"{bin_path}"'
             icon_path = "ducksdrive"
-        
+
         content = f"""[Desktop Entry]
 Name=DucksDrive
 Comment=Manage cloud drives with Rclone
@@ -447,3 +479,45 @@ X-KDE-autostart-after=panel
                 logger.info("Synchronized autostart: Disabled.")
             except Exception as e:
                 logger.error("Failed to disable autostart: %s", e)
+
+
+def get_remote_config(remote_name: str) -> Dict[str, Any]:
+    """
+    Returns the custom per-remote configuration for the given cloud remote.
+    Merges with DEFAULT_REMOTE_CONFIG defaults.
+    """
+    clean = remote_name.rstrip(":") if remote_name else ""
+    cfg = load_config()
+    remotes_cfg = cfg.get("remotes_config")
+    if not isinstance(remotes_cfg, dict):
+        remotes_cfg = {}
+    specific = remotes_cfg.get(clean)
+    res = DEFAULT_REMOTE_CONFIG.copy()
+    if isinstance(specific, dict):
+        res.update(specific)
+    if res.get("custom_mount_point") and not res.get("mount_path"):
+        res["mount_path"] = res["custom_mount_point"]
+    elif res.get("mount_path") and not res.get("custom_mount_point"):
+        res["custom_mount_point"] = res["mount_path"]
+    return res
+
+
+def save_remote_config(remote_name: str, remote_cfg: Dict[str, Any]) -> bool:
+    """
+    Persists the custom per-remote configuration for the given cloud remote into config.json.
+    """
+    clean = remote_name.rstrip(":") if remote_name else ""
+    if not clean:
+        return False
+    cfg = load_config()
+    if "remotes_config" not in cfg or not isinstance(cfg["remotes_config"], dict):
+        cfg["remotes_config"] = {}
+    merged = DEFAULT_REMOTE_CONFIG.copy()
+    merged.update(remote_cfg)
+    if merged.get("mount_path") and not merged.get("custom_mount_point"):
+        merged["custom_mount_point"] = merged["mount_path"]
+    elif merged.get("custom_mount_point") and not merged.get("mount_path"):
+        merged["mount_path"] = merged["custom_mount_point"]
+    cfg["remotes_config"][clean] = merged
+    return save_config(cfg)
+

@@ -1,6 +1,6 @@
 # Maintainer: DucksDrive <https://github.com/Patopatetico2-lab/ducksdrive>
 pkgname=ducksdrive
-pkgver=1.0.8
+pkgver=1.0.9
 pkgrel=1
 pkgdesc="Lightweight Linux system tray client for Rclone FUSE mounts (Google Drive, OneDrive, etc.)"
 arch=('any')
@@ -10,7 +10,7 @@ depends=('python' 'python-pyside6' 'qt6-svg' 'rclone' 'fuse3')
 
 package() {
     install -dm755 "$pkgdir/usr/share/$pkgname"
-    install -Dm644 "$startdir"/main.py "$startdir"/gui_tray.py "$startdir"/status_popup.py "$startdir"/settings_dialog.py "$startdir"/rclone_daemon.py "$startdir"/rclone_stats.py "$startdir"/rclone_config.py "$startdir"/rclone_settings.py "$startdir"/filemanager_integration.py "$startdir"/i18n.py -t "$pkgdir/usr/share/$pkgname/"
+    install -Dm644 "$startdir"/main.py "$startdir"/gui_tray.py "$startdir"/status_popup.py "$startdir"/settings_dialog.py "$startdir"/rclone_daemon.py "$startdir"/rclone_stats.py "$startdir"/rclone_config.py "$startdir"/rclone_settings.py "$startdir"/filemanager_integration.py "$startdir"/i18n.py "$startdir"/log_viewer.py "$startdir"/remote_settings_dialog.py "$startdir"/notifications.py "$startdir"/updater.py -t "$pkgdir/usr/share/$pkgname/"
 
     install -Dm644 "$startdir/icon.svg" "$pkgdir/usr/share/$pkgname/icon.svg"
     install -Dm644 "$startdir/icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"

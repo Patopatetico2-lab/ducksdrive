@@ -10,6 +10,8 @@ progress bars, active file info, a rolling speed history chart, and quick action
 """
 
 import logging
+import os
+import sys
 import time
 from collections import deque
 from typing import Any, Optional
@@ -25,13 +27,16 @@ from PySide6.QtGui import (
     QPen,
     QBrush,
     QCursor,
-    QDesktopServices
+    QDesktopServices,
+    QIcon,
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QProgressBar,
@@ -158,7 +163,7 @@ class QuotaWorkerThread(QThread):
             auth_str = f"{creds.user}:{creds.password}"
             b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
             headers = {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
-            
+
             endpoint_about = f"{creds.url}/operations/about"
             fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
             req_about = urllib.request.Request(
@@ -253,17 +258,50 @@ class RecentTransferItem(QWidget):
         self.size_label.setText(size_str)
 
 
+def _get_window_icon() -> QIcon:
+    """Returns the application icon without importing gui_tray to avoid circular imports."""
+    current_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    icon_path = os.path.join(current_dir, "icon.svg")
+    if os.path.exists(icon_path):
+        icon = QIcon(icon_path)
+        if not icon.isNull():
+            return icon
+    return QIcon.fromTheme("network-cloud", QIcon.fromTheme("folder-remote"))
+
+
 class StatusPopup(QWidget):
     """
-    Floating status panel acting as a native system tray popup window.
-    Uses Qt.Tool to ensure full compatibility with Wayland and X11 compositors.
+    Floating status panel acting as a native system tray popup window or standalone dashboard window.
+    Supports both tray mode (Qt.Tool) and window mode (Qt.Window) for environments without a tray (e.g. GNOME Vanilla).
     """
 
-    def __init__(self, daemon: RcloneDaemon, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.daemon = daemon
+    def __init__(
+        self,
+        daemon: Optional[RcloneDaemon] = None,
+        parent: Optional[QWidget] = None,
+        window_mode: bool = False,
+        daemons: Optional[dict[str, RcloneDaemon]] = None,
+    ) -> None:
+        self.window_mode = window_mode
+        self._tray: Optional[Any] = None
+        if window_mode:
+            super().__init__(parent, Qt.Window)
+            self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
+            self.setWindowIcon(_get_window_icon())
+            self.setMinimumWidth(360)
+        else:
+            super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            self.setFixedWidth(340)
+
+        self.daemons: dict[str, RcloneDaemon] = daemons.copy() if daemons else {}
+        self._fallback_daemon: Optional[RcloneDaemon] = daemon
+        if daemon is not None:
+            clean_name = (daemon.current_remote or "default").rstrip(":")
+            self.daemons[clean_name] = daemon
+        self.current_remote_name: Optional[str] = next(iter(self.daemons.keys())) if self.daemons else None
+        self._remote_stats: dict[str, StatsData] = {}
+
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        self.setFixedWidth(340)
         self.is_paused = False
 
         self._last_quota_update = 0
@@ -287,7 +325,54 @@ class StatusPopup(QWidget):
 
         self._init_ui()
         self.apply_theme()
-        self.daemon.state_changed.connect(self._on_daemon_state_changed)
+        self.update_mounted_remotes()
+        if daemon is not None:
+            daemon.state_changed.connect(lambda s: self._on_daemon_state_changed(s, getattr(daemon, "current_remote", None)))
+        for r, d in list(self.daemons.items()):
+            d.state_changed.connect(lambda s, rem=r: self._on_daemon_state_changed(s, rem))
+
+    @property
+    def _window_mode(self) -> bool:
+        return self.window_mode
+
+    @property
+    def active_remote(self) -> str:
+        return self.current_remote_name or ""
+
+    @property
+    def daemon(self) -> RcloneDaemon:
+        active = self.get_active_daemon()
+        if active is not None:
+            return active
+        if self._fallback_daemon is not None:
+            return self._fallback_daemon
+        self._fallback_daemon = RcloneDaemon(parent=self)
+        return self._fallback_daemon
+
+    @daemon.setter
+    def daemon(self, value: Optional[RcloneDaemon]) -> None:
+        self._fallback_daemon = value
+        if value is not None:
+            clean_name = (value.current_remote or "default").rstrip(":")
+            self.daemons[clean_name] = value
+            if not self.current_remote_name:
+                self.current_remote_name = clean_name
+
+    def get_active_daemon(self) -> Optional[RcloneDaemon]:
+        if self.current_remote_name and self.current_remote_name in self.daemons:
+            return self.daemons[self.current_remote_name]
+        for d in self.daemons.values():
+            if d.is_running():
+                return d
+        if self.daemons:
+            return next(iter(self.daemons.values()))
+        return self._fallback_daemon
+
+    def register_daemon(self, remote_name: str, daemon: RcloneDaemon) -> None:
+        clean = remote_name.rstrip(":")
+        self.daemons[clean] = daemon
+        daemon.state_changed.connect(lambda s, rem=clean: self._on_daemon_state_changed(s, rem))
+        self.update_mounted_remotes()
 
     def _init_ui(self) -> None:
         """Initializes the popup layout, widgets, and styling."""
@@ -335,13 +420,33 @@ class StatusPopup(QWidget):
             }
         """)
 
-        # 1. Header (Account & Status + Close Button)
+        # 1. Header (Account & Status + Menu Button + Close Button)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        
+        header_layout.setSpacing(6)
+
         self.title_label = QLabel("<b>DucksDrive</b>")
         self.title_label.setStyleSheet("font-size: 11pt; color: #2c3e50;")
         header_layout.addWidget(self.title_label)
+
+        self.btn_menu = QPushButton(tr("Menu ▾"))
+        self.btn_menu.setFixedHeight(24)
+        self.btn_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_menu.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 8.5pt;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        header_layout.addWidget(self.btn_menu)
         header_layout.addStretch()
 
         self.status_badge = QLabel(tr("● Offline"))
@@ -368,8 +473,36 @@ class StatusPopup(QWidget):
         """)
         self.btn_close.clicked.connect(self.close)
         header_layout.addWidget(self.btn_close)
+        if self.window_mode:
+            self.btn_close.hide()
 
         main_layout.addLayout(header_layout)
+
+        # Multi-Mount Cloud Drive Selector
+        self.selector_bar = QHBoxLayout()
+        self.selector_bar.setContentsMargins(0, 0, 0, 0)
+        self.selector_bar.setSpacing(6)
+
+        self.lbl_cloud = QLabel(tr("Nuvem:"))
+        self.lbl_cloud.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #7f8c8d;")
+        self.selector_bar.addWidget(self.lbl_cloud)
+
+        self.remote_combo = QComboBox()
+        self.remote_combo.setFixedHeight(26)
+        self.remote_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #bdc3c7;
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-size: 8.5pt;
+                font-weight: bold;
+                background-color: transparent;
+            }
+        """)
+        self.remote_combo.currentIndexChanged.connect(self._on_remote_combo_changed)
+        self.selector_bar.addWidget(self.remote_combo, 1)
+
+        main_layout.addLayout(self.selector_bar)
 
         # 2. Quota Section
         quota_layout = QVBoxLayout()
@@ -383,9 +516,9 @@ class StatusPopup(QWidget):
         self.quota_bar.hide()
         quota_layout.addWidget(self.quota_label)
         quota_layout.addWidget(self.quota_bar)
-        
+
         main_layout.addLayout(quota_layout)
-        
+
         # Pause / Connect button
         self.btn_pause = QPushButton(tr("Conectar / Reconectar"))
         self.btn_pause.clicked.connect(self._toggle_pause)
@@ -409,12 +542,12 @@ class StatusPopup(QWidget):
         self.scroll_layout.addStretch()
         self.scroll.setWidget(self.scroll_content)
         self.scroll.viewport().installEventFilter(self)
-        
+
         self.empty_label = QLabel(tr("Nenhum arquivo sendo transferido"))
         self.empty_label.setStyleSheet("color: #bdc3c7; font-style: italic; padding: 20px 0;")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.scroll_layout.insertWidget(0, self.empty_label)
-        
+
         main_layout.addWidget(self.scroll)
 
         # 4. Metrics & Chart
@@ -558,6 +691,36 @@ class StatusPopup(QWidget):
                 color: white;
             }}
         """)
+        menu_bg = "#2980b9" if self.is_dark else "#3498db"
+        menu_hover = "#3498db" if self.is_dark else "#2980b9"
+        self.btn_menu.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {menu_bg};
+                color: white;
+                border: none;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 8.5pt;
+            }}
+            QPushButton:hover {{
+                background-color: {menu_hover};
+            }}
+        """)
+        combo_border = "#454a4f" if self.is_dark else "#bdc3c7"
+        combo_bg = "#202326" if self.is_dark else "#ffffff"
+        combo_fg = "#eff0f1" if self.is_dark else "#2c3e50"
+        self.remote_combo.setStyleSheet(f"""
+            QComboBox {{
+                border: 1px solid {combo_border};
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-size: 8.5pt;
+                font-weight: bold;
+                background-color: {combo_bg};
+                color: {combo_fg};
+            }}
+        """)
         self._apply_pause_button_ui()
         self.chart_widget.is_dark = self.is_dark
         if self.isVisible():
@@ -567,9 +730,31 @@ class StatusPopup(QWidget):
             if isinstance(w, (TransferItem, RecentTransferItem)):
                 w.apply_theme(self.is_dark)
 
+    def set_tray_menu(self, menu: QMenu) -> None:
+        """Attaches the application context menu to the Menu button."""
+        self.btn_menu.setMenu(menu)
+
+    def show_window_mode(self) -> None:
+        """Displays and centers the dashboard window on screen."""
+        self.adjustSize()
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            x = geo.center().x() - self.width() // 2
+            y = geo.center().y() - self.height() // 2
+            self.move(max(geo.left(), x), max(geo.top(), y))
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def retranslate_ui(self) -> None:
         """Updates all visible labels and tooltips in the popup when the language changes."""
+        self.btn_menu.setText(tr("Menu ▾"))
+        if self.window_mode:
+            self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
+        self.lbl_cloud.setText(tr("Nuvem:"))
+        self.update_mounted_remotes()
         self._apply_pause_button_ui()
         self.empty_label.setText(tr("Nenhum arquivo sendo transferido"))
         self.speed_title_label.setText(tr("Velocidade:"))
@@ -577,12 +762,13 @@ class StatusPopup(QWidget):
         self.btn_open.setText(tr("Abrir Pasta Local"))
         self.btn_refresh.setText(tr("Atualizar"))
         self.btn_refresh.setToolTip(tr("Recarregar cache de pastas (vfs/refresh)"))
-        if self.daemon.is_running():
+        active_daemon = self.get_active_daemon()
+        if active_daemon and active_daemon.is_running():
             self.status_badge.setText(tr("● Online"))
             if self._last_quota_values is not None:
                 self._on_quota_success(*self._last_quota_values)
             else:
-                clean_r = (self.daemon.current_remote or "").rstrip(":")
+                clean_r = (self.current_remote_name or active_daemon.current_remote or "").rstrip(":")
                 if clean_r in _quota_cache:
                     self._on_quota_success(*_quota_cache[clean_r])
                 elif self._last_quota_update == 0:
@@ -591,12 +777,66 @@ class StatusPopup(QWidget):
                     self._fetch_quota()
         else:
             self.status_badge.setText(tr("● Offline"))
-            if self.daemon.state == "starting":
+            if active_daemon and active_daemon.state == "starting":
                 self.quota_label.setText(tr("Calculando espaço..."))
             else:
                 self.quota_label.setText(tr("Desconectado"))
         if self.isVisible():
             self.chart_widget.update()
+
+    def update_mounted_remotes(self, active_remotes: Optional[list[str]] = None) -> None:
+        """Updates the cloud selector combo box with mounted/active remotes."""
+        self.remote_combo.blockSignals(True)
+        self.remote_combo.clear()
+
+        if active_remotes is not None:
+            remotes_to_show = [r.rstrip(":") for r in active_remotes]
+        else:
+            remotes_to_show = [
+                r for r, d in self.daemons.items() if d.is_running() or d.state in ("mounted", "starting")
+            ]
+
+        if not remotes_to_show:
+            remotes_to_show = list(self.daemons.keys())
+
+        if not remotes_to_show:
+            self.remote_combo.addItem(tr("(Nenhuma nuvem conectada)"), "")
+            self.remote_combo.setEnabled(False)
+        else:
+            self.remote_combo.setEnabled(len(remotes_to_show) > 1)
+            for r in remotes_to_show:
+                d = self.daemons.get(r)
+                is_active = d.is_running() if d else False
+                badge = f"☁ {r} (" + tr("Ativo") + ")" if is_active else f"☁ {r}"
+                self.remote_combo.addItem(badge, r)
+
+            target = self.current_remote_name or remotes_to_show[0]
+            idx = self.remote_combo.findData(target)
+            if idx >= 0:
+                self.remote_combo.setCurrentIndex(idx)
+            else:
+                self.remote_combo.setCurrentIndex(0)
+                self.current_remote_name = remotes_to_show[0]
+
+        self.remote_combo.blockSignals(False)
+
+    def _on_remote_combo_changed(self, index: int) -> None:
+        selected = str(self.remote_combo.currentData() or "")
+        if selected and selected != self.current_remote_name:
+            self.current_remote_name = selected
+            d = self.get_active_daemon()
+            self._on_daemon_state_changed(d.state if d else "stopped", remote_name=selected)
+            if selected in self._remote_stats:
+                self._render_stats(self._remote_stats[selected])
+            self._fetch_quota()
+
+    def update_stats_for_remote(self, remote_name: str, stats: StatsData) -> None:
+        """Updates popup telemetry for a specific remote."""
+        clean = remote_name.rstrip(":")
+        self._remote_stats[clean] = stats
+        if not self.current_remote_name or self.current_remote_name == clean:
+            self.current_remote_name = clean
+            self._render_stats(stats)
 
     def _detach_quota_worker(self) -> None:
         """Detaches signals from active quota worker so it never updates UI after remote/state switch."""
@@ -623,11 +863,20 @@ class StatusPopup(QWidget):
         worker.deleteLater()
 
     @Slot(str)
-    def _on_daemon_state_changed(self, state: str) -> None:
+    def _on_daemon_state_changed(self, state: str, remote_name: Optional[str] = None) -> None:
         """Resets pause state, quota cache, and popup widgets when unmounting or switching cloud remotes."""
-        if state in ("stopped", "unmounting", "starting", "error") or self.daemon.current_remote != self._quota_remote:
+        clean_remote = remote_name.rstrip(":") if remote_name else (self.current_remote_name or "")
+        active_daemon = self.get_active_daemon()
+        self.update_mounted_remotes()
+
+        if self.current_remote_name and clean_remote and clean_remote != self.current_remote_name:
+            return
+
+        cur_remote = self.current_remote_name or (active_daemon.current_remote if active_daemon else None)
+        if state in ("stopped", "unmounting", "starting", "error") or cur_remote != self._quota_remote:
             self.is_paused = False
-            self.daemon.is_user_paused = False
+            if active_daemon is not None:
+                active_daemon.is_user_paused = False
             self._pause_busy = False
             self._last_quota_update = 0
             self._last_quota_values = None
@@ -644,10 +893,10 @@ class StatusPopup(QWidget):
                 self.btn_open.setEnabled(False)
                 self._apply_pause_button_ui()
             else:
-                self._quota_remote = self.daemon.current_remote
+                self._quota_remote = cur_remote
                 self._latest_stats = StatsData(is_online=True, status_text=tr("Sincronizado / Ocioso"))
                 self._render_stats(self._latest_stats)
-                clean_r = (self.daemon.current_remote or "").rstrip(":")
+                clean_r = (cur_remote or "").rstrip(":")
                 if clean_r in _quota_cache:
                     self._on_quota_success(*_quota_cache[clean_r])
                 if self.isVisible():
@@ -847,7 +1096,7 @@ class StatusPopup(QWidget):
         if clean_remote:
             _quota_cache[clean_remote] = (total, used)
         from rclone_stats import format_bytes
-        
+
         if total > 0:
             self.quota_bar.show()
             percent = int((used / total) * 100)
@@ -901,7 +1150,7 @@ class StatusPopup(QWidget):
             self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
             self.speed_value.setText(stats.speed_str)
             self.eta_value.setText(stats.eta_str)
-            
+
             clean_remote = (self.daemon.current_remote or "Drive").rstrip(":")
             self.title_label.setText(f"<b>{clean_remote}</b>")
 
@@ -1062,8 +1311,8 @@ class StatusPopup(QWidget):
         self._drag_pos = global_pos - self.frameGeometry().topLeft()
 
     def eventFilter(self, watched: Any, event: Any) -> bool:
-        """Allows dragging the window even when clicking inside the scroll area viewport."""
-        if watched is self.scroll.viewport():
+        """Allows dragging the window even when clicking inside the scroll area viewport (floating mode)."""
+        if not self.window_mode and watched is self.scroll.viewport():
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 self._begin_drag(event.globalPosition().toPoint())
                 return True
@@ -1076,8 +1325,8 @@ class StatusPopup(QWidget):
         return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event: Any) -> None:
-        """Initiates window dragging when clicking anywhere on the popup background or labels."""
-        if event.button() == Qt.LeftButton:
+        """Initiates window dragging when clicking anywhere on the popup background (floating mode only)."""
+        if not self.window_mode and event.button() == Qt.LeftButton:
             self._begin_drag(event.globalPosition().toPoint())
             event.accept()
             return
@@ -1085,7 +1334,7 @@ class StatusPopup(QWidget):
 
     def mouseMoveEvent(self, event: Any) -> None:
         """Fallback window dragging for compositors without startSystemMove support."""
-        if (event.buttons() & Qt.LeftButton) and self._drag_pos is not None:
+        if not self.window_mode and (event.buttons() & Qt.LeftButton) and self._drag_pos is not None:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
             return
@@ -1093,15 +1342,15 @@ class StatusPopup(QWidget):
 
     def mouseReleaseEvent(self, event: Any) -> None:
         """Ends manual fallback dragging."""
-        if event.button() == Qt.LeftButton:
+        if not self.window_mode and event.button() == Qt.LeftButton:
             self._drag_pos = None
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: Any) -> None:
-        """Closes popup when Escape key is pressed."""
-        if event.key() == Qt.Key_Escape:
+        """Closes popup when Escape key is pressed (floating mode only)."""
+        if not self.window_mode and event.key() == Qt.Key_Escape:
             self.close()
         super().keyPressEvent(event)
 
@@ -1117,5 +1366,10 @@ class StatusPopup(QWidget):
                 pass
 
     def closeEvent(self, event: Any) -> None:
-        """Closing the popup never blocks the GUI thread; the quota worker finishes on its own."""
+        """Closing the popup. In window mode without tray, prompts quit confirmation."""
+        if self.window_mode and getattr(self, "_tray", None) is not None:
+            if not getattr(self._tray, "_is_shutting_down", False):
+                event.ignore()
+                self._tray._confirm_quit()
+                return
         super().closeEvent(event)

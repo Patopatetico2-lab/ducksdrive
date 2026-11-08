@@ -89,9 +89,15 @@ jobs:
           # it requires --appimage-extract-and-run to execute correctly.
           ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir DucksDrive-x86_64.AppImage
 
+      - name: Build Debian (.deb) Package
+        run: |
+          bash build_deb.sh
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: DucksDrive-x86_64.AppImage
+          files: |
+            DucksDrive-x86_64.AppImage
+            ducksdrive_*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

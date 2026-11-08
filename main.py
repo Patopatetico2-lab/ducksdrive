@@ -21,10 +21,10 @@ import subprocess
 import sys
 import time
 from logging.handlers import RotatingFileHandler
-from typing import Any, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Slot, QTimer, QLockFile
-from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QSystemTrayIcon
 
 from rclone_config import TaskRunner, get_clean_env
 from rclone_daemon import RcloneDaemon
@@ -33,6 +33,7 @@ from rclone_settings import (
     _sync_autostart,
     apply_app_theme,
     load_config,
+    save_config,
     save_last_remote,
     set_system_default_palette,
 )
@@ -40,6 +41,8 @@ from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
 from gui_tray import RcloneTrayIcon, get_app_icon
+from notifications import notify_mount_success, notify_connection_lost
+from updater import UpdateCheckWorker
 
 # Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
 xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -84,24 +87,32 @@ def get_rclone_version() -> Optional[tuple[int, int, int]]:
 
 class RcloneAppController(QObject):
     """
-    Controller to link background logic (Daemon/Stats) with the UI (Tray).
+    Controller to link background multi-cloud logic (Daemons/Stats) with the UI (Tray or Window Mode).
     """
 
-    def __init__(self, app: QApplication) -> None:
+    def __init__(self, app: QApplication, tray_available: bool = True) -> None:
         super().__init__()
         self.app = app
-        self.daemon = RcloneDaemon()
-        self.tray = RcloneTrayIcon(self.daemon)
-        self.stats_poller: Optional[RcloneStatsPoller] = None
-        self._old_pollers: list[RcloneStatsPoller] = []
-        # Serial background runner for file-manager sidebar I/O (keeps add/remove in order, off the GUI thread)
+        self.tray_available = tray_available
+        self.daemons: Dict[str, RcloneDaemon] = {}
+        self.stats_pollers: Dict[str, RcloneStatsPoller] = {}
+        self._old_pollers: List[RcloneStatsPoller] = []
+        self._update_worker: Optional[UpdateCheckWorker] = None
+
+        # Serial background runner for file-manager sidebar I/O
         self.runner = TaskRunner(self)
-        self.daemon._integration_runner = self.runner
         self._is_shutting_down = False
         self._threads_cleaned = False
 
+        # Initialize Tray UI (with Window Mode fallback if system tray is missing)
+        self.tray = RcloneTrayIcon(
+            daemon=None,
+            tray_available=tray_available,
+            daemons=self.daemons,
+            controller=self,
+        )
+
         # Connect signals
-        self.daemon.state_changed.connect(self._handle_state_change)
         self.tray.request_exit.connect(self.shutdown)
         self.app.aboutToQuit.connect(self._cleanup_threads)
 
@@ -114,15 +125,124 @@ class RcloneAppController(QObject):
         self._signal_timer.timeout.connect(lambda: None)  # Dummy to allow signal processing
         self._signal_timer.start(500)
 
+    @property
+    def daemon(self) -> RcloneDaemon:
+        """Returns the primary or first active daemon for backward compatibility."""
+        if self.daemons:
+            for d in self.daemons.values():
+                if d.is_running():
+                    return d
+            return next(iter(self.daemons.values()))
+        return self.get_or_create_daemon("default")
+
+    @property
+    def stats_poller(self) -> Optional[RcloneStatsPoller]:
+        """Returns the stats poller of the first active remote."""
+        if self.stats_pollers:
+            return next(iter(self.stats_pollers.values()))
+        return None
+
+    def get_or_create_daemon(self, remote_name: str) -> RcloneDaemon:
+        """Retrieves or creates a dedicated RcloneDaemon for the given remote."""
+        clean = remote_name.rstrip(":")
+        if clean not in self.daemons:
+            d = RcloneDaemon(remote_name=clean)
+            d._integration_runner = self.runner
+            d.state_changed.connect(lambda state, r=clean: self._handle_daemon_state(r, state))
+            self.daemons[clean] = d
+            self.tray.register_daemon(clean, d)
+        return self.daemons[clean]
+
+    def mount_remote(
+        self,
+        remote_name: str,
+        read_only: bool = False,
+        extra_args: Optional[list[str]] = None,
+        startup_timeout: float = 15.0,
+        retry_on_timeout: int = 0,
+    ) -> None:
+        """Starts mounting a specific cloud remote concurrently without unmounting others."""
+        daemon = self.get_or_create_daemon(remote_name)
+        daemon.start(
+            remote_name,
+            read_only=read_only,
+            extra_args=extra_args,
+            startup_timeout=startup_timeout,
+            retry_on_timeout=retry_on_timeout,
+        )
+
+    def unmount_remote(self, remote_name: str, on_done: Optional[Callable[[], None]] = None) -> None:
+        """Safely stops and unmounts the specified remote."""
+        clean = remote_name.rstrip(":")
+        daemon = self.daemons.get(clean)
+        if daemon and daemon.is_running():
+            self._stop_poller_for(clean)
+            daemon.stop_async(on_done=on_done)
+        elif on_done:
+            on_done()
+
+    def unmount_all(self, on_done: Optional[Callable[[], None]] = None) -> None:
+        """Stops and unmounts all currently running cloud drives."""
+        active = [d for d in self.daemons.values() if d.is_running()]
+        if not active:
+            if on_done:
+                on_done()
+            return
+
+        for clean in list(self.stats_pollers.keys()):
+            self._stop_poller_for(clean)
+
+        remaining = len(active)
+
+        def _step_done() -> None:
+            nonlocal remaining
+            remaining -= 1
+            if remaining <= 0 and on_done:
+                on_done()
+
+        for d in active:
+            d.stop_async(on_done=_step_done)
+
     def run(self) -> None:
         """
-        Starts the application, displays the tray icon, and handles
-        first-run configuration (if no remotes exist) or auto-mounts the first remote.
+        Starts the application, displays the tray icon or window mode,
+        checks updates in the background, and handles auto-mount.
         """
-        self.tray.show()
+        if self.tray_available:
+            self.tray.show()
+        else:
+            self.tray.show_window_mode()
+            self._show_gnome_tray_tip()
 
-        # `rclone config dump` runs in a background thread; decide what to do once it answers.
+        # Check for updates in background (non-blocking)
+        try:
+            self._update_worker = UpdateCheckWorker(force=False)
+            self._update_worker.update_available.connect(self.tray.notify_update_available)
+            self._update_worker.start()
+        except Exception as exc:
+            logger.debug("Failed to start background update checker: %s", exc)
+
+        # Background scan of configured remotes
         self.tray.refresh_remotes(self._on_initial_remotes)
+
+    def _show_gnome_tray_tip(self) -> None:
+        """Shows a friendly explanation when system tray is unavailable (e.g. Vanilla GNOME)."""
+        cfg = load_config()
+        if cfg.get("gnome_tray_tip_dismissed"):
+            return
+        box = QMessageBox(
+            QMessageBox.Icon.Information,
+            tr("Modo Janela Ativado"),
+            tr("O DucksDrive está sendo executado no Modo Janela porque este ambiente desktop (ex: GNOME padrão) não possui suporte ativo à bandeja do sistema.\n\nPara exibir o ícone na barra superior, você pode instalar a extensão 'AppIndicator and KStatusNotifierItem Support' no GNOME."),
+            parent=None,
+        )
+        cb_dont_show = QCheckBox(tr("Não mostrar esta mensagem novamente"))
+        box.setCheckBox(cb_dont_show)
+        box.addButton(tr("Entendi"), QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if cb_dont_show.isChecked():
+            cfg["gnome_tray_tip_dismissed"] = True
+            save_config(cfg)
 
     def _on_initial_remotes(self, remotes: list[str]) -> None:
         """Runs in the GUI thread once the remotes have been listed in the background."""
@@ -133,8 +253,7 @@ class RcloneAppController(QObject):
             last_remote = str(load_config().get("last_remote") or "").rstrip(":")
             target_remote = last_remote if last_remote in remotes else remotes[0]
             logger.info("Auto-mounting remote: %s (with network retry)", target_remote)
-            # On startup/autostart: allow 30s timeout and up to 2 retries to accommodate slow network/Wi-Fi DHCP
-            QTimer.singleShot(0, lambda r=target_remote: self.daemon.start(r, startup_timeout=30.0, retry_on_timeout=2))
+            self.mount_remote(target_remote, startup_timeout=30.0, retry_on_timeout=2)
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
         logger.info("Signal %d received, shutting down...", sig)
@@ -142,75 +261,92 @@ class RcloneAppController(QObject):
 
     @Slot(str)
     def _handle_state_change(self, state: str) -> None:
-        """Handles transitions between mount states."""
+        """Legacy slot: delegates to primary remote state handler."""
+        active = self.daemon.current_remote or "default"
+        self._handle_daemon_state(active, state)
+
+    def _handle_daemon_state(self, remote_name: str, state: str) -> None:
+        """Handles transitions between mount states for each specific remote."""
+        clean = remote_name.rstrip(":")
+        daemon = self.daemons.get(clean)
+        if not daemon:
+            return
+
+        self.tray._on_state_changed(state, remote_name=clean)
+
         if state == "mounted":
-            # Start statistics polling
-            if self.daemon.rc_credentials:
-                self._stop_poller()
-                self.stats_poller = RcloneStatsPoller(self.daemon.rc_credentials, daemon=self.daemon)
-                self.stats_poller.stats_updated.connect(self.tray.update_stats)
-                self.stats_poller.connection_lost.connect(self._on_connection_lost)
-                self.stats_poller.start()
-            
-            # Add to file manager sidebar with dynamic label and persist last_remote
-            remote_name = self.daemon.current_remote or "Drive"
-            clean_remote = remote_name.rstrip(":")
-            save_last_remote(clean_remote)
-            self.runner.submit(integrate_mount, self.daemon.mount_point, f"DucksDrive - {clean_remote}")
-            
+            # Start statistics polling for this specific daemon
+            if daemon.rc_credentials:
+                self._stop_poller_for(clean)
+                poller = RcloneStatsPoller(daemon.rc_credentials, daemon=daemon)
+                poller.stats_updated.connect(lambda stats, r=clean: self.tray.update_stats_for_remote(r, stats))
+                poller.connection_lost.connect(lambda r=clean: self._on_connection_lost(r))
+                poller.start()
+                self.stats_pollers[clean] = poller
+
+            # Add to file manager sidebar and persist last_remote
+            save_last_remote(clean)
+            self.runner.submit(integrate_mount, daemon.mount_point, f"DucksDrive - {clean}")
+            notify_mount_success(clean, daemon.mount_point, fallback_tray=self.tray)
+
         elif state in ("unmounting", "stopped", "error"):
-            # Stop polling (non-blocking, the GUI thread must not wait for the HTTP timeout)
-            self._stop_poller()
+            # Stop poller non-blocking
+            self._stop_poller_for(clean)
 
             if state in ("stopped", "error"):
-                # Remove from file manager sidebar
-                self.runner.submit(clean_integration, self.daemon.mount_point)
+                # Clean sidebar integration
+                self.runner.submit(clean_integration, daemon.mount_point)
 
-    def _stop_poller(self, wait: bool = False) -> None:
-        """Detaches and stops the current stats poller without blocking the GUI thread (unless wait=True)."""
-        poller = self.stats_poller
+    def _stop_poller_for(self, remote_name: str, wait: bool = False) -> None:
+        """Detaches and stops the stats poller for a given remote."""
+        clean = remote_name.rstrip(":")
+        poller = self.stats_pollers.pop(clean, None)
         if poller is None:
             return
-        self.stats_poller = None
-        try:
-            poller.stats_updated.disconnect(self.tray.update_stats)
-        except (RuntimeError, TypeError):
-            pass
         poller.stop(wait=wait)
         if poller.isRunning():
-            # Keep a reference until the thread really finishes to avoid "Destroyed while thread is running"
             self._old_pollers.append(poller)
             poller.finished.connect(self._reap_pollers)
+
+    def _stop_poller(self, wait: bool = False) -> None:
+        """Legacy helper: stops all pollers."""
+        for clean in list(self.stats_pollers.keys()):
+            self._stop_poller_for(clean, wait=wait)
 
     @Slot()
     def _reap_pollers(self) -> None:
         self._old_pollers = [p for p in self._old_pollers if p.isRunning()]
 
-    @Slot()
-    def _on_connection_lost(self) -> None:
-        logger.warning("Lost connection to the rclone RC API.")
+    def _on_connection_lost(self, remote_name: str) -> None:
+        logger.warning("Lost connection to the rclone RC API for '%s'.", remote_name)
+        notify_connection_lost(remote_name, fallback_tray=self.tray)
 
     def _cleanup_threads(self) -> None:
         """Stops all background worker threads cleanly."""
         if self._threads_cleaned:
             return
         self._threads_cleaned = True
-        self._stop_poller(wait=True)
+        for clean in list(self.stats_pollers.keys()):
+            self._stop_poller_for(clean, wait=True)
         for poller in self._old_pollers:
             poller.wait(2000)
+        if self._update_worker is not None and self._update_worker.isRunning():
+            self._update_worker.wait(1000)
         self.tray.status_popup.shutdown_workers()
         self.tray.shutdown_workers()
-        # Make sure the sidebar cleanup queued by the final 'stopped' state really finished
         self.runner.wait_all()
 
     def shutdown(self) -> None:
-        """Graceful shutdown: unmount and exit."""
+        """Graceful shutdown: unmount all mounts and exit."""
         if self._is_shutting_down:
             return
         self._is_shutting_down = True
         logger.info("Shutting down application...")
-        self._stop_poller(wait=True)
-        self.daemon.stop()  # Blocking on purpose (exiting); queues clean_integration via the state signal
+        for clean in list(self.stats_pollers.keys()):
+            self._stop_poller_for(clean, wait=True)
+        for d in self.daemons.values():
+            if d.is_running():
+                d.stop()
         self._cleanup_threads()
         self.app.quit()
 
@@ -234,15 +370,12 @@ def main() -> None:
     apply_app_theme(str(cfg.get("theme") or "auto"))
     _sync_autostart(bool(cfg.get("autostart", True)))
 
-
     # 1. Enforce Single Instance via QLockFile
     lock_dir = CONFIG_DIR
     os.makedirs(lock_dir, exist_ok=True)
     lock_file_path = os.path.join(lock_dir, "app.lock")
-    
-    # Retain lock_file reference in main scope
+
     lock_file = QLockFile(lock_file_path)
-    # Default stale lock time is 30s; avoid 0 to safely recover from hard reboots/crashes
     lock_file.setStaleLockTime(30000)
     if not lock_file.tryLock(100):
         QMessageBox.critical(
@@ -252,39 +385,37 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # 2. System Tray Availability Check (with retry loop up to 30s during desktop startup)
+    # 2. System Tray Availability Check (Fast check with fallback to Window Mode for GNOME/Wayland)
     tray_available = False
-    for _ in range(60):
+    for _ in range(5):
         if QSystemTrayIcon.isSystemTrayAvailable():
             tray_available = True
             break
-        time.sleep(0.5)
+        time.sleep(0.2)
         app.processEvents()
 
     if not tray_available:
-        QMessageBox.critical(
-            None,
-            tr("Bandeja do Sistema Não Encontrada"),
-            tr("A bandeja do sistema não está disponível. Verifique se há um ambiente de desktop em execução.")
-        )
-        sys.exit(1)
+        logger.info("System tray is not available. DucksDrive will open in Window Mode (GNOME Wayland/Vanilla compatible).")
 
     # 3. Version Check
     version = get_rclone_version()
     if not version:
-        QMessageBox.critical(None, tr("Rclone Não Encontrado"), 
+        QMessageBox.critical(None, tr("Rclone Não Encontrado"),
                              tr("O Rclone não está instalado ou não foi encontrado no PATH."))
         sys.exit(1)
 
     if version < REQUIRED_RCLONE_VERSION:
         v_str = ".".join(map(str, version))
         req_str = ".".join(map(str, REQUIRED_RCLONE_VERSION))
-        QMessageBox.warning(None, tr("Rclone Desatualizado"), 
+        QMessageBox.warning(None, tr("Rclone Desatualizado"),
                             tr("Detectado Rclone v%s.\nA versão v%s ou superior é recomendada.") % (v_str, req_str))
 
     # 4. Initialize Controller
-    controller = RcloneAppController(app)
+    controller = RcloneAppController(app, tray_available=tray_available)
     controller.run()
+
+    # 5. Execute Loop
+    sys.exit(app.exec())
 
     # 5. Execute Loop
     sys.exit(app.exec())

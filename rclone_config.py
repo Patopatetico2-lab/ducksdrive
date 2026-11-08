@@ -357,7 +357,7 @@ class RemoteCreationThread(QThread):
                         timed_out = True
                         self._process.kill()
                         break
-                    
+
                     ready, _, _ = select.select([fd], [], [], 1.0)
                     if ready:
                         try:
@@ -379,7 +379,7 @@ class RemoteCreationThread(QThread):
                             pass
                     elif self._process.poll() is not None:
                         break
-                        
+
                 self._process.stdout.close()
 
             try:

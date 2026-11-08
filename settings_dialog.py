@@ -68,7 +68,7 @@ class SettingsDialog(QDialog):
         self.theme_changed = False
         self.setWindowTitle(tr("Configurações do DucksDrive"))
         self.setMinimumWidth(520)
-        
+
         self.config = load_config()
         self._init_ui()
         self._load_values()
@@ -143,7 +143,7 @@ class SettingsDialog(QDialog):
         # 3. Grupo Geral / Sistema
         sys_group = QGroupBox(tr("Integração com o Sistema"))
         sys_layout = QVBoxLayout(sys_group)
-        
+
         self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
         sys_layout.addWidget(self.autostart_checkbox)
 
@@ -161,6 +161,22 @@ class SettingsDialog(QDialog):
         self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         lang_layout.addRow(tr("Tema do Painel:"), self.theme_combo)
         sys_layout.addLayout(lang_layout)
+
+        # Diagnostic & Maintenance tools row
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(10)
+
+        self.btn_check_update = QPushButton(tr("Verificar Atualizações"))
+        self.btn_check_update.clicked.connect(self._on_check_updates)
+        self.btn_check_update.setStyleSheet("padding: 5px 12px; font-weight: bold;")
+        tools_row.addWidget(self.btn_check_update)
+
+        self.btn_view_logs = QPushButton(tr("Ver Logs de Diagnóstico"))
+        self.btn_view_logs.clicked.connect(self._on_view_logs)
+        self.btn_view_logs.setStyleSheet("padding: 5px 12px; font-weight: bold;")
+        tools_row.addWidget(self.btn_view_logs)
+
+        sys_layout.addLayout(tools_row)
 
         main_layout.addWidget(sys_group)
 
@@ -271,6 +287,57 @@ class SettingsDialog(QDialog):
         """Restores the previously saved theme if the user cancels the dialog."""
         apply_app_theme(str(self.config.get("theme") or "auto"))
         super().reject()
+
+    def _on_check_updates(self) -> None:
+        """Runs update check in background worker without freezing dialog."""
+        from updater import APP_VERSION, UpdateCheckWorker
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        self.btn_check_update.setEnabled(False)
+        self.btn_check_update.setText(tr("Verificando..."))
+
+        self._update_worker = UpdateCheckWorker(force=True, parent=self)
+
+        def _on_finished(has_update: bool, latest_ver: str, url: str, notes: str) -> None:
+            self.btn_check_update.setEnabled(True)
+            self.btn_check_update.setText(tr("Verificar Atualizações"))
+            if has_update:
+                res = QMessageBox.question(
+                    self,
+                    tr("Atualização Disponível"),
+                    tr("Uma nova versão do DucksDrive (%s) está disponível.\nSua versão atual é v%s.\n\nDeseja abrir a página de download agora?")
+                    % (latest_ver, APP_VERSION),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if res == QMessageBox.StandardButton.Yes:
+                    QDesktopServices.openUrl(QUrl(url))
+            else:
+                QMessageBox.information(
+                    self,
+                    tr("Atualização"),
+                    tr("Você está usando a versão mais recente (v%s).") % APP_VERSION,
+                )
+
+        def _on_failed(err_msg: str) -> None:
+            self.btn_check_update.setEnabled(True)
+            self.btn_check_update.setText(tr("Verificar Atualizações"))
+            QMessageBox.warning(
+                self,
+                tr("Atualização"),
+                tr("Não foi possível verificar atualizações no momento."),
+            )
+
+        self._update_worker.check_finished.connect(_on_finished)
+        self._update_worker.check_failed.connect(_on_failed)
+        self._update_worker.start()
+
+    def _on_view_logs(self) -> None:
+        """Opens diagnostic log viewer dialog."""
+        from log_viewer import LogViewerDialog
+        dialog = LogViewerDialog(parent=self)
+        dialog.exec()
 
     def _refresh_cache_usage(self) -> None:
         """Asynchronously calculates local VFS cache usage in a background thread."""

@@ -109,7 +109,7 @@ O DucksDrive é modular e orquestrado em Python puro com PySide6 (Qt6), dividind
 ### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
 Instalação direta em 1 comando via Pacman:
 ```bash
-curl -Lo /tmp/ducksdrive-1.0.8-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.8/ducksdrive-1.0.8-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.0.8-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.0.8-1-any.pkg.tar.zst
+curl -Lo /tmp/ducksdrive-1.0.9-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.9/ducksdrive-1.0.9-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.0.9-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.0.9-1-any.pkg.tar.zst
 ```
 Ou compilando direto do repositório com `makepkg`:
 ```bash
@@ -119,7 +119,7 @@ git clone https://github.com/Patopatetico2-lab/ducksdrive.git && cd ducksdrive &
 ### Debian / Ubuntu / Linux Mint / Zorin OS (Nativo via .deb)
 Instalação direta em 1 comando via `apt`:
 ```bash
-curl -Lo /tmp/ducksdrive_1.0.8-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.8/ducksdrive_1.0.8-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.0.8-1_all.deb && rm -f /tmp/ducksdrive_1.0.8-1_all.deb
+curl -Lo /tmp/ducksdrive_1.0.9-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.9/ducksdrive_1.0.9-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.0.9-1_all.deb && rm -f /tmp/ducksdrive_1.0.9-1_all.deb
 ```
 
 ### Pelo script (instala no sistema)
@@ -134,7 +134,7 @@ O script detecta se a distro usa `apt` (Debian/Ubuntu), `pacman` (Arch), `dnf` (
 ### Pelo Flatpak
 Baixe o `ducksdrive.flatpak` da aba de [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases) e instale (o rclone já vem junto; o runtime `org.kde.Platform 6.8` é baixado do Flathub automaticamente):
 ```bash
-curl -Lo /tmp/ducksdrive.flatpak https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.8/ducksdrive.flatpak && flatpak install --user -y /tmp/ducksdrive.flatpak && rm -f /tmp/ducksdrive.flatpak
+curl -Lo /tmp/ducksdrive.flatpak https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.9/ducksdrive.flatpak && flatpak install --user -y /tmp/ducksdrive.flatpak && rm -f /tmp/ducksdrive.flatpak
 ```
 > Para montar via FUSE e criar os atalhos no gerenciador de arquivos, o Flatpak precisa de acesso amplo ao sistema (`--filesystem=host` e `--device=all`).
 

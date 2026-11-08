@@ -37,13 +37,13 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py "$INSTALL_DIR/"
+cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py "$INSTALL_DIR/"
 [ -f icon.svg ] && cp icon.svg "$INSTALL_DIR/"
 
 python3 -m venv "$INSTALL_DIR/venv"
 source "$INSTALL_DIR/venv/bin/activate"
 pip install --upgrade pip
-pip install "PySide6>=6.6,<7"
+pip install "PySide6>=6.6,<7" requests
 deactivate
 
 mkdir -p "$BIN_DIR"
