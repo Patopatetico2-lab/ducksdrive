@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.1.0"
 GITHUB_REPO = "Patopatetico2-lab/ducksdrive"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_WEB_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"

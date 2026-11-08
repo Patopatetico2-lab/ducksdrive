@@ -77,6 +77,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.0" date="2026-11-08">
+      <description>
+        <p>Security and performance hardening: dedicated per-remote Unix Domain Sockets with cryptographically random session authentication replacing open TCP ports, systemd/logind delay inhibitor lock preventing system shutdown and sleep while VFS writeback uploads are pending, Linux desktop Secret Service / Keyring integration for encrypted rclone configs via --password-command, real-time VFS SSD cache meter with 1-click inactive cache cleaner (vfs/forget), on-the-fly bandwidth limit dropdown selector, and multi-format release packaging pipeline (.deb, .pkg.tar.zst, AppImage, Flatpak).</p>
+      </description>
+    </release>
     <release version="1.0.9" date="2026-11-08">
       <description>
         <p>Simultaneous multi-cloud mounting (Multi-Mount) with per-remote daemons and dynamic RC ports, integrated real-time diagnostic log viewer with log-level filtering and clipboard export, per-remote custom mount paths and flags (including --drive-shared-with-me and read-only overrides), native desktop notifications via D-Bus and notify-send, GNOME Wayland fallback Window Mode, automated CI and Debian package generation.</p>

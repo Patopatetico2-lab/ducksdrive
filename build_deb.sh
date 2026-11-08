@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PKG_NAME="ducksdrive"
-PKG_VER="1.0.9"
+PKG_VER="1.1.0"
 PKG_REL="1"
 DEB_FILE="${PKG_NAME}_${PKG_VER}-${PKG_REL}_all.deb"
 WORK_DIR="$(mktemp -d)"
@@ -20,7 +20,7 @@ mkdir -p "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "$ROOT_DIR/usr/share/doc/$PKG_NAME"
 mkdir -p "$CTRL_DIR"
 
-install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py -t "$ROOT_DIR/usr/share/$PKG_NAME/"
+install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py vfs_inhibitor.py keyring_manager.py -t "$ROOT_DIR/usr/share/$PKG_NAME/"
 install -Dm644 ./icon.svg "$ROOT_DIR/usr/share/$PKG_NAME/icon.svg"
 install -Dm644 ./icon.svg "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps/$PKG_NAME.svg"
 install -Dm644 ./LICENSE "$ROOT_DIR/usr/share/doc/$PKG_NAME/copyright"

@@ -48,7 +48,14 @@ from PySide6.QtWidgets import (
 from rclone_config import TaskRunner
 from rclone_daemon import RcloneDaemon, is_path_mounted
 from rclone_settings import is_dark_theme_active
-from rclone_stats import StatsData, format_bytes, rc_vfs_refresh, set_rc_bwlimit
+from rclone_stats import (
+    StatsData,
+    format_bytes,
+    rc_request,
+    rc_vfs_forget,
+    rc_vfs_refresh,
+    set_rc_bwlimit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,43 +160,28 @@ class QuotaWorkerThread(QThread):
         self.remote_name = remote_name
 
     def run(self) -> None:
-        import json
-        import urllib.request
-        import base64
         import time
 
         try:
             creds = self.credentials
-            auth_str = f"{creds.user}:{creds.password}"
-            b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-            headers = {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
-
-            endpoint_about = f"{creds.url}/operations/about"
             fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
-            req_about = urllib.request.Request(
-                url=endpoint_about,
-                data=json.dumps({"fs": fs_arg}).encode("utf-8"),
-                headers=headers,
-                method="POST"
-            )
 
             # Up to 2 retries (3 total attempts) with a short delay on transient failures
             for attempt in range(3):
                 try:
-                    with urllib.request.urlopen(req_about, timeout=8) as response:
-                        data = json.loads(response.read().decode("utf-8"))
+                    status, data = rc_request(creds, "/operations/about", {"fs": fs_arg}, timeout=8.0)
+                    if status == 200 and isinstance(data, dict):
                         total = int(data.get("total") or 0)
                         used = int(data.get("used") or 0)
-
-                    if (data.get("total") is not None or data.get("used") is not None) and (total >= 0 and used >= 0):
-                        self.quota_fetched.emit(total, used)
-                        return
-                    else:
-                        break
+                        if (data.get("total") is not None or data.get("used") is not None) and (total >= 0 and used >= 0):
+                            self.quota_fetched.emit(total, used)
+                            return
+                        else:
+                            break
                 except Exception as attempt_err:
                     logger.debug("Quota attempt %d/3 failed: %s", attempt + 1, attempt_err)
-                    if attempt < 2:
-                        time.sleep(1.5)
+                if attempt < 2:
+                    time.sleep(1.5)
 
             self.quota_failed.emit()
         except Exception as e:
@@ -524,6 +516,65 @@ class StatusPopup(QWidget):
         self.btn_pause.clicked.connect(self._toggle_pause)
         main_layout.addWidget(self.btn_pause)
 
+        # Inhibitor Warning Banner (Shutdown Protection)
+        self.lbl_inhibitor_banner = QLabel(tr("⚠️ Desligamento Adiado: Gravando arquivos na nuvem"))
+        self.lbl_inhibitor_banner.setWordWrap(True)
+        self.lbl_inhibitor_banner.setAlignment(Qt.AlignCenter)
+        self.lbl_inhibitor_banner.setStyleSheet("""
+            QLabel {
+                background-color: #d35400;
+                color: white;
+                font-weight: bold;
+                font-size: 8.5pt;
+                padding: 5px 8px;
+                border-radius: 5px;
+            }
+        """)
+        self.lbl_inhibitor_banner.hide()
+        main_layout.addWidget(self.lbl_inhibitor_banner)
+
+        # Dynamic Bandwidth Selector Row
+        self.bw_layout = QHBoxLayout()
+        self.bw_layout.setContentsMargins(0, 0, 0, 0)
+        self.bw_layout.setSpacing(6)
+
+        self.lbl_bw = QLabel(tr("Banda:"))
+        self.lbl_bw.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #7f8c8d;")
+        self.bw_layout.addWidget(self.lbl_bw)
+
+        self.combo_bwlimit = QComboBox()
+        self.combo_bwlimit.setFixedHeight(24)
+        self.combo_bwlimit.addItem(tr("Ilimitado"), "off")
+        self.combo_bwlimit.addItem("1 MB/s", "1M")
+        self.combo_bwlimit.addItem("2 MB/s", "2M")
+        self.combo_bwlimit.addItem("5 MB/s", "5M")
+        self.combo_bwlimit.addItem("10 MB/s", "10M")
+        self.combo_bwlimit.addItem("25 MB/s", "25M")
+        self.combo_bwlimit.addItem("50 MB/s", "50M")
+        self.combo_bwlimit.currentIndexChanged.connect(self._on_quick_bwlimit_changed)
+        self.bw_layout.addWidget(self.combo_bwlimit, 1)
+        main_layout.addLayout(self.bw_layout)
+
+        # VFS Queue & SSD Cache row with Inactive Cache Cleaner
+        self.vfs_layout = QHBoxLayout()
+        self.vfs_layout.setContentsMargins(0, 0, 0, 0)
+        self.vfs_layout.setSpacing(6)
+
+        self.lbl_vfs_title = QLabel(tr("VFS SSD:"))
+        self.lbl_vfs_title.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #7f8c8d;")
+        self.vfs_layout.addWidget(self.lbl_vfs_title)
+
+        self.lbl_vfs_info = QLabel(tr("0 B no SSD • 0 na fila"))
+        self.lbl_vfs_info.setStyleSheet("font-size: 8.5pt; color: #2980b9;")
+        self.vfs_layout.addWidget(self.lbl_vfs_info, 1)
+
+        self.btn_clear_inactive = QPushButton(tr("Limpar Inativo"))
+        self.btn_clear_inactive.setToolTip(tr("Descartar metadados e arquivos inativos da memória/cache (vfs/forget)"))
+        self.btn_clear_inactive.setFixedHeight(22)
+        self.btn_clear_inactive.clicked.connect(self._on_clear_inactive_vfs)
+        self.vfs_layout.addWidget(self.btn_clear_inactive)
+        main_layout.addLayout(self.vfs_layout)
+
         # Separator line
         self.sep_line = QFrame()
         self.sep_line.setFrameShape(QFrame.HLine)
@@ -721,6 +772,41 @@ class StatusPopup(QWidget):
                 color: {combo_fg};
             }}
         """)
+        self.combo_bwlimit.setStyleSheet(f"""
+            QComboBox {{
+                border: 1px solid {combo_border};
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-size: 8.5pt;
+                font-weight: bold;
+                background-color: {combo_bg};
+                color: {combo_fg};
+            }}
+        """)
+        btn_clear_bg = "#3a4048" if self.is_dark else "#ecf0f1"
+        btn_clear_fg = "#eff0f1" if self.is_dark else "#2c3e50"
+        self.btn_clear_inactive.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {btn_clear_bg};
+                color: {btn_clear_fg};
+                border: 1px solid {combo_border};
+                border-radius: 4px;
+                font-size: 8pt;
+                font-weight: bold;
+                padding: 2px 6px;
+            }}
+            QPushButton:hover {{
+                background-color: #e67e22;
+                color: white;
+            }}
+            QPushButton:disabled {{
+                background-color: {bar_bg};
+                color: {muted};
+            }}
+        """)
+        self.lbl_bw.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
+        self.lbl_vfs_title.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
+        self.lbl_vfs_info.setStyleSheet(f"font-size: 8.5pt; color: {speed_col};")
         self._apply_pause_button_ui()
         self.chart_widget.is_dark = self.is_dark
         if self.isVisible():
@@ -754,6 +840,10 @@ class StatusPopup(QWidget):
             self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
         self.lbl_cloud.setText(tr("Nuvem:"))
+        self.lbl_bw.setText(tr("Banda:"))
+        self.lbl_vfs_title.setText(tr("VFS SSD:"))
+        self.btn_clear_inactive.setText(tr("Limpar Inativo"))
+        self.btn_clear_inactive.setToolTip(tr("Descartar metadados e arquivos inativos da memória/cache (vfs/forget)"))
         self.update_mounted_remotes()
         self._apply_pause_button_ui()
         self.empty_label.setText(tr("Nenhum arquivo sendo transferido"))
@@ -833,6 +923,17 @@ class StatusPopup(QWidget):
             if selected in self._remote_stats:
                 self._latest_stats = self._remote_stats[selected]
                 self._render_stats(self._latest_stats)
+            from rclone_settings import get_remote_config, load_config
+            clean_sel = selected.rstrip(":")
+            rem_cfg = get_remote_config(clean_sel) if clean_sel else {}
+            bw_limit = str(rem_cfg.get("bwlimit") or load_config().get("bwlimit") or "off")
+            idx = self.combo_bwlimit.findData(bw_limit)
+            self.combo_bwlimit.blockSignals(True)
+            if idx >= 0:
+                self.combo_bwlimit.setCurrentIndex(idx)
+            else:
+                self.combo_bwlimit.setCurrentIndex(0)
+            self.combo_bwlimit.blockSignals(False)
             self._fetch_quota()
 
     def update_stats_for_remote(self, remote_name: str, stats: StatsData) -> None:
@@ -1177,6 +1278,13 @@ class StatusPopup(QWidget):
             if self.isVisible() and self._last_quota_update == 0:
                 self._fetch_quota()
 
+            self.combo_bwlimit.setEnabled(True)
+            self.btn_clear_inactive.setEnabled(True)
+            vfs_cache_bytes = getattr(stats, "vfs_disk_cache_bytes", 0)
+            cache_str = format_bytes(vfs_cache_bytes)
+            q_str = tr("%d na fila") % stats.vfs_queue_count if stats.vfs_queue_count > 0 else tr("0 na fila")
+            self.lbl_vfs_info.setText(f"{cache_str} • {q_str}")
+
             if stats.active_transfers:
                 self.empty_label.hide()
                 # Remove any leftover recent transfer widgets while active transfers are running
@@ -1258,6 +1366,10 @@ class StatusPopup(QWidget):
             self.quota_bar.setValue(0)
             self.quota_bar.hide()
             self._last_quota_update = 0
+            self.combo_bwlimit.setEnabled(False)
+            self.btn_clear_inactive.setEnabled(False)
+            self.lbl_vfs_info.setText(tr("Desconectado"))
+            self.lbl_inhibitor_banner.hide()
             clear_transfers()
 
         self._apply_pause_button_ui()
@@ -1282,6 +1394,46 @@ class StatusPopup(QWidget):
                     self.btn_refresh.setText(tr("Atualizar"))
 
         self._pause_runner.submit(rc_vfs_refresh, creds, callback=_done)
+
+    def _on_quick_bwlimit_changed(self, index: int) -> None:
+        """Dynamically applies the chosen bandwidth limit to the active remote daemon via RC core/bwlimit."""
+        rate = str(self.combo_bwlimit.currentData() or "off")
+        active_daemon = self.get_active_daemon()
+        if not active_daemon or not active_daemon.is_running() or not active_daemon.rc_credentials:
+            return
+        creds = active_daemon.rc_credentials
+        self._pause_runner.submit(set_rc_bwlimit, creds, rate)
+
+    def _on_clear_inactive_vfs(self) -> None:
+        """Sends POST /vfs/forget via RC to free inactive cached directories/files without unmounting."""
+        active_daemon = self.get_active_daemon()
+        if not active_daemon or not active_daemon.is_running() or not active_daemon.rc_credentials:
+            return
+        creds = active_daemon.rc_credentials
+        self.btn_clear_inactive.setEnabled(False)
+        self.btn_clear_inactive.setText(tr("Limpando..."))
+
+        def _done(ok: bool) -> None:
+            active_d = self.get_active_daemon()
+            if active_d and active_d.is_running():
+                self.btn_clear_inactive.setEnabled(True)
+                if ok:
+                    self.btn_clear_inactive.setText(tr("✓ Limpo"))
+                    QTimer.singleShot(2000, lambda: self.btn_clear_inactive.setText(tr("Limpar Inativo")))
+                else:
+                    self.btn_clear_inactive.setText(tr("Limpar Inativo"))
+
+        self._pause_runner.submit(rc_vfs_forget, creds, callback=_done)
+
+    def set_inhibitor_active(self, is_locked: bool, pending_count: int = 0) -> None:
+        """Displays or hides the system shutdown delay warning banner."""
+        if is_locked and pending_count > 0:
+            self.lbl_inhibitor_banner.setText(
+                tr("⚠️ Desligamento Adiado: %d arquivo(s) gravando na nuvem") % pending_count
+            )
+            self.lbl_inhibitor_banner.show()
+        else:
+            self.lbl_inhibitor_banner.hide()
 
     def _open_cloud_folder(self) -> None:
         """Opens the mount point in the file manager using QDesktopServices and closes popup."""

@@ -161,3 +161,13 @@ def notify_mount_success(
     title = tr("Drive Conectado")
     msg = tr("O drive '%s' foi montado em %s.") % (clean_name, mount_point)
     return send_desktop_notification(title, msg, urgency="normal", fallback_tray=fallback_tray)
+
+
+def notify_info(title: str, message: str, fallback_tray: Optional[Any] = None) -> bool:
+    """Dispatches a standard informational desktop notification."""
+    return send_desktop_notification(title, message, urgency="normal", fallback_tray=fallback_tray)
+
+
+def notify_warning(title: str, message: str, fallback_tray: Optional[Any] = None) -> bool:
+    """Dispatches a warning desktop notification."""
+    return send_desktop_notification(title, message, urgency="normal", fallback_tray=fallback_tray)

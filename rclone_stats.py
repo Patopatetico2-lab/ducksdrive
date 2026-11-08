@@ -12,8 +12,10 @@ remaining time ETA in HH:MM:SS, and descriptive status text.
 
 import base64
 from collections import deque
+import http.client
 import json
 import logging
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -47,6 +49,7 @@ class StatsData:
     active_transfers: List[Dict[str, Any]] = field(default_factory=list)
     recent_transfers: List[Dict[str, Any]] = field(default_factory=list)
     vfs_queue_count: int = 0
+    vfs_disk_cache_bytes: int = 0
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -102,10 +105,84 @@ def _get_auth_header(creds: RCCredentials) -> str:
     return f"Basic {b64_auth}"
 
 
+class UnixHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection over a local Unix domain socket."""
+
+    def __init__(self, socket_path: str, timeout: float = 5.0) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = socket_path
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def rc_request(
+    creds: RCCredentials,
+    endpoint: str,
+    data: Optional[Dict[str, Any]] = None,
+    timeout: float = 4.0,
+) -> tuple[int, Dict[str, Any]]:
+    """
+    Performs an authenticated POST request against the Rclone RC API.
+    Routes via local Unix domain socket if creds.socket_path is set,
+    or via TCP HTTP (localhost:port) otherwise.
+
+    Returns:
+        tuple[int, Dict[str, Any]]: HTTP status code (200, 401, etc., or 0 on error) and parsed JSON.
+    """
+    payload = json.dumps(data or {}).encode("utf-8")
+    headers = {
+        "Authorization": _get_auth_header(creds),
+        "Content-Type": "application/json",
+    }
+    path = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+
+    try:
+        if creds.socket_path:
+            conn = UnixHTTPConnection(creds.socket_path, timeout=timeout)
+            try:
+                conn.request("POST", path, body=payload, headers=headers)
+                resp = conn.getresponse()
+                resp_bytes = resp.read()
+                try:
+                    res_json = json.loads(resp_bytes.decode("utf-8")) if resp_bytes else {}
+                except Exception:
+                    res_json = {}
+                return resp.status, res_json
+            finally:
+                conn.close()
+        else:
+            req = urllib.request.Request(
+                url=f"{creds.url}{path}",
+                data=payload,
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                resp_bytes = response.read()
+                try:
+                    res_json = json.loads(resp_bytes.decode("utf-8")) if resp_bytes else {}
+                except Exception:
+                    res_json = {}
+                return response.status, res_json
+    except urllib.error.HTTPError as http_err:
+        try:
+            err_body = http_err.read().decode("utf-8")
+            err_json = json.loads(err_body)
+        except Exception:
+            err_json = {}
+        logger.debug("RC HTTPError %d on %s: %s", http_err.code, path, http_err)
+        return http_err.code, err_json
+    except Exception as exc:
+        logger.debug("RC request error on %s: %s", path, exc)
+        return 0, {}
+
+
 def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
     """
-    Executes a single HTTP POST query to `http://<host>:<port>/core/stats`
-    using HTTP Basic Auth.
+    Executes a telemetry query against `/core/stats` via RC.
 
     Args:
         creds: In-memory credentials for the Rclone RC API.
@@ -114,79 +191,55 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
     Returns:
         StatsData: Parsed telemetry snapshot.
     """
-    endpoint = f"{creds.url}/core/stats"
+    status, data = rc_request(creds, "/core/stats", timeout=timeout)
+    if status == 200 and isinstance(data, dict):
+        speed_bytes = float(data.get("speed", 0.0))
+        speed_mb_s = speed_bytes / (1024.0 * 1024.0)
+        speed_str = f"{speed_mb_s:.2f} MB/s"
 
-    req = urllib.request.Request(
-        url=endpoint,
-        data=b"{}",
-        headers={
-            "Authorization": _get_auth_header(creds),
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+        raw_eta = data.get("eta")
+        eta_seconds = int(raw_eta) if raw_eta is not None else None
+        eta_str = format_eta(eta_seconds)
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            if response.status == 200:
-                raw_json = response.read().decode("utf-8")
-                data: Dict[str, Any] = json.loads(raw_json)
+        transfers = int(data.get("transfers", 0))
+        active_transfers = data.get("transferring") or []
+        total_bytes = int(data.get("bytes", 0))
+        errors = int(data.get("errors", 0))
 
-                speed_bytes = float(data.get("speed", 0.0))
-                speed_mb_s = speed_bytes / (1024.0 * 1024.0)
-                speed_str = f"{speed_mb_s:.2f} MB/s"
+        # Determine high-level descriptive status
+        if len(active_transfers) > 0:
+            status_text = tr("Sincronizando (%d ativo(s)) • %s • ETA %s") % (
+                len(active_transfers),
+                speed_str,
+                eta_str,
+            )
+        elif errors > 0:
+            status_text = tr("Ocioso com %d erro(s)") % errors
+        else:
+            status_text = tr("Sincronizado / Ocioso")
 
-                raw_eta = data.get("eta")
-                eta_seconds = int(raw_eta) if raw_eta is not None else None
-                eta_str = format_eta(eta_seconds)
-
-                transfers = int(data.get("transfers", 0))
-                active_transfers = data.get("transferring") or []
-                total_bytes = int(data.get("bytes", 0))
-                errors = int(data.get("errors", 0))
-
-                # Determine high-level descriptive status
-                if len(active_transfers) > 0:
-                    status_text = tr("Sincronizando (%d ativo(s)) • %s • ETA %s") % (
-                        len(active_transfers),
-                        speed_str,
-                        eta_str,
-                    )
-                elif errors > 0:
-                    status_text = tr("Ocioso com %d erro(s)") % errors
-                else:
-                    status_text = tr("Sincronizado / Ocioso")
-
-                return StatsData(
-                    is_online=True,
-                    speed_bytes_per_sec=speed_bytes,
-                    speed_mb_s=speed_mb_s,
-                    speed_str=speed_str,
-                    eta_seconds=eta_seconds,
-                    eta_str=eta_str,
-                    transfers_count=transfers,
-                    total_bytes_transferred=total_bytes,
-                    total_bytes_str=format_bytes(total_bytes),
-                    errors_count=errors,
-                    status_text=status_text,
-                    active_transfers=active_transfers,
-                    raw_data=data,
-                )
-
-    except urllib.error.HTTPError as http_err:
-        logger.debug("HTTP error polling rclone stats: %s", http_err)
-    except urllib.error.URLError as url_err:
-        logger.debug("Connection error polling rclone stats: %s", url_err)
-    except Exception as exc:
-        logger.debug("Unexpected error polling rclone stats: %s", exc)
+        return StatsData(
+            is_online=True,
+            speed_bytes_per_sec=speed_bytes,
+            speed_mb_s=speed_mb_s,
+            speed_str=speed_str,
+            eta_seconds=eta_seconds,
+            eta_str=eta_str,
+            transfers_count=transfers,
+            total_bytes_transferred=total_bytes,
+            total_bytes_str=format_bytes(total_bytes),
+            errors_count=errors,
+            status_text=status_text,
+            active_transfers=active_transfers,
+            raw_data=data,
+        )
 
     return StatsData(is_online=False, status_text=tr("Drive não conectado"))
 
 
 def fetch_rclone_transferred(creds: RCCredentials, timeout: float = 2.0) -> List[Dict[str, Any]]:
     """
-    Executes a single HTTP POST query to `http://<host>:<port>/core/transferred`
-    using HTTP Basic Auth.
+    Executes a query to `/core/transferred` via RC.
 
     Args:
         creds: In-memory credentials for the Rclone RC API.
@@ -195,24 +248,9 @@ def fetch_rclone_transferred(creds: RCCredentials, timeout: float = 2.0) -> List
     Returns:
         List[Dict[str, Any]]: List of completed transfer items.
     """
-    endpoint = f"{creds.url}/core/transferred"
-    req = urllib.request.Request(
-        url=endpoint,
-        data=b"{}",
-        headers={
-            "Authorization": _get_auth_header(creds),
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            if response.status == 200:
-                raw_json = response.read().decode("utf-8")
-                data: Dict[str, Any] = json.loads(raw_json)
-                return data.get("transferred") or []
-    except Exception as exc:
-        logger.debug("Error querying rclone /core/transferred: %s", exc)
+    status, data = rc_request(creds, "/core/transferred", timeout=timeout)
+    if status == 200 and isinstance(data, dict):
+        return data.get("transferred") or []
     return []
 
 
@@ -224,42 +262,45 @@ def fetch_vfs_queue(creds: RCCredentials, timeout: float = 2.0) -> Optional[int]
 
     Blocking call: run it outside the GUI thread.
     """
-    headers = {
-        "Authorization": _get_auth_header(creds),
-        "Content-Type": "application/json",
-    }
-    req_stats = urllib.request.Request(
-        url=f"{creds.url}/vfs/stats",
-        data=b"{}",
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req_stats, timeout=timeout) as response:
-            if response.status == 200:
-                data: Dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                disk_cache = data.get("diskCache")
-                if isinstance(disk_cache, dict):
-                    in_prog = int(disk_cache.get("uploadsInProgress") or 0)
-                    queued = int(disk_cache.get("uploadsQueued") or 0)
-                    return in_prog + queued
-    except Exception as exc:
-        logger.debug("Could not query vfs/stats: %s", exc)
+    status, data = rc_request(creds, "/vfs/stats", timeout=timeout)
+    if status == 200 and isinstance(data, dict):
+        disk_cache = data.get("diskCache")
+        if isinstance(disk_cache, dict):
+            in_prog = int(disk_cache.get("uploadsInProgress") or 0)
+            queued = int(disk_cache.get("uploadsQueued") or 0)
+            return in_prog + queued
 
-    req_queue = urllib.request.Request(
-        url=f"{creds.url}/vfs/queue",
-        data=b"{}",
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req_queue, timeout=timeout) as response:
-            if response.status == 200:
-                data = json.loads(response.read().decode("utf-8"))
-                return len(data.get("queue") or [])
-    except Exception as exc:
-        logger.debug("Could not query vfs/queue: %s", exc)
+    status_q, data_q = rc_request(creds, "/vfs/queue", timeout=timeout)
+    if status_q == 200 and isinstance(data_q, dict):
+        return len(data_q.get("queue") or [])
+
     return None
+
+
+def fetch_vfs_stats(creds: RCCredentials, timeout: float = 2.0) -> Dict[str, Any]:
+    """
+    Queries `/vfs/stats` via RC and returns detailed diskCache and queue metadata:
+    - uploadsInProgress (int)
+    - uploadsQueued (int)
+    - bytesUsed (int)
+    - totalBytes (int)
+    """
+    status, data = rc_request(creds, "/vfs/stats", timeout=timeout)
+    result = {
+        "uploadsInProgress": 0,
+        "uploadsQueued": 0,
+        "bytesUsed": 0,
+        "totalBytes": 0,
+        "raw": data if status == 200 else {},
+    }
+    if status == 200 and isinstance(data, dict):
+        disk_cache = data.get("diskCache")
+        if isinstance(disk_cache, dict):
+            result["uploadsInProgress"] = int(disk_cache.get("uploadsInProgress") or 0)
+            result["uploadsQueued"] = int(disk_cache.get("uploadsQueued") or 0)
+            result["bytesUsed"] = int(disk_cache.get("bytesUsed") or 0)
+            result["totalBytes"] = int(disk_cache.get("totalBytes") or 0)
+    return result
 
 
 def rc_vfs_refresh(creds: RCCredentials, timeout: float = 15.0) -> bool:
@@ -267,21 +308,17 @@ def rc_vfs_refresh(creds: RCCredentials, timeout: float = 15.0) -> bool:
     Sends a POST request to `/vfs/refresh` via RC to reload the directory cache
     without unmounting. Blocking call: run outside the GUI thread.
     """
-    req = urllib.request.Request(
-        url=f"{creds.url}/vfs/refresh",
-        data=b"{}",
-        headers={
-            "Authorization": _get_auth_header(creds),
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
-    except Exception as exc:
-        logger.debug("Failed to refresh VFS directory cache via RC: %s", exc)
-        return False
+    status, _ = rc_request(creds, "/vfs/refresh", timeout=timeout)
+    return status == 200
+
+
+def rc_vfs_forget(creds: RCCredentials, timeout: float = 5.0) -> bool:
+    """
+    Sends a POST request to `/vfs/forget` via RC to drop unreferenced cached directory
+    and file entries, reclaiming SSD memory immediately without unmounting.
+    """
+    status, _ = rc_request(creds, "/vfs/forget", timeout=timeout)
+    return status == 200
 
 
 def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> bool:
@@ -290,21 +327,8 @@ def set_rc_bwlimit(creds: RCCredentials, rate: str, timeout: float = 5.0) -> boo
 
     Blocking call: run it outside the GUI thread.
     """
-    req = urllib.request.Request(
-        url=f"{creds.url}/core/bwlimit",
-        data=json.dumps({"rate": rate}).encode("utf-8"),
-        headers={
-            "Authorization": _get_auth_header(creds),
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
-    except Exception as exc:
-        logger.debug("Failed to set bwlimit via RC: %s", exc)
-        return False
+    status, _ = rc_request(creds, "/core/bwlimit", {"rate": rate}, timeout=timeout)
+    return status == 200
 
 
 class RcloneStatsPoller(QThread):
@@ -349,6 +373,7 @@ class RcloneStatsPoller(QThread):
         consecutive_failures = 0
         last_valid_stats: Optional[StatsData] = None
         vfs_queue_count = 0
+        vfs_disk_cache_bytes = 0
         last_queue_check = 0.0
         last_listed: Optional[int] = None
 
@@ -376,6 +401,9 @@ class RcloneStatsPoller(QThread):
                     q_len = fetch_vfs_queue(self.credentials, timeout=2.0)
                     if q_len is not None:
                         vfs_queue_count = q_len
+                    vfs_st = fetch_vfs_stats(self.credentials, timeout=2.0)
+                    if vfs_st and "bytesUsed" in vfs_st:
+                        vfs_disk_cache_bytes = int(vfs_st["bytesUsed"])
                     last_queue_check = now
 
                     # Track recently completed file transfers
@@ -399,6 +427,7 @@ class RcloneStatsPoller(QThread):
                         self._seen_transfers_keys.intersection_update(valid_keys)
 
                 stats.vfs_queue_count = vfs_queue_count
+                stats.vfs_disk_cache_bytes = vfs_disk_cache_bytes
                 stats.recent_transfers = list(self._recent_transfers)
                 if len(stats.active_transfers) == 0 and vfs_queue_count > 0:
                     stats.status_text = tr("Sincronizando (%d na fila) • %s • ETA %s") % (

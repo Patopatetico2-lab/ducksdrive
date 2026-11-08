@@ -147,6 +147,16 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
         sys_layout.addWidget(self.autostart_checkbox)
 
+        # Security & Keyring Integration
+        keyring_row = QHBoxLayout()
+        self.keyring_checkbox = QCheckBox(tr("Proteger rclone.conf com o Chaveiro do Sistema (Secret Service / KWallet)"))
+        self.btn_manage_keyring = QPushButton(tr("Configurar Senha..."))
+        self.btn_manage_keyring.setFixedHeight(26)
+        self.btn_manage_keyring.clicked.connect(self._on_manage_keyring)
+        keyring_row.addWidget(self.keyring_checkbox, 1)
+        keyring_row.addWidget(self.btn_manage_keyring)
+        sys_layout.addLayout(keyring_row)
+
         # Language & Theme Selection
         lang_layout = QFormLayout()
         self.lang_combo = QComboBox()
@@ -263,6 +273,14 @@ class SettingsDialog(QDialog):
         if t_idx >= 0:
             self.theme_combo.setCurrentIndex(t_idx)
 
+        from keyring_manager import is_keyring_available
+        keyring_avail = is_keyring_available()
+        self.keyring_checkbox.setChecked(bool(self.config.get("use_system_keyring", False)) and keyring_avail)
+        if not keyring_avail:
+            self.keyring_checkbox.setEnabled(False)
+            self.keyring_checkbox.setToolTip(tr("O utilitário 'secret-tool' não foi encontrado no sistema."))
+            self.btn_manage_keyring.setEnabled(False)
+
     def _on_vfs_mode_changed(self, _index: int = 0) -> None:
         """Disables max VFS cache size spinbox when cache mode is 'off' or 'minimal'."""
         mode = self.vfs_mode_combo.currentData()
@@ -338,6 +356,60 @@ class SettingsDialog(QDialog):
         from log_viewer import LogViewerDialog
         dialog = LogViewerDialog(parent=self)
         dialog.exec()
+
+    def _on_manage_keyring(self) -> None:
+        """Prompts user to store, view, or clear the rclone configuration password in the system keyring."""
+        from keyring_manager import clear_rclone_password, get_rclone_password, is_keyring_available, store_rclone_password
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+        if not is_keyring_available():
+            QMessageBox.warning(
+                self,
+                tr("Chaveiro Indisponível"),
+                tr("O utilitário 'secret-tool' não foi encontrado no sistema.\nInstale 'libsecret' ou 'libsecret-tools' para habilitar a integração com o chaveiro.")
+            )
+            return
+
+        has_existing = bool(get_rclone_password())
+        if has_existing:
+            box = QMessageBox(
+                QMessageBox.Icon.Question,
+                tr("Chaveiro do Sistema"),
+                tr("Uma senha do rclone já está armazenada no chaveiro do sistema.\nO que você deseja fazer?"),
+                parent=self,
+            )
+            btn_update = box.addButton(tr("Atualizar Senha"), QMessageBox.ButtonRole.AcceptRole)
+            btn_delete = box.addButton(tr("Remover do Chaveiro"), QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(btn_update)
+            box.setEscapeButton(btn_cancel)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is btn_delete:
+                if clear_rclone_password():
+                    QMessageBox.information(self, tr("Chaveiro do Sistema"), tr("Senha removida do chaveiro com sucesso."))
+                else:
+                    QMessageBox.warning(self, tr("Erro"), tr("Não foi possível remover a senha do chaveiro."))
+                return
+            elif clicked is not btn_update:
+                return
+
+        pwd, ok = QInputDialog.getText(
+            self,
+            tr("Senha do Rclone no Chaveiro"),
+            tr("Digite a senha de criptografia da configuração do rclone:"),
+            QLineEdit.EchoMode.Password,
+        )
+        if ok and pwd:
+            if store_rclone_password(pwd):
+                QMessageBox.information(
+                    self,
+                    tr("Chaveiro do Sistema"),
+                    tr("Senha gravada com segurança no chaveiro do sistema!\nO DucksDrive usará '--password-command' automaticamente.")
+                )
+                self.keyring_checkbox.setChecked(True)
+            else:
+                QMessageBox.warning(self, tr("Erro"), tr("Falha ao gravar a senha no chaveiro do sistema."))
 
     def _refresh_cache_usage(self) -> None:
         """Asynchronously calculates local VFS cache usage in a background thread."""
@@ -474,6 +546,7 @@ class SettingsDialog(QDialog):
                 return
 
         autostart = self.autostart_checkbox.isChecked()
+        use_keyring = self.keyring_checkbox.isChecked()
 
         # Update config dict
         self.config["bwlimit"] = bwlimit
@@ -481,6 +554,7 @@ class SettingsDialog(QDialog):
         self.config["transfers"] = transfers
         self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
+        self.config["use_system_keyring"] = use_keyring
         self.config["language"] = language
         self.config["theme"] = theme
 

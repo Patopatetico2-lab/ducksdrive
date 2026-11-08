@@ -8,7 +8,7 @@
   <a href="https://patopatetico2-lab.github.io/ducksdrive/"><img src="https://img.shields.io/badge/Site%20Oficial-patopatetico2--lab.github.io%2Fducksdrive-0078d4?style=flat&logo=googlechrome&logoColor=white" alt="Site Oficial" /></a>
   <a href="https://github.com/Patopatetico2-lab/ducksdrive/releases"><img src="https://img.shields.io/github/v/release/Patopatetico2-lab/ducksdrive?color=2ea44f&label=Releases&logo=github" alt="GitHub Releases" /></a>
   <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/tests-24%20passed-brightgreen?logo=pytest&logoColor=white" alt="Tests Status" /></a>
+  <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/tests-45%20passed-brightgreen?logo=pytest&logoColor=white" alt="Tests Status" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Code style: ruff" /></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=flat&logo=python&logoColor=white" alt="Python 3.10+" /></a>
   <a href="https://pypi.org/project/PySide6/"><img src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41cd52?style=flat&logo=qt&logoColor=white" alt="PySide6 / Qt6" /></a>

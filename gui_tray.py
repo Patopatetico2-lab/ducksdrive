@@ -59,6 +59,7 @@ from settings_dialog import SettingsDialog
 from log_viewer import LogViewerDialog
 from remote_settings_dialog import RemoteSettingsDialog
 from notifications import notify_sync_complete, notify_mount_success, send_desktop_notification
+from vfs_inhibitor import VFSInhibitorManager
 
 logger = logging.getLogger(__name__)
 
@@ -405,6 +406,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         )
         self.status_popup._tray = self
 
+        self._remote_vfs_queue: dict[str, int] = {}
+        self.inhibitor = VFSInhibitorManager(self)
+        self.inhibitor.lock_state_changed.connect(self.status_popup.set_inhibitor_active)
+
         self._menu = QMenu()
 
         # Bloco 1 (Topo): Status atual da nuvem (desabilitado)
@@ -578,6 +583,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             except RuntimeError:
                 pass
         self.status_popup.shutdown_workers()
+        self.inhibitor.shutdown()
 
     def _safe_unmount_or_switch(self, on_confirmed: Callable[[], None]) -> None:
         """
@@ -920,6 +926,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_open.setEnabled(has_any_mounted)
         self.action_refresh_vfs.setEnabled(has_any_mounted)
 
+        if state in ("stopped", "unmounting", "error") and clean_remote:
+            self._remote_vfs_queue.pop(clean_remote, None)
+            self.inhibitor.update_queue_status(sum(self._remote_vfs_queue.values()))
+
         status_map = {
             "stopped": tr("Desconectado"),
             "starting": tr("Conectando..."),
@@ -982,6 +992,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         clean = remote_name.rstrip(":")
         self.latest_stats = stats
         self.status_popup.update_stats_for_remote(clean, stats)
+
+        self._remote_vfs_queue[clean] = stats.vfs_queue_count
+        self.inhibitor.update_queue_status(sum(self._remote_vfs_queue.values()))
 
         if stats.is_online:
             has_active = stats.has_active_transfers

@@ -126,7 +126,7 @@ SUPPORTED_REMOTE_TYPES = [
 ]
 
 
-_SENSITIVE_PARAMS = {"pass", "password", "secret_access_key", "token", "client_secret", "--rc-pass"}
+_SENSITIVE_PARAMS = {"pass", "password", "secret_access_key", "token", "client_secret", "--rc-pass", "--password-command"}
 
 
 def mask_command(cmd: List[str]) -> str:

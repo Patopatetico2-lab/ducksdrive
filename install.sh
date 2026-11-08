@@ -16,7 +16,11 @@ if [ -f /etc/debian_version ]; then
     sudo apt update && sudo apt install -y rclone fuse3 python3-venv python3-pip
 elif [ -f /etc/arch-release ]; then
     echo "Detected Arch Linux-based system."
-    sudo pacman -S --needed --noconfirm rclone fuse3 python-pip
+    if pacman -Q rclone fuse3 python-pip &>/dev/null; then
+        echo "System dependencies (rclone, fuse3, python-pip) are already installed."
+    else
+        sudo pacman -S --needed --noconfirm rclone fuse3 python-pip
+    fi
 elif [ -f /etc/fedora-release ] || [ -f /etc/redhat-release ]; then
     echo "Detected Fedora/RHEL-based system."
     sudo dnf install -y rclone fuse3 python3-pip
@@ -37,7 +41,7 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py "$INSTALL_DIR/"
+cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py vfs_inhibitor.py keyring_manager.py "$INSTALL_DIR/"
 [ -f icon.svg ] && cp icon.svg "$INSTALL_DIR/"
 
 python3 -m venv "$INSTALL_DIR/venv"

@@ -633,3 +633,204 @@ class TestSettingsMigration:
         assert reloaded["vfs_cache_mode"] == DEFAULT_CONFIG["vfs_cache_mode"]
         assert reloaded["transfers"] == DEFAULT_CONFIG["transfers"]
 
+
+# ============================================================================
+# 12. RC Unix Domain Socket and Session Auth Tests
+# ============================================================================
+class TestRCUnixSocketAndAuth:
+    def test_rc_credentials_unix_socket_generation(self, tmp_path, monkeypatch):
+        import rclone_daemon
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        creds = rclone_daemon.generate_rc_credentials(remote_name="gdrive:", use_unix_socket=True)
+        assert creds.is_unix_socket is True
+        assert creds.socket_path is not None
+        assert creds.socket_path.endswith("rc-gdrive.sock")
+        assert creds.user.startswith("rc_user_")
+        assert len(creds.password) >= 20
+        assert creds.url == "http://localhost"
+        assert creds.auth_header.startswith("Basic ")
+
+    def test_rc_credentials_tcp_fallback(self):
+        import rclone_daemon
+        creds = rclone_daemon.generate_rc_credentials(host="127.0.0.1", port=5580, use_unix_socket=False)
+        assert creds.is_unix_socket is False
+        assert creds.socket_path is None
+        assert creds.url == "http://127.0.0.1:5580"
+
+    def test_rc_request_routing_mock(self):
+        from rclone_daemon import RCCredentials
+        from rclone_stats import rc_request
+
+        tcp_creds = RCCredentials(user="user", password="pwd", host="127.0.0.1", port=5572)
+        with patch("urllib.request.urlopen") as mock_url:
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.read.return_value = b'{"result": "ok"}'
+            mock_url.return_value.__enter__.return_value = mock_resp
+            status, data = rc_request(tcp_creds, "/core/version")
+            assert status == 200
+            assert data == {"result": "ok"}
+
+    def test_teardown_cleans_unix_socket(self, tmp_path):
+        from rclone_daemon import RCCredentials, _teardown_mount
+
+        sock_file = tmp_path / "rc-test.sock"
+        sock_file.touch()
+        assert sock_file.exists()
+
+        creds = RCCredentials(user="u", password="p", socket_path=str(sock_file))
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
+
+        _teardown_mount(mock_proc, str(tmp_path / "mount"), creds=creds)
+        assert not sock_file.exists()
+
+
+# ============================================================================
+# 13. VFS Inhibitor Tests (Shutdown / Sleep Delay Protection)
+# ============================================================================
+class TestVFSInhibitor:
+    def test_inhibitor_acquire_and_release(self, monkeypatch):
+        from vfs_inhibitor import VFSInhibitorManager
+
+        inhibitor = VFSInhibitorManager()
+        # Mock systemd-inhibit binary
+        monkeypatch.setattr(inhibitor, "_inhibitor_bin", None)
+
+        signal_records = []
+        inhibitor.lock_state_changed.connect(lambda locked, count: signal_records.append((locked, count)))
+
+        # 1. Acquire lock on pending queue
+        assert inhibitor.acquire_lock(pending_count=4) is True
+        assert inhibitor.is_locked is True
+        assert inhibitor.pending_count == 4
+        assert (True, 4) in signal_records
+
+        # 2. Update queue status while active
+        inhibitor.update_queue_status(total_pending=2)
+        assert inhibitor.is_locked is True
+        assert inhibitor.pending_count == 2
+
+        # 3. Release lock when queue drops to 0
+        with patch("vfs_inhibitor.notify_info") as mock_notify:
+            inhibitor.update_queue_status(total_pending=0)
+            assert inhibitor.is_locked is False
+            assert inhibitor.pending_count == 0
+            assert (False, 0) in signal_records
+            mock_notify.assert_called_once()
+
+        # 4. Clean shutdown
+        inhibitor.shutdown()
+        assert inhibitor.is_locked is False
+
+    def test_inhibitor_popup_banner_integration(self, qapp):
+        from status_popup import StatusPopup
+
+        popup = StatusPopup(daemon=None, window_mode=True)
+        assert popup.lbl_inhibitor_banner.isHidden()
+
+        # Activate inhibitor
+        popup.set_inhibitor_active(True, pending_count=5)
+        assert not popup.lbl_inhibitor_banner.isHidden()
+        assert "5" in popup.lbl_inhibitor_banner.text()
+
+        # Release inhibitor
+        popup.set_inhibitor_active(False, pending_count=0)
+        assert popup.lbl_inhibitor_banner.isHidden()
+
+
+# ============================================================================
+# 14. Keyring Integration Tests (Secret Service API / secret-tool)
+# ============================================================================
+class TestKeyringIntegration:
+    def test_password_command_string(self):
+        from keyring_manager import get_password_command
+
+        cmd = get_password_command(service="ducksdrive", user="rclone")
+        assert cmd == "secret-tool lookup service ducksdrive user rclone"
+
+    def test_mask_command_protects_password_command(self):
+        from rclone_config import mask_command
+
+        cmd = ["rclone", "mount", "gdrive:", "/home/user/CloudDrives/gdrive", "--password-command", "secret-tool lookup service ducksdrive user rclone"]
+        masked = mask_command(cmd)
+        assert "secret-tool" not in masked
+        assert "--password-command ******" in masked
+
+    def test_keyring_store_lookup_clear_mocked(self, monkeypatch):
+        import keyring_manager
+
+        monkeypatch.setattr(keyring_manager, "is_keyring_available", lambda: True)
+        monkeypatch.setattr(keyring_manager.shutil, "which", lambda cmd: "/usr/bin/secret-tool")
+
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = "my_master_password\n"
+            mock_run.return_value = mock_proc
+
+            # Store
+            assert keyring_manager.store_rclone_password("my_master_password") is True
+            # Lookup
+            assert keyring_manager.get_rclone_password() == "my_master_password"
+            # Clear
+            assert keyring_manager.clear_rclone_password() is True
+
+
+# ============================================================================
+# 15. Dynamic Bandwidth and VFS RC Controls Tests
+# ============================================================================
+class TestDynamicBandwidthAndVFSControls:
+    def test_set_rc_bwlimit(self):
+        import rclone_stats
+        from rclone_daemon import RCCredentials
+
+        creds = RCCredentials(user="u", password="p", host="127.0.0.1", port=5572)
+        with patch.object(rclone_stats, "rc_request", return_value=(200, {})) as mock_rc:
+            assert rclone_stats.set_rc_bwlimit(creds, "10M") is True
+            mock_rc.assert_called_with(creds, "/core/bwlimit", {"rate": "10M"}, timeout=5.0)
+
+    def test_rc_vfs_forget(self):
+        import rclone_stats
+        from rclone_daemon import RCCredentials
+
+        creds = RCCredentials(user="u", password="p", host="127.0.0.1", port=5572)
+        with patch.object(rclone_stats, "rc_request", return_value=(200, {})) as mock_rc:
+            assert rclone_stats.rc_vfs_forget(creds) is True
+            mock_rc.assert_called_with(creds, "/vfs/forget", timeout=5.0)
+
+    def test_status_popup_quick_bwlimit_ui(self, qapp):
+        from status_popup import StatusPopup
+        from rclone_daemon import RCCredentials, RcloneDaemon
+
+        daemon = RcloneDaemon()
+        daemon.rc_credentials = RCCredentials(user="u", password="p", host="127.0.0.1", port=5572)
+        daemon.process = MagicMock()
+        daemon.process.poll.return_value = None  # running
+
+        popup = StatusPopup(daemon=daemon, window_mode=True)
+        idx_5m = popup.combo_bwlimit.findData("5M")
+        assert idx_5m >= 0
+
+        with patch("status_popup.set_rc_bwlimit") as mock_set:
+            popup.combo_bwlimit.setCurrentIndex(idx_5m)
+            popup._pause_runner.wait_all(2000)
+            mock_set.assert_called_with(daemon.rc_credentials, "5M")
+
+    def test_status_popup_clear_inactive_vfs_ui(self, qapp):
+        from status_popup import StatusPopup
+        from rclone_daemon import RCCredentials, RcloneDaemon
+
+        daemon = RcloneDaemon()
+        daemon.rc_credentials = RCCredentials(user="u", password="p", host="127.0.0.1", port=5572)
+        daemon.process = MagicMock()
+        daemon.process.poll.return_value = None  # running
+
+        popup = StatusPopup(daemon=daemon, window_mode=True)
+        with patch("status_popup.rc_vfs_forget", return_value=True) as mock_forget:
+            popup._on_clear_inactive_vfs()
+            popup._pause_runner.wait_all(2000)
+            mock_forget.assert_called_with(daemon.rc_credentials)
+
+

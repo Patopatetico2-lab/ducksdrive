@@ -81,6 +81,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "last_remote": "",
     "theme": "auto",
     "remotes_config": {},
+    "use_system_keyring": False,
+    "rc_use_unix_socket": True,
 }
 
 DEFAULT_REMOTE_CONFIG: Dict[str, Any] = {

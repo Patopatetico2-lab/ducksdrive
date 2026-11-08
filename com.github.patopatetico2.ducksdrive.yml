@@ -83,7 +83,7 @@ modules:
     buildsystem: simple
     build-commands:
       - install -dm755 /app/share/ducksdrive
-      - install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py -t /app/share/ducksdrive/
+      - install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py vfs_inhibitor.py keyring_manager.py -t /app/share/ducksdrive/
       - install -Dm644 icon.svg /app/share/ducksdrive/icon.svg
       - install -Dm644 icon.svg /app/share/icons/hicolor/scalable/apps/com.github.patopatetico2.ducksdrive.svg
       - install -Dm644 com.github.patopatetico2.ducksdrive.metainfo.xml /app/share/metainfo/com.github.patopatetico2.ducksdrive.metainfo.xml

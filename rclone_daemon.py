@@ -12,14 +12,12 @@ with dynamic fallback to fusermount3 or fusermount.
 
 import base64
 import glob
-import json
 import logging
 import os
 import secrets
 import shutil
 import subprocess
 import time
-import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
@@ -52,6 +50,7 @@ class RCCredentials:
     host: str = DEFAULT_RC_HOST
     port: int = DEFAULT_RC_PORT
     auth_header: str = ""
+    socket_path: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.auth_header:
@@ -61,23 +60,69 @@ class RCCredentials:
     @property
     def url(self) -> str:
         """Returns the base HTTP URL for the RC server."""
+        if self.socket_path:
+            return "http://localhost"
         return f"http://{self.host}:{self.port}"
 
+    @property
+    def is_unix_socket(self) -> bool:
+        """True if the RC server is bound to a local Unix domain socket."""
+        return bool(self.socket_path)
 
-def generate_rc_credentials(host: str = DEFAULT_RC_HOST, port: int = DEFAULT_RC_PORT) -> RCCredentials:
+
+def get_rc_socket_dir() -> str:
     """
-    Generates cryptographically secure, random in-memory credentials for the RC interface.
+    Returns the dedicated, user-private directory for DucksDrive Unix domain sockets.
+    Prioritizes $XDG_RUNTIME_DIR/ducksdrive (/run/user/$UID/ducksdrive), with permissions 0700.
+    Falls back to /tmp/ducksdrive-$UID.
+    """
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir and os.path.isdir(runtime_dir):
+        sock_dir = os.path.join(runtime_dir, "ducksdrive")
+    else:
+        uid = os.getuid() if hasattr(os, "getuid") else "1000"
+        sock_dir = os.path.join("/tmp", f"ducksdrive-{uid}")
+    try:
+        os.makedirs(sock_dir, exist_ok=True)
+        os.chmod(sock_dir, 0o700)
+    except Exception as exc:
+        logger.debug("Failed to set 0700 permissions on socket dir %s: %s", sock_dir, exc)
+    return sock_dir
+
+
+def generate_rc_credentials(
+    host: str = DEFAULT_RC_HOST,
+    port: int = DEFAULT_RC_PORT,
+    remote_name: Optional[str] = None,
+    use_unix_socket: bool = True,
+) -> RCCredentials:
+    """
+    Generates cryptographically secure, random in-memory credentials for the RC interface,
+    bound by default to a dedicated private Unix domain socket per remote.
 
     Args:
-        host: Host binding for the RC server.
-        port: Port number for the RC server.
+        host: Host binding for the RC server (fallback for TCP mode).
+        port: Port number for the RC server (fallback for TCP mode).
+        remote_name: Name of the remote cloud storage (used to name the socket).
+        use_unix_socket: If True, binds to a dedicated Unix domain socket.
 
     Returns:
         RCCredentials: In-memory credentials object.
     """
     user = f"rc_user_{secrets.token_hex(4)}"
     password = secrets.token_urlsafe(24)
-    return RCCredentials(user=user, password=password, host=host, port=port)
+    socket_path: Optional[str] = None
+    if use_unix_socket:
+        clean_remote = remote_name.rstrip(":").replace("/", "_") if remote_name else "default"
+        sock_dir = get_rc_socket_dir()
+        socket_path = os.path.join(sock_dir, f"rc-{clean_remote}.sock")
+    return RCCredentials(
+        user=user,
+        password=password,
+        host=host,
+        port=port,
+        socket_path=socket_path,
+    )
 
 
 
@@ -218,17 +263,8 @@ def _unpause_rc_before_stop(creds: Optional[RCCredentials]) -> None:
     if creds is None:
         return
     try:
-        req = urllib.request.Request(
-            url=f"{creds.url}/core/bwlimit",
-            data=json.dumps({"rate": "off"}).encode("utf-8"),
-            headers={
-                "Authorization": creds.auth_header,
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=1.5):
-            pass
+        from rclone_stats import rc_request
+        rc_request(creds, "/core/bwlimit", {"rate": "off"}, timeout=1.5)
     except Exception:
         pass
 
@@ -236,7 +272,7 @@ def _unpause_rc_before_stop(creds: Optional[RCCredentials]) -> None:
 def _teardown_mount(
     process: Optional["subprocess.Popen[str]"],
     mount_point: str,
-    paused_creds: Optional[RCCredentials] = None,
+    creds: Optional[RCCredentials] = None,
 ) -> bool:
     """
     Blocking part of stopping a mount: unpause RC if needed, unmount the FUSE path, terminate rclone
@@ -250,8 +286,8 @@ def _teardown_mount(
         bool: True if the first (non-lazy) unmount succeeded.
     """
     # 0. If user had paused transfers, restore bandwidth before flushing and unmounting
-    if paused_creds is not None and process and process.poll() is None:
-        _unpause_rc_before_stop(paused_creds)
+    if creds is not None and process and process.poll() is None:
+        _unpause_rc_before_stop(creds)
 
     # 1. First attempt a clean (non-lazy) unmount via FUSE tool without forcing -uz while rclone is flushing
     unmounted = unmount_fuse_path(mount_point, lazy=False, fallback_lazy=False)
@@ -273,6 +309,14 @@ def _teardown_mount(
     if is_path_mounted(mount_point):
         unmounted = unmount_fuse_path(mount_point, lazy=True) or unmounted
 
+    # 4. Clean up Unix domain socket if present
+    if creds and creds.socket_path and os.path.exists(creds.socket_path):
+        try:
+            os.unlink(creds.socket_path)
+            logger.info("Cleaned up RC Unix socket %s", creds.socket_path)
+        except OSError:
+            pass
+
     return unmounted
 
 
@@ -284,17 +328,18 @@ class _TeardownWorker(QThread):
         process: Optional["subprocess.Popen[str]"],
         mount_point: str,
         parent: Optional[QObject] = None,
+        creds: Optional[RCCredentials] = None,
         paused_creds: Optional[RCCredentials] = None,
     ) -> None:
         super().__init__(parent)
         self._process = process
         self._mount_point = mount_point
-        self._paused_creds = paused_creds
+        self._creds = creds or paused_creds
         self.unmounted = False
 
     def run(self) -> None:
         try:
-            self.unmounted = _teardown_mount(self._process, self._mount_point, self._paused_creds)
+            self.unmounted = _teardown_mount(self._process, self._mount_point, self._creds)
         except Exception as exc:
             logger.error("Unexpected error while tearing down mount: %s", exc)
             self.unmounted = False
@@ -508,19 +553,31 @@ class RcloneDaemon(QObject):
             self._set_state("error")
             return False
 
-        # Generate fresh in-memory RC credentials on this daemon's allocated port
+        # Load dynamic configuration preferences (with per-remote overrides)
+        cfg = load_config()
+        use_unix_socket = bool(cfg.get("rc_use_unix_socket", True))
+
+        # Generate fresh in-memory RC credentials (dedicated Unix socket or localhost port)
         if self.rc_port not in _allocated_ports:
             self.rc_port = allocate_rc_port(self.rc_host, self.rc_port)
-        self.rc_credentials = generate_rc_credentials(self.rc_host, self.rc_port)
+        self.rc_credentials = generate_rc_credentials(
+            self.rc_host,
+            self.rc_port,
+            remote_name=remote_name,
+            use_unix_socket=use_unix_socket,
+        )
+        if self.rc_credentials.socket_path and os.path.exists(self.rc_credentials.socket_path):
+            try:
+                os.unlink(self.rc_credentials.socket_path)
+            except OSError:
+                pass
+
         self.current_remote = remote_name
         self.current_read_only = read_only
         self.current_extra_args = list(extra_args) if extra_args else None
         self.is_user_paused = False
 
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
-
-        # Load dynamic configuration preferences (with per-remote overrides)
-        cfg = load_config()
         bwlimit = str(remote_cfg.get("bwlimit") or cfg.get("bwlimit", "off"))
         cache_size = str(remote_cfg.get("vfs_cache_max_size") or cfg.get("vfs_cache_max_size", "2G"))
         try:
@@ -579,16 +636,26 @@ class RcloneDaemon(QObject):
             pass
         if bwlimit.lower() != "off":
             cmd.extend(["--bwlimit", bwlimit])
+        rc_addr_val = (
+            f"unix://{self.rc_credentials.socket_path}"
+            if self.rc_credentials.socket_path
+            else f"{self.rc_credentials.host}:{self.rc_credentials.port}"
+        )
         cmd.extend([
             "--transfers",
             transfers,
             "--rc",
             "--rc-addr",
-            f"{self.rc_credentials.host}:{self.rc_credentials.port}",
+            rc_addr_val,
         ])
 
         if read_only:
             cmd.append("--read-only")
+
+        if cfg.get("use_system_keyring"):
+            from keyring_manager import get_password_command, is_keyring_available
+            if is_keyring_available():
+                cmd.extend(["--password-command", get_password_command()])
 
         # Add per-remote custom flags (e.g. --drive-shared-with-me)
         raw_flags = str(remote_cfg.get("custom_flags") or "").strip()
@@ -757,8 +824,8 @@ class RcloneDaemon(QObject):
             self._startup_timer.deleteLater()
             self._startup_timer = None
 
-        paused_creds = self.rc_credentials if self.is_user_paused else None
-        return self.process, self.mount_point, paused_creds
+        creds = self.rc_credentials
+        return self.process, self.mount_point, creds
 
     def _finish_stop(self, unmounted: bool) -> bool:
         """GUI-thread half of stopping: releases resources, publishes 'stopped' and runs waiting callbacks."""
@@ -769,6 +836,13 @@ class RcloneDaemon(QObject):
             except Exception:
                 pass
             self._log_file = None
+
+        if self.rc_credentials and self.rc_credentials.socket_path:
+            if os.path.exists(self.rc_credentials.socket_path):
+                try:
+                    os.unlink(self.rc_credentials.socket_path)
+                except OSError:
+                    pass
 
         self.process = None
         self.rc_credentials = None
