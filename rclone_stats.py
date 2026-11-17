@@ -53,6 +53,11 @@ class StatsData:
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
+    def total_transfers(self) -> int:
+        """Alias for cumulative completed transfers count."""
+        return self.transfers_count
+
+    @property
     def has_active_transfers(self) -> bool:
         """True while rclone reports active transfers or files waiting in the VFS upload queue."""
         return self.is_online and (len(self.active_transfers) > 0 or self.vfs_queue_count > 0)
@@ -376,6 +381,8 @@ class RcloneStatsPoller(QThread):
         vfs_disk_cache_bytes = 0
         last_queue_check = 0.0
         last_listed: Optional[int] = None
+        last_transfers_count: Optional[int] = None
+        last_errors_count: Optional[int] = None
 
         while self._running:
             stats = fetch_rclone_stats(self.credentials, timeout=4.0)
@@ -398,33 +405,45 @@ class RcloneStatsPoller(QThread):
                     or listed_delta > 0
                 )
                 if should_check_queue:
-                    q_len = fetch_vfs_queue(self.credentials, timeout=2.0)
-                    if q_len is not None:
-                        vfs_queue_count = q_len
                     vfs_st = fetch_vfs_stats(self.credentials, timeout=2.0)
-                    if vfs_st and "bytesUsed" in vfs_st:
+                    raw_vfs = vfs_st.get("raw") if isinstance(vfs_st, dict) else None
+                    if isinstance(raw_vfs, dict) and isinstance(raw_vfs.get("diskCache"), dict):
+                        vfs_queue_count = int(vfs_st["uploadsInProgress"]) + int(vfs_st["uploadsQueued"])
                         vfs_disk_cache_bytes = int(vfs_st["bytesUsed"])
+                    else:
+                        q_len = fetch_vfs_queue(self.credentials, timeout=2.0)
+                        if q_len is not None:
+                            vfs_queue_count = q_len
+                        if vfs_st and "bytesUsed" in vfs_st:
+                            vfs_disk_cache_bytes = int(vfs_st["bytesUsed"])
                     last_queue_check = now
 
-                    # Track recently completed file transfers
-                    transferred_items = fetch_rclone_transferred(self.credentials, timeout=2.0)
-                    for item in transferred_items:
-                        if not isinstance(item, dict):
-                            continue
-                        name = item.get("name")
-                        if not name or item.get("error"):
-                            continue
-                        key = f"{name}_{item.get('size', 0)}_{item.get('completed_at', '')}"
-                        if key not in self._seen_transfers_keys:
-                            self._seen_transfers_keys.add(key)
-                            self._recent_transfers.appendleft({
-                                "name": name,
-                                "size": int(item.get("size") or item.get("bytes") or 0),
-                                "completed_at": item.get("completed_at", ""),
-                            })
-                    if len(self._seen_transfers_keys) > 100:
-                        valid_keys = {f"{it['name']}_{it['size']}_{it.get('completed_at', '')}" for it in self._recent_transfers}
-                        self._seen_transfers_keys.intersection_update(valid_keys)
+                    # Track recently completed file transfers only when counters change
+                    if (
+                        last_transfers_count is None
+                        or stats.transfers_count != last_transfers_count
+                        or stats.errors_count != last_errors_count
+                    ):
+                        last_transfers_count = stats.transfers_count
+                        last_errors_count = stats.errors_count
+                        transferred_items = fetch_rclone_transferred(self.credentials, timeout=2.0)
+                        for item in transferred_items:
+                            if not isinstance(item, dict):
+                                continue
+                            name = item.get("name")
+                            if not name or item.get("error"):
+                                continue
+                            key = f"{name}_{item.get('size', 0)}_{item.get('completed_at', '')}"
+                            if key not in self._seen_transfers_keys:
+                                self._seen_transfers_keys.add(key)
+                                self._recent_transfers.appendleft({
+                                    "name": name,
+                                    "size": int(item.get("size") or item.get("bytes") or 0),
+                                    "completed_at": item.get("completed_at", ""),
+                                })
+                        if len(self._seen_transfers_keys) > 100:
+                            valid_keys = {f"{it['name']}_{it['size']}_{it.get('completed_at', '')}" for it in self._recent_transfers}
+                            self._seen_transfers_keys.intersection_update(valid_keys)
 
                 stats.vfs_queue_count = vfs_queue_count
                 stats.vfs_disk_cache_bytes = vfs_disk_cache_bytes

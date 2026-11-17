@@ -52,7 +52,7 @@ from rclone_config import (
     reconnect_remote,
 )
 from rclone_daemon import RcloneDaemon, is_path_mounted
-from rclone_settings import apply_app_theme, load_config, save_last_remote
+from rclone_settings import apply_app_theme, get_remote_config, load_config, save_last_remote
 from rclone_stats import StatsData, fetch_vfs_queue, rc_vfs_refresh, set_rc_bwlimit
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
@@ -390,6 +390,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._current_icon_state = "idle"
         self._latest_release_url = "https://github.com/Patopatetico2-lab/ducksdrive/releases/latest"
         self._remote_syncing_state: dict[str, bool] = {}
+        self._last_notified_state: dict[str, str] = {}
+        self._sync_start_transfers: dict[str, int] = {}
+        self._last_menu_sig: Any = None
 
         # Background runner for rclone subprocess calls (never block the GUI thread)
         self.runner = TaskRunner(self)
@@ -449,7 +452,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
         self.action_logs = QAction(tr("Ver Logs de Diagnóstico..."), self)
         self.action_logs.triggered.connect(self._show_log_viewer_dialog)
-        self._menu.addAction(self.action_logs)
 
         self.action_settings = QAction(tr("Configurações..."), self)
         self.action_settings.triggered.connect(self._show_settings_dialog)
@@ -746,6 +748,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog = RemoteSettingsDialog(remote_name, parent=None)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved:
             clean_r = remote_name.rstrip(":")
+            if self.status_popup.current_remote_name == clean_r:
+                self.status_popup.sync_bwlimit_combo()
             d = self.daemons.get(clean_r)
             if d is not None and d.is_running():
                 res = QMessageBox.question(
@@ -756,7 +760,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     QMessageBox.StandardButton.Yes,
                 )
                 if res == QMessageBox.StandardButton.Yes:
-                    self._mount_remote(clean_r)
+                    self._safe_unmount_daemon(d, lambda r=clean_r: self._mount_remote(r))
 
     def _show_log_viewer_dialog(self) -> None:
         """Opens the diagnostic log viewer dialog."""
@@ -770,8 +774,17 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog.raise_()
         dialog.activateWindow()
 
-    def _populate_remotes_menu(self) -> None:
+    def _populate_remotes_menu(self, force: bool = False) -> None:
         """Dynamically populates the 'Gerenciar Nuvens' submenu with multi-mount actions."""
+        menu_sig = (
+            tuple(self._remotes_cache) if self._remotes_cache is not None else None,
+            tuple((r, d.is_running(), d.state) for r, d in sorted(self.daemons.items())),
+            tr("Gerenciar Nuvens"),
+        )
+        if not force and self._last_menu_sig == menu_sig and not self.menu_remotes.isEmpty():
+            return
+        self._last_menu_sig = menu_sig
+
         for act in self.menu_remotes.actions():
             if act.menu():
                 act.menu().deleteLater()
@@ -806,7 +819,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
                     action_refresh_r = QAction(tr("Atualizar Pastas"), remote_menu)
                     action_refresh_r.triggered.connect(
-                        lambda checked=False, daemon_item=d: daemon_item.refresh_vfs()
+                        lambda checked=False, daemon_item=d: self._refresh_single_vfs(daemon_item)
                     )
                     remote_menu.addAction(action_refresh_r)
                 else:
@@ -879,7 +892,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
         self.action_status.setText(status_header)
         self.setToolTip(status_header)
-        self._populate_remotes_menu()
+        self._populate_remotes_menu(force=True)
         self.status_popup.retranslate_ui()
 
     def _show_settings_dialog(self) -> None:
@@ -888,23 +901,21 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
             return
-        dialog = SettingsDialog(parent=None, daemon=self.daemon, runner=self.runner)
+        dialog = SettingsDialog(parent=None, daemon=self.daemon, daemons=self.daemons, runner=self.runner)
         self._settings_dialog = dialog
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         if dialog.exec() == QDialog.Accepted:
             self.apply_theme(str(dialog.config.get("theme") or "auto"))
             if dialog.language_changed:
                 self.retranslate_ui()
-            if (
-                dialog.bwlimit_changed
-                and self.daemon.is_running()
-                and self.daemon.rc_credentials
-                and not self.status_popup.is_paused
-            ):
+            if dialog.bwlimit_changed:
                 new_rate = str(dialog.config.get("bwlimit") or "off")
-                for d in self.active_daemons().values():
-                    if d.rc_credentials:
-                        self.runner.submit(set_rc_bwlimit, d.rc_credentials, new_rate)
+                for r_name, d in self.active_daemons().items():
+                    if d.rc_credentials and not d.is_user_paused:
+                        rem_bw = str(get_remote_config(r_name).get("bwlimit") or "").strip()
+                        effective_rate = rem_bw or new_rate
+                        self.runner.submit(set_rc_bwlimit, d.rc_credentials, effective_rate)
+                self.status_popup.sync_bwlimit_combo()
 
     def update_tray_icon(self, state: str) -> None:
         """
@@ -920,6 +931,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _on_state_changed(self, state: str, remote_name: Optional[str] = None) -> None:
         """Updates UI elements based on daemon state across multi-mounts."""
         clean_remote = remote_name.rstrip(":") if remote_name else (self.daemon.current_remote or "")
+        prev_state = self._last_notified_state.get(clean_remote) if clean_remote else None
+        if clean_remote:
+            self._last_notified_state[clean_remote] = state
+
         active = self.active_daemons()
         has_any_mounted = len(active) > 0
 
@@ -928,6 +943,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
         if state in ("stopped", "unmounting", "error") and clean_remote:
             self._remote_vfs_queue.pop(clean_remote, None)
+            self._sync_start_transfers.pop(clean_remote, None)
             self.inhibitor.update_queue_status(sum(self._remote_vfs_queue.values()))
 
         status_map = {
@@ -957,9 +973,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
         if state == "mounted":
             self.update_tray_icon("idle")
-            d = self.daemons.get(clean_remote)
-            mp = d.mount_point if d else os.path.expanduser(f"~/CloudDrives/{clean_remote}")
-            notify_mount_success(clean_remote, mp, fallback_tray=self if self.tray_available else None)
+            if prev_state != "mounted":
+                d = self.daemons.get(clean_remote)
+                mp = d.mount_point if d else os.path.expanduser(f"~/CloudDrives/{clean_remote}")
+                notify_mount_success(clean_remote, mp, fallback_tray=self if self.tray_available else None)
         elif state == "error":
             self.update_tray_icon("error")
         elif not any(d.state == "error" for d in self.daemons.values()):
@@ -1001,6 +1018,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
             was_syncing = self._remote_syncing_state.get(clean, False)
 
             if has_active:
+                if not was_syncing:
+                    self._sync_start_transfers[clean] = max(0, stats.transfers_count - len(stats.active_transfers))
                 self._remote_syncing_state[clean] = True
                 self.update_tray_icon("syncing")
                 menu_header = f"{clean} • {tr('Sincronizando...')}"
@@ -1017,9 +1036,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     self._remote_syncing_state[clean] = False
                     if not any(self._remote_syncing_state.values()):
                         self.update_tray_icon("idle")
+                    start_count = self._sync_start_transfers.pop(clean, 0)
+                    completed_in_batch = max(1, stats.transfers_count - start_count) if stats.transfers_count > 0 else 0
                     notify_sync_complete(
                         clean,
-                        file_count=getattr(stats, "total_transfers", 0),
+                        file_count=completed_in_batch,
                         fallback_tray=self if self.tray_available else None,
                     )
                 active = self.active_daemons()
@@ -1228,6 +1249,17 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 logger.error("Failed to open folder with QDesktopServices: %s", e)
         else:
             QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
+
+    def _refresh_single_vfs(self, daemon_item: RcloneDaemon) -> None:
+        """Sends POST /vfs/refresh asynchronously for a single active daemon."""
+        if not daemon_item.is_running() or not daemon_item.rc_credentials:
+            return
+        self.runner.submit(rc_vfs_refresh, daemon_item.rc_credentials, timeout=15.0)
+        send_desktop_notification(
+            APP_NAME,
+            tr("Atualizando cache de pastas do rclone em segundo plano..."),
+            fallback_tray=self if self.tray_available else None,
+        )
 
     def _refresh_vfs(self) -> None:
         """Sends POST /vfs/refresh for all active daemons."""

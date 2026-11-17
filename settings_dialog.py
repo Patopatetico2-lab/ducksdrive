@@ -15,6 +15,7 @@ import re
 import shutil
 from typing import Any, Optional
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget
@@ -37,6 +39,7 @@ from rclone_settings import (
     apply_app_theme,
     clear_vfs_cache_files,
     get_vfs_cache_usage_bytes,
+    is_dark_theme_active,
     load_config,
     save_config,
 )
@@ -57,17 +60,20 @@ class SettingsDialog(QDialog):
         parent: Optional[QWidget] = None,
         daemon: Optional[Any] = None,
         runner: Optional[TaskRunner] = None,
+        daemons: Optional[dict[str, Any]] = None,
     ) -> None:
         super().__init__(parent)
         self.daemon = daemon
+        self.daemons: dict[str, Any] = daemons if daemons is not None else {}
         self.runner = runner or getattr(daemon, "_integration_runner", None)
         self._cache_runner = TaskRunner(self)
         self._clearing_cache = False
+        self._log_viewer_dialog: Optional[Any] = None
         self.language_changed = False
         self.bwlimit_changed = False
         self.theme_changed = False
         self.setWindowTitle(tr("Configurações do DucksDrive"))
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(655)
 
         self.config = load_config()
         self._init_ui()
@@ -75,142 +81,211 @@ class SettingsDialog(QDialog):
         self.apply_theme(str(self.theme_combo.currentData() or self.config.get("theme") or "auto"))
         self._refresh_cache_usage()
 
+    def _get_known_daemons(self) -> list[Any]:
+        """Returns a deduplicated list of all known RcloneDaemon instances."""
+        items: list[Any] = []
+        seen_ids: set[int] = set()
+        for d in self.daemons.values():
+            if d is not None and id(d) not in seen_ids:
+                seen_ids.add(id(d))
+                items.append(d)
+        if self.daemon is not None and id(self.daemon) not in seen_ids:
+            items.append(self.daemon)
+        return items
+
+    def _get_active_daemons(self) -> list[Any]:
+        """Returns all currently running RcloneDaemon instances."""
+        return [d for d in self._get_known_daemons() if d.is_running()]
+
+    @staticmethod
+    def _create_aligned_form(parent: QWidget) -> QFormLayout:
+        """Creates a QFormLayout with expanding input fields for consistent alignment."""
+        form = QFormLayout(parent)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(9)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        return form
+
+    @staticmethod
+    def _aligned_label(text: str) -> QLabel:
+        """Creates a fixed-minimum-width label so columns line up across every QGroupBox."""
+        lbl = QLabel(text)
+        lbl.setMinimumWidth(205)
+        return lbl
+
     def _init_ui(self) -> None:
-        """Initializes grouped form layouts with QGroupBox controls."""
+        """Initializes cleanly grouped, vertically aligned form sections and action bars."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(14)
+        main_layout.setContentsMargins(16, 14, 16, 14)
+        main_layout.setSpacing(12)
 
-        title_label = QLabel(tr("Preferências de Desempenho e Sistema"))
-        title_label.setStyleSheet("font-size: 13pt; font-weight: bold;")
-        main_layout.addWidget(title_label)
+        # Header Row: Title + Version pill
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 2)
+        self.title_label = QLabel(tr("Preferências de Desempenho e Sistema"))
+        self.title_label.setStyleSheet("font-size: 13pt; font-weight: bold;")
+        header_row.addWidget(self.title_label)
+        header_row.addStretch()
 
-        # 1. Grupo Rede & Desempenho
+        from updater import APP_VERSION
+        self.version_badge = QLabel(f"v{APP_VERSION}")
+        header_row.addWidget(self.version_badge)
+        main_layout.addLayout(header_row)
+
+        # 1. Grupo Geral e Aparência
+        general_group = QGroupBox(tr("Geral e Aparência"))
+        general_outer = QVBoxLayout(general_group)
+        general_outer.setContentsMargins(12, 12, 12, 12)
+        general_outer.setSpacing(9)
+
+        lang_layout = QFormLayout()
+        lang_layout.setContentsMargins(0, 0, 0, 0)
+        lang_layout.setHorizontalSpacing(12)
+        lang_layout.setVerticalSpacing(9)
+        lang_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.lang_combo.addItem(tr("Português (Brasil)"), "pt_BR")
+        self.lang_combo.addItem(tr("Inglês (EUA)"), "en_US")
+        lang_layout.addRow(self._aligned_label(tr("Idioma / Language:")), self.lang_combo)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.theme_combo.addItem(tr("Automático (Sistema)"), "auto")
+        self.theme_combo.addItem(tr("Claro (Light)"), "light")
+        self.theme_combo.addItem(tr("Escuro (Dark)"), "dark")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
+        lang_layout.addRow(self._aligned_label(tr("Tema do Painel:")), self.theme_combo)
+        general_outer.addLayout(lang_layout)
+
+        self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
+        general_outer.addWidget(self.autostart_checkbox)
+        main_layout.addWidget(general_group)
+
+        # 2. Grupo Rede & Desempenho
         net_group = QGroupBox(tr("Rede e Transferência"))
-        net_layout = QFormLayout(net_group)
-        net_layout.setSpacing(10)
+        net_layout = self._create_aligned_form(net_group)
 
         self.bwlimit_combo = QComboBox()
+        self.bwlimit_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
+        self.bwlimit_combo.addItem(tr("1 MB/s (Econômico)"), "1M")
         self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
         self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
         self.bwlimit_combo.addItem(tr("10 MB/s (Rápido)"), "10M")
         self.bwlimit_combo.addItem(tr("25 MB/s (Muito Rápido)"), "25M")
         self.bwlimit_combo.addItem(tr("50 MB/s (Máximo)"), "50M")
-        net_layout.addRow(tr("Limite de Banda:"), self.bwlimit_combo)
+        self.bwlimit_combo.addItem(tr("100 MB/s (Ultra Rápido)"), "100M")
+        net_layout.addRow(self._aligned_label(tr("Limite de Banda:")), self.bwlimit_combo)
 
         self.transfers_spin = QSpinBox()
+        self.transfers_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.transfers_spin.setRange(1, 16)
         self.transfers_spin.setValue(4)
         self.transfers_spin.setToolTip(
             tr("Recomendado: 4 a 6 para Google Drive/OneDrive (valores muito altos podem causar rate-limit da API em pastas com milhares de arquivos).")
         )
-        net_layout.addRow(tr("Transferências Paralelas:"), self.transfers_spin)
-
+        net_layout.addRow(self._aligned_label(tr("Transferências Paralelas:")), self.transfers_spin)
         main_layout.addWidget(net_group)
 
-        # 2. Grupo Armazenamento & Cache
+        # 3. Grupo Armazenamento & Cache
         cache_group = QGroupBox(tr("Armazenamento e Cache SSD"))
-        cache_layout = QFormLayout(cache_group)
-        cache_layout.setSpacing(10)
+        cache_layout = self._create_aligned_form(cache_group)
 
         self.vfs_mode_combo = QComboBox()
+        self.vfs_mode_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.vfs_mode_combo.addItem(tr("Full (Recomendado)"), "full")
         self.vfs_mode_combo.addItem(tr("Writes"), "writes")
         self.vfs_mode_combo.addItem(tr("Minimal"), "minimal")
         self.vfs_mode_combo.addItem(tr("Off"), "off")
         self.vfs_mode_combo.currentIndexChanged.connect(self._on_vfs_mode_changed)
-        cache_layout.addRow(tr("Modo do Cache VFS:"), self.vfs_mode_combo)
+        cache_layout.addRow(self._aligned_label(tr("Modo do Cache VFS:")), self.vfs_mode_combo)
 
         self.cache_spin = QSpinBox()
+        self.cache_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.cache_spin.setRange(1, 500)
         self.cache_spin.setSuffix(" GB")
         self.cache_spin.setValue(2)
-        cache_layout.addRow(tr("Tamanho Máximo do Cache VFS:"), self.cache_spin)
+        cache_layout.addRow(self._aligned_label(tr("Tamanho Máximo do Cache VFS:")), self.cache_spin)
 
         cache_usage_row = QHBoxLayout()
+        cache_usage_row.setSpacing(8)
         self.cache_usage_label = QLabel(tr("Calculando espaço..."))
         self.cache_usage_label.setStyleSheet("font-weight: bold; color: #2980b9;")
         self.btn_clear_cache = QPushButton(tr("Limpar Cache Agora"))
+        self.btn_clear_cache.setFixedHeight(28)
+        self.btn_clear_cache.setMinimumWidth(152)
+        self.btn_clear_cache.setCursor(Qt.PointingHandCursor)
         self.btn_clear_cache.clicked.connect(self._on_clear_cache)
         cache_usage_row.addWidget(self.cache_usage_label)
         cache_usage_row.addStretch()
         cache_usage_row.addWidget(self.btn_clear_cache)
-        cache_layout.addRow(tr("Uso Atual do Cache no SSD:"), cache_usage_row)
-
+        cache_layout.addRow(self._aligned_label(tr("Uso Atual do Cache no SSD:")), cache_usage_row)
         main_layout.addWidget(cache_group)
 
-        # 3. Grupo Geral / Sistema
-        sys_group = QGroupBox(tr("Integração com o Sistema"))
-        sys_layout = QVBoxLayout(sys_group)
+        # 4. Grupo Segurança e Manutenção
+        maint_group = QGroupBox(tr("Segurança e Manutenção"))
+        maint_layout = QVBoxLayout(maint_group)
+        maint_layout.setContentsMargins(12, 12, 12, 12)
+        maint_layout.setSpacing(10)
 
-        self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
-        sys_layout.addWidget(self.autostart_checkbox)
-
-        # Security & Keyring Integration
         keyring_row = QHBoxLayout()
+        keyring_row.setSpacing(8)
         self.keyring_checkbox = QCheckBox(tr("Proteger rclone.conf com o Chaveiro do Sistema (Secret Service / KWallet)"))
         self.btn_manage_keyring = QPushButton(tr("Configurar Senha..."))
-        self.btn_manage_keyring.setFixedHeight(26)
+        self.btn_manage_keyring.setFixedHeight(28)
+        self.btn_manage_keyring.setMinimumWidth(152)
+        self.btn_manage_keyring.setCursor(Qt.PointingHandCursor)
         self.btn_manage_keyring.clicked.connect(self._on_manage_keyring)
         keyring_row.addWidget(self.keyring_checkbox, 1)
         keyring_row.addWidget(self.btn_manage_keyring)
-        sys_layout.addLayout(keyring_row)
+        maint_layout.addLayout(keyring_row)
 
-        # Language & Theme Selection
-        lang_layout = QFormLayout()
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItem(tr("Português (Brasil)"), "pt_BR")
-        self.lang_combo.addItem(tr("Inglês (EUA)"), "en_US")
-        lang_layout.addRow(tr("Idioma / Language:"), self.lang_combo)
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem(tr("Automático (Sistema)"), "auto")
-        self.theme_combo.addItem(tr("Claro (Light)"), "light")
-        self.theme_combo.addItem(tr("Escuro (Dark)"), "dark")
-        self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
-        lang_layout.addRow(tr("Tema do Painel:"), self.theme_combo)
-        sys_layout.addLayout(lang_layout)
-
-        # Diagnostic & Maintenance tools row
         tools_row = QHBoxLayout()
-        tools_row.setSpacing(10)
+        tools_row.setSpacing(8)
 
         self.btn_check_update = QPushButton(tr("Verificar Atualizações"))
+        self.btn_check_update.setFixedHeight(30)
+        self.btn_check_update.setCursor(Qt.PointingHandCursor)
         self.btn_check_update.clicked.connect(self._on_check_updates)
-        self.btn_check_update.setStyleSheet("padding: 5px 12px; font-weight: bold;")
-        tools_row.addWidget(self.btn_check_update)
+        tools_row.addWidget(self.btn_check_update, 1)
 
         self.btn_view_logs = QPushButton(tr("Ver Logs de Diagnóstico"))
+        self.btn_view_logs.setFixedHeight(30)
+        self.btn_view_logs.setCursor(Qt.PointingHandCursor)
         self.btn_view_logs.clicked.connect(self._on_view_logs)
-        self.btn_view_logs.setStyleSheet("padding: 5px 12px; font-weight: bold;")
-        tools_row.addWidget(self.btn_view_logs)
-
-        sys_layout.addLayout(tools_row)
-
-        main_layout.addWidget(sys_group)
-
-        # Buttons layout
-        btn_layout = QHBoxLayout()
+        tools_row.addWidget(self.btn_view_logs, 1)
 
         self.btn_uninstall = QPushButton(tr("Desinstalar"))
+        self.btn_uninstall.setFixedHeight(30)
+        self.btn_uninstall.setCursor(Qt.PointingHandCursor)
         self.btn_uninstall.clicked.connect(self._on_uninstall)
-        self.btn_uninstall.setStyleSheet(
-            "background-color: #e74c3c; color: white; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold;"
-        )
-        btn_layout.addWidget(self.btn_uninstall)
+        tools_row.addWidget(self.btn_uninstall, 1)
 
+        maint_layout.addLayout(tools_row)
+        main_layout.addWidget(maint_group)
+
+        # 5. Footer Dialog Actions (Cancel / Save only)
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(0, 4, 0, 0)
+        btn_layout.setSpacing(8)
         btn_layout.addStretch()
 
         self.btn_cancel = QPushButton(tr("Cancelar"))
+        self.btn_cancel.setFixedHeight(32)
+        self.btn_cancel.setMinimumWidth(100)
+        self.btn_cancel.setCursor(Qt.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
         self.btn_save = QPushButton(tr("Guardar Configurações"))
+        self.btn_save.setFixedHeight(32)
+        self.btn_save.setMinimumWidth(160)
+        self.btn_save.setDefault(True)
+        self.btn_save.setCursor(Qt.PointingHandCursor)
         self.btn_save.clicked.connect(self._save_and_accept)
-        self.btn_save.setStyleSheet(
-            "background-color: #3498db; color: white; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold;"
-        )
         btn_layout.addWidget(self.btn_save)
 
         main_layout.addLayout(btn_layout)
@@ -292,14 +367,92 @@ class SettingsDialog(QDialog):
         self.apply_theme(selected_theme)
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
-        """Applies native QPalette styling for the specified theme ('light', 'dark', or 'auto')."""
+        """Applies native QPalette and cohesive control styling for the specified theme."""
         active_pref = str(theme_pref or self.theme_combo.currentData() or self.config.get("theme") or "auto")
+        is_dark = is_dark_theme_active(active_pref)
         palette = apply_app_theme(active_pref)
         if palette is not None:
             self.setPalette(palette)
+            for child in self.findChildren(QWidget):
+                child.setPalette(palette)
             self.style().unpolish(self)
             self.style().polish(self)
             self.update()
+
+        badge_bg = "#2a2f36" if is_dark else "#e9edf2"
+        badge_fg = "#aeb6bf" if is_dark else "#566573"
+        badge_bd = "#3b424c" if is_dark else "#cfd6de"
+        self.version_badge.setStyleSheet(
+            f"background-color: {badge_bg}; color: {badge_fg}; border: 1px solid {badge_bd}; "
+            f"border-radius: 9px; padding: 2px 10px; font-size: 8.5pt; font-weight: bold;"
+        )
+
+        sec_bg = "#2d3239" if is_dark else "#f1f3f6"
+        sec_fg = "#eff0f1" if is_dark else "#2c3e50"
+        sec_bd = "#424852" if is_dark else "#cfd6de"
+        sec_hv = "#39404a" if is_dark else "#e3e7ed"
+        dis_bg = "#24282e" if is_dark else "#f4f6f8"
+        dis_fg = "#6e7681" if is_dark else "#9aa5b1"
+        sec_qss = f"""
+            QPushButton {{
+                background-color: {sec_bg};
+                color: {sec_fg};
+                border: 1px solid {sec_bd};
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background-color: {sec_hv};
+            }}
+            QPushButton:disabled {{
+                background-color: {dis_bg};
+                color: {dis_fg};
+                border-color: transparent;
+            }}
+        """
+        for btn in (self.btn_clear_cache, self.btn_manage_keyring, self.btn_check_update, self.btn_view_logs, self.btn_cancel):
+            btn.setStyleSheet(sec_qss)
+
+        danger_bg = "#3b2024" if is_dark else "#fdecea"
+        danger_fg = "#ff7675" if is_dark else "#c0392b"
+        danger_bd = "#6e2f35" if is_dark else "#f5b7b1"
+        danger_hv = "#c0392b"
+        self.btn_uninstall.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {danger_bg};
+                color: {danger_fg};
+                border: 1px solid {danger_bd};
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background-color: {danger_hv};
+                color: white;
+                border-color: {danger_hv};
+            }}
+        """)
+
+        self.btn_save.setStyleSheet("""
+            QPushButton {
+                background-color: #2980b9;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 16px;
+                font-weight: bold;
+                font-size: 9.5pt;
+            }
+            QPushButton:hover {
+                background-color: #3498db;
+            }
+        """)
+
+        usage_col = "#5dade2" if is_dark else "#2980b9"
+        self.cache_usage_label.setStyleSheet(f"font-weight: bold; color: {usage_col};")
 
     def reject(self) -> None:
         """Restores the previously saved theme if the user cancels the dialog."""
@@ -352,10 +505,18 @@ class SettingsDialog(QDialog):
         self._update_worker.start()
 
     def _on_view_logs(self) -> None:
-        """Opens diagnostic log viewer dialog."""
+        """Opens diagnostic log viewer dialog non-blockingly."""
         from log_viewer import LogViewerDialog
+
+        if self._log_viewer_dialog is not None and self._log_viewer_dialog.isVisible():
+            self._log_viewer_dialog.raise_()
+            self._log_viewer_dialog.activateWindow()
+            return
         dialog = LogViewerDialog(parent=self)
-        dialog.exec()
+        self._log_viewer_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _on_manage_keyring(self) -> None:
         """Prompts user to store, view, or clear the rclone configuration password in the system keyring."""
@@ -422,23 +583,24 @@ class SettingsDialog(QDialog):
     def _on_clear_cache(self) -> None:
         """Safely clears local VFS cache files in background if no uploads are waiting in queue."""
         self.btn_clear_cache.setEnabled(False)
-        creds = (
-            self.daemon.rc_credentials
-            if (self.daemon is not None and self.daemon.is_running() and self.daemon.rc_credentials)
-            else None
-        )
+        active_daemons = self._get_active_daemons()
+        creds_list = [d.rc_credentials for d in active_daemons if getattr(d, "rc_credentials", None)]
 
-        def _check_before_clear(rc_creds: Any) -> tuple[int, int]:
+        def _check_before_clear(rc_creds_list: list[Any]) -> tuple[int, int]:
             usage = get_vfs_cache_usage_bytes()
             pending = 0
-            if usage > 0 and rc_creds is not None:
-                q_count = int(fetch_vfs_queue(rc_creds) or 0)
-                st = fetch_rclone_stats(rc_creds, timeout=2.0)
-                active_count = len(st.active_transfers) if (st and st.is_online) else 0
-                pending = max(q_count, active_count)
+            if usage > 0:
+                for rc_creds in rc_creds_list:
+                    try:
+                        q_count = int(fetch_vfs_queue(rc_creds) or 0)
+                        st = fetch_rclone_stats(rc_creds, timeout=2.0)
+                        active_count = len(st.active_transfers) if (st and st.is_online) else 0
+                        pending += max(q_count, active_count)
+                    except Exception:
+                        pass
             return usage, pending
 
-        self._cache_runner.submit(_check_before_clear, creds, callback=self._on_pre_clear_checked)
+        self._cache_runner.submit(_check_before_clear, creds_list, callback=self._on_pre_clear_checked)
 
     def _on_pre_clear_checked(self, result: Any) -> None:
         if not isinstance(result, tuple):
@@ -482,24 +644,37 @@ class SettingsDialog(QDialog):
             clear_vfs_cache_files()
             return get_vfs_cache_usage_bytes()
 
-        if self.daemon is not None and self.daemon.is_running():
-            active_remote = self.daemon.current_remote
-            active_read_only = bool(getattr(self.daemon, "current_read_only", False))
-            active_extra_args = getattr(self.daemon, "current_extra_args", None)
+        active_daemons = self._get_active_daemons()
+        if active_daemons:
+            remount_targets: list[tuple[Any, str, bool, Any]] = []
+            for d in active_daemons:
+                rem_name = d.current_remote
+                if rem_name:
+                    remount_targets.append((
+                        d,
+                        rem_name,
+                        bool(getattr(d, "current_read_only", False)),
+                        getattr(d, "current_extra_args", None),
+                    ))
 
-            def _after_stop() -> None:
+            remaining_to_stop = len(active_daemons)
+
+            def _after_all_stopped() -> None:
                 def _on_cleared_remount(remaining: Any) -> None:
-                    if active_remote and self.daemon is not None:
-                        self.daemon.start(
-                            active_remote,
-                            extra_args=active_extra_args,
-                            read_only=active_read_only,
-                        )
+                    for d_item, r_name, ro, extra in remount_targets:
+                        d_item.start(r_name, extra_args=extra, read_only=ro)
                     self._on_cache_cleared(remaining)
 
                 self._cache_runner.submit(_do_clear, callback=_on_cleared_remount)
 
-            self.daemon.stop_async(on_done=_after_stop)
+            def _on_one_stopped() -> None:
+                nonlocal remaining_to_stop
+                remaining_to_stop -= 1
+                if remaining_to_stop <= 0:
+                    _after_all_stopped()
+
+            for d in active_daemons:
+                d.stop_async(on_done=_on_one_stopped)
         else:
             self._cache_runner.submit(_do_clear, callback=self._on_cache_cleared)
 
@@ -606,9 +781,9 @@ class SettingsDialog(QDialog):
                 clipboard = QApplication.clipboard()
                 if clipboard is not None:
                     clipboard.setText(cmd_uninstall)
-                if self.daemon is not None and self.daemon.is_running():
+                for d in self._get_active_daemons():
                     try:
-                        self.daemon.stop()
+                        d.stop()
                     except Exception:
                         pass
                 self.reject()
@@ -627,15 +802,17 @@ class SettingsDialog(QDialog):
 
         import subprocess
         import urllib.parse
+        from filemanager_integration import clean_integration
         from rclone_daemon import unmount_fuse_path, is_path_mounted
         from rclone_config import get_rclone_conf_path
 
-        # 1. Cleanly stop the running daemon first so rclone exits and releases mount points and log files
-        if self.daemon is not None:
+        # 1. Cleanly stop all running daemons first so rclone exits and releases mount points and log files
+        for d in self._get_known_daemons():
             try:
-                if hasattr(self.daemon, "health_timer") and self.daemon.health_timer:
-                    self.daemon.health_timer.stop()
-                self.daemon.stop()
+                if hasattr(d, "health_timer") and d.health_timer:
+                    d.health_timer.stop()
+                if d.is_running():
+                    d.stop()
             except Exception:
                 pass
 
@@ -646,12 +823,13 @@ class SettingsDialog(QDialog):
                 self.runner.wait_all(5000)
             except Exception:
                 pass
-        daemon_runner = getattr(self.daemon, "_integration_runner", None) if self.daemon is not None else None
-        if daemon_runner is not None and daemon_runner is not self.runner:
-            try:
-                daemon_runner.wait_all(5000)
-            except Exception:
-                pass
+        for d in self._get_known_daemons():
+            daemon_runner = getattr(d, "_integration_runner", None)
+            if daemon_runner is not None and daemon_runner is not self.runner:
+                try:
+                    daemon_runner.wait_all(5000)
+                except Exception:
+                    pass
 
         xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
         xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -678,7 +856,7 @@ class SettingsDialog(QDialog):
             )
             wipe_rclone = (rc_res == QMessageBox.Yes)
 
-        # 2. Unmount and remove all directories under ~/CloudDrives
+        # 2. Unmount and remove all directories under ~/CloudDrives and custom per-remote mount points
         cloud_drives_base = os.path.expanduser("~/CloudDrives")
         if os.path.isdir(cloud_drives_base):
             for item in os.listdir(cloud_drives_base):
@@ -694,6 +872,22 @@ class SettingsDialog(QDialog):
                 os.rmdir(cloud_drives_base)
             except OSError:
                 pass
+
+        remotes_cfg = self.config.get("remotes_config")
+        if isinstance(remotes_cfg, dict):
+            for r_cfg in remotes_cfg.values():
+                if not isinstance(r_cfg, dict):
+                    continue
+                mp_raw = str(r_cfg.get("custom_mount_point") or r_cfg.get("mount_path") or "").strip()
+                if not mp_raw:
+                    continue
+                mp = os.path.abspath(os.path.expanduser(mp_raw))
+                if os.path.isdir(mp) or is_path_mounted(mp):
+                    unmount_fuse_path(mp, lazy=True)
+                try:
+                    clean_integration(mp)
+                except Exception:
+                    pass
 
         # 3. Remove orphaned GUI bookmarks and .bak files
         for p in [

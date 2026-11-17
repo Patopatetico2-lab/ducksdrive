@@ -41,7 +41,7 @@ from i18n import set_language, tr
 from rclone_stats import RcloneStatsPoller
 from filemanager_integration import integrate_mount, clean_integration
 from gui_tray import RcloneTrayIcon, get_app_icon
-from notifications import notify_mount_success, notify_connection_lost
+from notifications import notify_connection_lost
 from updater import UpdateCheckWorker
 
 # Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
@@ -272,8 +272,6 @@ class RcloneAppController(QObject):
         if not daemon:
             return
 
-        self.tray._on_state_changed(state, remote_name=clean)
-
         if state == "mounted":
             # Start statistics polling for this specific daemon
             if daemon.rc_credentials:
@@ -287,7 +285,6 @@ class RcloneAppController(QObject):
             # Add to file manager sidebar and persist last_remote
             save_last_remote(clean)
             self.runner.submit(integrate_mount, daemon.mount_point, f"DucksDrive - {clean}")
-            notify_mount_success(clean, daemon.mount_point, fallback_tray=self.tray)
 
         elif state in ("unmounting", "stopped", "error"):
             # Stop poller non-blocking

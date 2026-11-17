@@ -47,7 +47,7 @@ cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclon
 python3 -m venv "$INSTALL_DIR/venv"
 source "$INSTALL_DIR/venv/bin/activate"
 pip install --upgrade pip
-pip install "PySide6>=6.6,<7" requests
+pip install "PySide6>=6.6,<7"
 deactivate
 
 mkdir -p "$BIN_DIR"

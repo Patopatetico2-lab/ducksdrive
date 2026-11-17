@@ -58,18 +58,46 @@ if mountpoint -q "$LEGACY_MOUNT" 2>/dev/null || [ -d "$LEGACY_MOUNT" ]; then
     fi
 fi
 
-echo "Removing orphaned GUI bookmarks..."
+echo "Unmounting custom paths and removing orphaned GUI bookmarks..."
 
 python3 - <<'PYEOF' 2>/dev/null || true
-import os, re, urllib.parse
+import json, os, re, shutil, subprocess, urllib.parse
 xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+
+custom_paths = []
+cfg_file = os.path.join(xdg_config, "ducksdrive", "config.json")
+if os.path.exists(cfg_file):
+    try:
+        with open(cfg_file, encoding="utf-8") as f:
+            cfg = json.load(f)
+        remotes_cfg = cfg.get("remotes_config") if isinstance(cfg, dict) else {}
+        if isinstance(remotes_cfg, dict):
+            for r_cfg in remotes_cfg.values():
+                if isinstance(r_cfg, dict):
+                    mp_raw = str(r_cfg.get("custom_mount_point") or r_cfg.get("mount_path") or "").strip()
+                    if mp_raw:
+                        custom_paths.append(os.path.abspath(os.path.expanduser(mp_raw)))
+    except Exception:
+        pass
+
+for mp in custom_paths:
+    for tool, flag in (("fusermount3", "-uz"), ("fusermount", "-uz"), ("umount", "-l")):
+        bin_path = shutil.which(tool)
+        if bin_path:
+            res = subprocess.run([bin_path, flag, mp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode == 0:
+                break
+
+custom_uris = [f"file://{urllib.parse.quote(mp)}" for mp in custom_paths]
 
 for p in [os.path.join(xdg_data, "user-places.xbel"), os.path.join(xdg_config, "user-places.xbel")]:
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f: s = f.read()
         s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
         s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', s, flags=re.DOTALL)
+        for uri in custom_uris:
+            s = re.sub(rf'<bookmark[^>]*href="{re.escape(uri)}"[^>]*>.*?</bookmark>\s*', '', s, flags=re.DOTALL)
         with open(p, "w", encoding="utf-8") as f: f.write(s)
     bak = p + ".bak"
     if os.path.exists(bak):
@@ -82,7 +110,9 @@ if os.path.exists(gtk_bookmarks):
     with open(gtk_bookmarks, "w", encoding="utf-8") as f:
         for line in lines:
             unquoted = urllib.parse.unquote(line)
-            if "CloudDrives" not in line and "GoogleDrive" not in line and "CloudDrives" not in unquoted and "GoogleDrive" not in unquoted:
+            stripped = line.strip()
+            is_custom = any(stripped == uri or stripped.startswith(uri + " ") for uri in custom_uris)
+            if not is_custom and "CloudDrives" not in line and "GoogleDrive" not in line and "CloudDrives" not in unquoted and "GoogleDrive" not in unquoted:
                 f.write(line)
 PYEOF
 

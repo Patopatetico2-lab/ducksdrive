@@ -63,7 +63,19 @@ class RemoteSettingsDialog(QDialog):
 
         self._init_ui()
         self._load_values()
-        apply_app_theme(str(load_config().get("theme") or "auto"))
+        self.apply_theme(str(load_config().get("theme") or "auto"))
+
+    def apply_theme(self, theme_pref: Optional[str] = None) -> None:
+        """Applies the active QPalette styling to the dialog and its child widgets."""
+        active_pref = theme_pref or str(load_config().get("theme") or "auto")
+        palette = apply_app_theme(active_pref)
+        if palette is not None:
+            self.setPalette(palette)
+            for child in self.findChildren(QWidget):
+                child.setPalette(palette)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -139,11 +151,13 @@ class RemoteSettingsDialog(QDialog):
         self.bwlimit_combo = QComboBox()
         self.bwlimit_combo.addItem(tr("Herdar configuração global"), "")
         self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
-        self.bwlimit_combo.addItem("2 MB/s", "2M")
-        self.bwlimit_combo.addItem("5 MB/s", "5M")
-        self.bwlimit_combo.addItem("10 MB/s", "10M")
-        self.bwlimit_combo.addItem("25 MB/s", "25M")
-        self.bwlimit_combo.addItem("50 MB/s", "50M")
+        self.bwlimit_combo.addItem(tr("1 MB/s (Econômico)"), "1M")
+        self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
+        self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
+        self.bwlimit_combo.addItem(tr("10 MB/s (Rápido)"), "10M")
+        self.bwlimit_combo.addItem(tr("25 MB/s (Muito Rápido)"), "25M")
+        self.bwlimit_combo.addItem(tr("50 MB/s (Máximo)"), "50M")
+        self.bwlimit_combo.addItem(tr("100 MB/s (Ultra Rápido)"), "100M")
         perf_layout.addRow(tr("Limite de Banda:"), self.bwlimit_combo)
 
         self.cache_spin = QSpinBox()
@@ -185,6 +199,9 @@ class RemoteSettingsDialog(QDialog):
         idx = self.bwlimit_combo.findData(bw)
         if idx >= 0:
             self.bwlimit_combo.setCurrentIndex(idx)
+        elif bw:
+            self.bwlimit_combo.addItem(tr("Personalizado (%s)") % bw, bw)
+            self.bwlimit_combo.setCurrentIndex(self.bwlimit_combo.count() - 1)
 
         cache_str = str(self.remote_cfg.get("vfs_cache_max_size") or "").strip().upper()
         if cache_str.endswith("G") and cache_str[:-1].isdigit():

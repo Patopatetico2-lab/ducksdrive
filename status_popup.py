@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -195,12 +196,14 @@ class TransferItem(QWidget):
     def __init__(self, name: str, percentage: int, is_dark: bool = False, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.file_name = name
+        self._percentage = percentage
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(2)
 
         self.name_label = QLabel(name)
         self.name_label.setWordWrap(False)
+        self.name_label.setToolTip(name)
         layout.addWidget(self.name_label)
 
         self.progress = QProgressBar()
@@ -216,9 +219,13 @@ class TransferItem(QWidget):
         self.name_label.setStyleSheet(f"font-size: 9pt; color: {text_col};")
 
     def update_data(self, name: str, percentage: int) -> None:
-        self.file_name = name
-        self.name_label.setText(name)
-        self.progress.setValue(percentage)
+        if name != self.file_name:
+            self.file_name = name
+            self.name_label.setText(name)
+            self.name_label.setToolTip(name)
+        if percentage != self._percentage:
+            self._percentage = percentage
+            self.progress.setValue(percentage)
 
 
 class RecentTransferItem(QWidget):
@@ -226,12 +233,15 @@ class RecentTransferItem(QWidget):
 
     def __init__(self, name: str, size_str: str, is_dark: bool = False, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._file_name = name
+        self._size_str = size_str
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 3, 0, 3)
         layout.setSpacing(6)
 
         self.name_label = QLabel(f"✓  {name}")
         self.name_label.setWordWrap(False)
+        self.name_label.setToolTip(name)
         self.size_label = QLabel(size_str)
         self.size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -246,8 +256,13 @@ class RecentTransferItem(QWidget):
         self.size_label.setStyleSheet(f"font-size: 8pt; color: {size_col};")
 
     def update_data(self, name: str, size_str: str) -> None:
-        self.name_label.setText(f"✓  {name}")
-        self.size_label.setText(size_str)
+        if name != self._file_name:
+            self._file_name = name
+            self.name_label.setText(f"✓  {name}")
+            self.name_label.setToolTip(name)
+        if size_str != self._size_str:
+            self._size_str = size_str
+            self.size_label.setText(size_str)
 
 
 def _get_window_icon() -> QIcon:
@@ -280,10 +295,10 @@ class StatusPopup(QWidget):
             super().__init__(parent, Qt.Window)
             self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
             self.setWindowIcon(_get_window_icon())
-            self.setMinimumWidth(360)
+            self.setMinimumWidth(376)
         else:
             super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-            self.setFixedWidth(340)
+            self.setFixedWidth(364)
 
         self.daemons: dict[str, RcloneDaemon] = daemons.copy() if daemons else {}
         self._fallback_daemon: Optional[RcloneDaemon] = daemon
@@ -367,102 +382,32 @@ class StatusPopup(QWidget):
         self.update_mounted_remotes()
 
     def _init_ui(self) -> None:
-        """Initializes the popup layout, widgets, and styling."""
+        """Initializes the popup layout, grouped cards, and action hierarchy."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 14, 14, 14)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(14, 12, 14, 14)
+        main_layout.setSpacing(10)
 
-        # Apply clean modern card styling
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #ffffff;
-                color: #2c3e50;
-                font-family: 'Sans Serif';
-                font-size: 10pt;
-                border-radius: 10px;
-            }
-            QLabel {
-                background: transparent;
-            }
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-            QProgressBar {
-                border: none;
-                background-color: #ecf0f1;
-                height: 6px;
-                border-radius: 3px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #27ae60;
-                border-radius: 3px;
-            }
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-        """)
-
-        # 1. Header (Account & Status + Menu Button + Close Button)
+        # 1. Header (Title left • Status badge, Menu, Close right)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
 
         self.title_label = QLabel("<b>DucksDrive</b>")
-        self.title_label.setStyleSheet("font-size: 11pt; color: #2c3e50;")
         header_layout.addWidget(self.title_label)
-
-        self.btn_menu = QPushButton(tr("Menu ▾"))
-        self.btn_menu.setFixedHeight(24)
-        self.btn_menu.setCursor(Qt.PointingHandCursor)
-        self.btn_menu.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                padding: 2px 8px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 8.5pt;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-        header_layout.addWidget(self.btn_menu)
         header_layout.addStretch()
 
         self.status_badge = QLabel(tr("● Offline"))
-        self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt; margin-right: 6px;")
         header_layout.addWidget(self.status_badge)
 
+        self.btn_menu = QPushButton(tr("Menu"))
+        self.btn_menu.setFixedHeight(24)
+        self.btn_menu.setCursor(Qt.PointingHandCursor)
+        header_layout.addWidget(self.btn_menu)
+
         self.btn_close = QPushButton("✕")
-        self.btn_close.setFixedSize(22, 22)
+        self.btn_close.setFixedSize(24, 24)
+        self.btn_close.setCursor(Qt.PointingHandCursor)
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
-        self.btn_close.setStyleSheet("""
-            QPushButton {
-                background: #ecf0f1;
-                color: #7f8c8d;
-                border: none;
-                border-radius: 11px;
-                font-weight: bold;
-                font-size: 9pt;
-                padding: 0;
-            }
-            QPushButton:hover {
-                background: #e74c3c;
-                color: white;
-            }
-        """)
         self.btn_close.clicked.connect(self.close)
         header_layout.addWidget(self.btn_close)
         if self.window_mode:
@@ -470,51 +415,41 @@ class StatusPopup(QWidget):
 
         main_layout.addLayout(header_layout)
 
-        # Multi-Mount Cloud Drive Selector
+        # 2. Cloud & Storage Card
+        self.cloud_card = QFrame()
+        self.cloud_card.setObjectName("SectionCard")
+        cloud_card_layout = QVBoxLayout(self.cloud_card)
+        cloud_card_layout.setContentsMargins(10, 9, 10, 9)
+        cloud_card_layout.setSpacing(7)
+
         self.selector_bar = QHBoxLayout()
         self.selector_bar.setContentsMargins(0, 0, 0, 0)
-        self.selector_bar.setSpacing(6)
+        self.selector_bar.setSpacing(8)
 
         self.lbl_cloud = QLabel(tr("Nuvem:"))
-        self.lbl_cloud.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #7f8c8d;")
+        self.lbl_cloud.setFixedWidth(56)
         self.selector_bar.addWidget(self.lbl_cloud)
 
         self.remote_combo = QComboBox()
         self.remote_combo.setFixedHeight(26)
-        self.remote_combo.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #bdc3c7;
-                border-radius: 4px;
-                padding: 1px 6px;
-                font-size: 8.5pt;
-                font-weight: bold;
-                background-color: transparent;
-            }
-        """)
         self.remote_combo.currentIndexChanged.connect(self._on_remote_combo_changed)
         self.selector_bar.addWidget(self.remote_combo, 1)
+        cloud_card_layout.addLayout(self.selector_bar)
 
-        main_layout.addLayout(self.selector_bar)
-
-        # 2. Quota Section
         quota_layout = QVBoxLayout()
-        quota_layout.setSpacing(2)
+        quota_layout.setContentsMargins(0, 0, 0, 0)
+        quota_layout.setSpacing(4)
         self.quota_label = QLabel(tr("Desconectado"))
-        self.quota_label.setStyleSheet("font-size: 8pt; color: #7f8c8d;")
         self.quota_bar = QProgressBar()
-        self.quota_bar.setFixedHeight(6)
+        self.quota_bar.setRange(0, 1000)
+        self.quota_bar.setFixedHeight(5)
         self.quota_bar.setTextVisible(False)
-        self.quota_bar.setStyleSheet("QProgressBar::chunk { background-color: #3498db; }")
         self.quota_bar.hide()
         quota_layout.addWidget(self.quota_label)
         quota_layout.addWidget(self.quota_bar)
+        cloud_card_layout.addLayout(quota_layout)
 
-        main_layout.addLayout(quota_layout)
-
-        # Pause / Connect button
-        self.btn_pause = QPushButton(tr("Conectar / Reconectar"))
-        self.btn_pause.clicked.connect(self._toggle_pause)
-        main_layout.addWidget(self.btn_pause)
+        main_layout.addWidget(self.cloud_card)
 
         # Inhibitor Warning Banner (Shutdown Protection)
         self.lbl_inhibitor_banner = QLabel(tr("⚠️ Desligamento Adiado: Gravando arquivos na nuvem"))
@@ -526,24 +461,28 @@ class StatusPopup(QWidget):
                 color: white;
                 font-weight: bold;
                 font-size: 8.5pt;
-                padding: 5px 8px;
-                border-radius: 5px;
+                padding: 6px 8px;
+                border-radius: 6px;
             }
         """)
         self.lbl_inhibitor_banner.hide()
         main_layout.addWidget(self.lbl_inhibitor_banner)
 
-        # Dynamic Bandwidth Selector Row
-        self.bw_layout = QHBoxLayout()
-        self.bw_layout.setContentsMargins(0, 0, 0, 0)
-        self.bw_layout.setSpacing(6)
+        # 3. Network & VFS Cache Controls Card (aligned grid)
+        self.controls_card = QFrame()
+        self.controls_card.setObjectName("SectionCard")
+        controls_grid = QGridLayout(self.controls_card)
+        controls_grid.setContentsMargins(10, 9, 10, 9)
+        controls_grid.setHorizontalSpacing(8)
+        controls_grid.setVerticalSpacing(7)
+        controls_grid.setColumnStretch(1, 1)
 
         self.lbl_bw = QLabel(tr("Banda:"))
-        self.lbl_bw.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #7f8c8d;")
-        self.bw_layout.addWidget(self.lbl_bw)
+        self.lbl_bw.setFixedWidth(56)
+        controls_grid.addWidget(self.lbl_bw, 0, 0)
 
         self.combo_bwlimit = QComboBox()
-        self.combo_bwlimit.setFixedHeight(24)
+        self.combo_bwlimit.setFixedHeight(26)
         self.combo_bwlimit.addItem(tr("Ilimitado"), "off")
         self.combo_bwlimit.addItem("1 MB/s", "1M")
         self.combo_bwlimit.addItem("2 MB/s", "2M")
@@ -551,64 +490,62 @@ class StatusPopup(QWidget):
         self.combo_bwlimit.addItem("10 MB/s", "10M")
         self.combo_bwlimit.addItem("25 MB/s", "25M")
         self.combo_bwlimit.addItem("50 MB/s", "50M")
+        self.combo_bwlimit.addItem("100 MB/s", "100M")
         self.combo_bwlimit.currentIndexChanged.connect(self._on_quick_bwlimit_changed)
-        self.bw_layout.addWidget(self.combo_bwlimit, 1)
-        main_layout.addLayout(self.bw_layout)
-
-        # VFS Queue & SSD Cache row with Inactive Cache Cleaner
-        self.vfs_layout = QHBoxLayout()
-        self.vfs_layout.setContentsMargins(0, 0, 0, 0)
-        self.vfs_layout.setSpacing(6)
+        controls_grid.addWidget(self.combo_bwlimit, 0, 1, 1, 2)
 
         self.lbl_vfs_title = QLabel(tr("VFS SSD:"))
-        self.lbl_vfs_title.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #7f8c8d;")
-        self.vfs_layout.addWidget(self.lbl_vfs_title)
+        self.lbl_vfs_title.setFixedWidth(56)
+        controls_grid.addWidget(self.lbl_vfs_title, 1, 0)
 
         self.lbl_vfs_info = QLabel(tr("0 B no SSD • 0 na fila"))
-        self.lbl_vfs_info.setStyleSheet("font-size: 8.5pt; color: #2980b9;")
-        self.vfs_layout.addWidget(self.lbl_vfs_info, 1)
+        controls_grid.addWidget(self.lbl_vfs_info, 1, 1)
 
         self.btn_clear_inactive = QPushButton(tr("Limpar Inativo"))
         self.btn_clear_inactive.setToolTip(tr("Descartar metadados e arquivos inativos da memória/cache (vfs/forget)"))
-        self.btn_clear_inactive.setFixedHeight(22)
+        self.btn_clear_inactive.setFixedHeight(24)
+        self.btn_clear_inactive.setCursor(Qt.PointingHandCursor)
         self.btn_clear_inactive.clicked.connect(self._on_clear_inactive_vfs)
-        self.vfs_layout.addWidget(self.btn_clear_inactive)
-        main_layout.addLayout(self.vfs_layout)
+        controls_grid.addWidget(self.btn_clear_inactive, 1, 2)
+
+        self.bw_layout = controls_grid
+        self.vfs_layout = controls_grid
+        main_layout.addWidget(self.controls_card)
 
         # Separator line
         self.sep_line = QFrame()
         self.sep_line.setFrameShape(QFrame.HLine)
         self.sep_line.setFrameShadow(QFrame.Sunken)
-        self.sep_line.setStyleSheet("background-color: #ecf0f1; max-height: 1px;")
+        self.sep_line.setFixedHeight(1)
         main_layout.addWidget(self.sep_line)
 
-        # 3. Dynamic Transfer List (Scrollable)
+        # 4. Dynamic Transfer List (Scrollable)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setMaximumHeight(180)
+        self.scroll.setMinimumHeight(56)
+        self.scroll.setMaximumHeight(160)
         self.scroll_content = QWidget()
+        self.scroll_content.setObjectName("ScrollContent")
         self.scroll_layout = QVBoxLayout(self.scroll_content)
-        self.scroll_layout.setContentsMargins(0, 0, 8, 0)
+        self.scroll_layout.setContentsMargins(0, 0, 6, 0)
         self.scroll_layout.setSpacing(2)
         self.scroll_layout.addStretch()
         self.scroll.setWidget(self.scroll_content)
         self.scroll.viewport().installEventFilter(self)
 
         self.empty_label = QLabel(tr("Nenhum arquivo sendo transferido"))
-        self.empty_label.setStyleSheet("color: #bdc3c7; font-style: italic; padding: 20px 0;")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.scroll_layout.insertWidget(0, self.empty_label)
 
         main_layout.addWidget(self.scroll)
 
-        # 4. Metrics & Chart
+        # 5. Metrics & Chart
         metrics_layout = QHBoxLayout()
+        metrics_layout.setContentsMargins(2, 0, 2, 0)
         self.speed_title_label = QLabel(tr("Velocidade:"))
         self.speed_value = QLabel("0.00 MB/s")
-        self.speed_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #2980b9;")
         self.eta_title_label = QLabel(tr("Restam:"))
         self.eta_value = QLabel("--:--:--")
-        self.eta_value.setStyleSheet("font-size: 10pt; font-weight: bold; color: #e67e22;")
         metrics_layout.addWidget(self.speed_title_label)
         metrics_layout.addWidget(self.speed_value)
         metrics_layout.addStretch()
@@ -619,23 +556,86 @@ class StatusPopup(QWidget):
         self.chart_widget = SpeedChartWidget()
         main_layout.addWidget(self.chart_widget)
 
-        # Footer
-        footer_layout = QHBoxLayout()
+        # 6. Unified Bottom Action Bar (Primary action + aligned secondary controls)
+        footer_container = QVBoxLayout()
+        footer_container.setContentsMargins(0, 2, 0, 0)
+        footer_container.setSpacing(6)
+
         self.btn_open = QPushButton(tr("Abrir Pasta Local"))
+        self.btn_open.setFixedHeight(34)
+        self.btn_open.setCursor(Qt.PointingHandCursor)
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_cloud_folder)
-        footer_layout.addWidget(self.btn_open, 2)
+        footer_container.addWidget(self.btn_open)
+
+        secondary_actions = QHBoxLayout()
+        secondary_actions.setContentsMargins(0, 0, 0, 0)
+        secondary_actions.setSpacing(8)
+
+        self.btn_pause = QPushButton(tr("Conectar / Reconectar"))
+        self.btn_pause.setFixedHeight(30)
+        self.btn_pause.setCursor(Qt.PointingHandCursor)
+        self.btn_pause.clicked.connect(self._toggle_pause)
+        secondary_actions.addWidget(self.btn_pause, 3)
 
         self.btn_refresh = QPushButton(tr("Atualizar"))
+        self.btn_refresh.setFixedHeight(30)
+        self.btn_refresh.setCursor(Qt.PointingHandCursor)
         self.btn_refresh.setEnabled(False)
         self.btn_refresh.setToolTip(tr("Recarregar cache de pastas (vfs/refresh)"))
         self.btn_refresh.clicked.connect(self._refresh_vfs)
-        footer_layout.addWidget(self.btn_refresh, 1)
+        secondary_actions.addWidget(self.btn_refresh, 2)
 
-        main_layout.addLayout(footer_layout)
+        footer_container.addLayout(secondary_actions)
+        main_layout.addLayout(footer_container)
+
+    def _apply_status_badge_ui(self, is_online: bool) -> None:
+        """Styles the header status badge pill according to connection state and theme."""
+        if is_online:
+            self.status_badge.setText(tr("● Online"))
+            bg_col = "#1c3829" if self.is_dark else "#e8f8f0"
+            fg_col = "#2ecc71" if self.is_dark else "#1e8449"
+            bd_col = "#25523b" if self.is_dark else "#b7e4c7"
+        else:
+            self.status_badge.setText(tr("● Offline"))
+            bg_col = "#3b2024" if self.is_dark else "#fdecea"
+            fg_col = "#ff6b6b" if self.is_dark else "#c0392b"
+            bd_col = "#5c2b30" if self.is_dark else "#f5c6cb"
+        self.status_badge.setStyleSheet(
+            f"background-color: {bg_col}; color: {fg_col}; border: 1px solid {bd_col}; "
+            f"border-radius: 9px; padding: 2px 8px; font-weight: bold; font-size: 8.5pt;"
+        )
+
+    def _secondary_button_qss(self, font_size: str = "8.5pt", padding: str = "3px 10px", radius: int = 6) -> str:
+        """Returns cohesive QSS for subtle secondary action buttons."""
+        sec_bg = "#2d3239" if self.is_dark else "#f1f3f6"
+        sec_fg = "#eff0f1" if self.is_dark else "#2c3e50"
+        sec_border = "#424852" if self.is_dark else "#cfd6de"
+        sec_hover = "#39404a" if self.is_dark else "#e3e7ed"
+        dis_bg = "#262a30" if self.is_dark else "#f4f6f8"
+        dis_fg = "#6e7681" if self.is_dark else "#9aa5b1"
+        return f"""
+            QPushButton {{
+                background-color: {sec_bg};
+                color: {sec_fg};
+                border: 1px solid {sec_border};
+                border-radius: {radius}px;
+                font-weight: bold;
+                font-size: {font_size};
+                padding: {padding};
+            }}
+            QPushButton:hover {{
+                background-color: {sec_hover};
+            }}
+            QPushButton:disabled {{
+                background-color: {dis_bg};
+                color: {dis_fg};
+                border-color: transparent;
+            }}
+        """
 
     def apply_theme(self, theme_pref: Optional[str] = None) -> None:
-        """Applies Dark or Light theme styling to the popup, transfer items, and speed chart."""
+        """Applies Dark or Light theme styling to the popup, cards, transfer items, and speed chart."""
         if theme_pref is not None:
             self._theme_pref = theme_pref
         effective_dark = is_dark_theme_active(self._theme_pref)
@@ -645,31 +645,39 @@ class StatusPopup(QWidget):
         self._applied_theme_state = theme_state
         self.is_dark = effective_dark
         if self.is_dark:
-            # Tema Escuro (Dark Mode - combina com Breeze Dark / Adwaita Dark)
-            bg = "#202326"
-            fg = "#fcfcfc"
+            bg = "#1e2125"
+            card_bg = "#262a30"
+            card_border = "#343a42"
+            fg = "#f2f4f7"
             border_col = "#3daee9"
-            bar_bg = "#2d3238"
-            muted = "#a1a9b1"
+            bar_bg = "#323841"
+            muted = "#9ca5b0"
             empty_col = "#7f8c8d"
-            sep_col = "#333940"
-            close_bg = "#2d3238"
-            close_fg = "#fcfcfc"
+            sep_col = "#30353d"
+            close_bg = "#2d3239"
+            close_fg = "#cfd5dc"
             speed_col = "#5dade2"
             eta_col = "#f39c12"
+            combo_border = "#454c56"
+            combo_bg = "#1e2125"
+            combo_fg = "#eff0f1"
         else:
-            # Tema Claro (Light Mode)
             bg = "#ffffff"
+            card_bg = "#f5f7fa"
+            card_border = "#e2e6ec"
             fg = "#2c3e50"
-            border_col = "#dcdde1"
-            bar_bg = "#ecf0f1"
-            muted = "#7f8c8d"
-            empty_col = "#95a5a6"
-            sep_col = "#ecf0f1"
-            close_bg = "#ecf0f1"
-            close_fg = "#7f8c8d"
+            border_col = "#cfd6de"
+            bar_bg = "#e4e8ee"
+            muted = "#6c7a89"
+            empty_col = "#8c9aa8"
+            sep_col = "#e6e9ef"
+            close_bg = "#eef1f5"
+            close_fg = "#5c6b7a"
             speed_col = "#2980b9"
             eta_col = "#e67e22"
+            combo_border = "#c5cdd6"
+            combo_bg = "#ffffff"
+            combo_fg = "#2c3e50"
 
         self.setObjectName("StatusPopupRoot")
         self.setStyleSheet(f"""
@@ -678,61 +686,53 @@ class StatusPopup(QWidget):
                 border: 1px solid {border_col};
                 border-radius: 10px;
             }}
-            QWidget {{
-                background-color: {bg};
-                color: {fg};
-                font-family: 'Sans Serif';
-                font-size: 10pt;
+            QWidget#ScrollContent {{
+                background: transparent;
+            }}
+            QFrame#SectionCard {{
+                background-color: {card_bg};
+                border: 1px solid {card_border};
+                border-radius: 8px;
             }}
             QLabel {{
                 background: transparent;
                 color: {fg};
             }}
-            QPushButton {{
-                background-color: #3498db;
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 6px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: #2980b9;
-            }}
-            QPushButton:disabled {{
-                background-color: {bar_bg};
-                color: {muted};
-            }}
             QProgressBar {{
                 border: none;
                 background-color: {bar_bg};
-                height: 6px;
-                border-radius: 3px;
+                height: 5px;
+                border-radius: 2px;
                 text-align: center;
             }}
             QProgressBar::chunk {{
-                background-color: #27ae60;
-                border-radius: 3px;
+                background-color: #3498db;
+                border-radius: 2px;
             }}
             QScrollArea {{
                 border: none;
                 background: transparent;
             }}
         """)
-        self.title_label.setStyleSheet(f"font-size: 11pt; color: {fg};")
+        self.title_label.setStyleSheet(f"font-size: 11.5pt; color: {fg};")
+        self.lbl_cloud.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
+        self.lbl_bw.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
+        self.lbl_vfs_title.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
+        self.lbl_vfs_info.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {speed_col};")
         self.quota_label.setStyleSheet(f"font-size: 8pt; color: {muted};")
-        self.empty_label.setStyleSheet(f"color: {empty_col}; font-style: italic; padding: 20px 0;")
+        self.empty_label.setStyleSheet(f"color: {empty_col}; font-style: italic; padding: 12px 0;")
         self.sep_line.setStyleSheet(f"background-color: {sep_col}; max-height: 1px;")
-        self.speed_title_label.setStyleSheet(f"color: {fg};")
-        self.eta_title_label.setStyleSheet(f"color: {fg};")
+        self.speed_title_label.setStyleSheet(f"font-size: 9pt; color: {muted};")
+        self.eta_title_label.setStyleSheet(f"font-size: 9pt; color: {muted};")
         self.speed_value.setStyleSheet(f"font-size: 10pt; font-weight: bold; color: {speed_col};")
         self.eta_value.setStyleSheet(f"font-size: 10pt; font-weight: bold; color: {eta_col};")
+
         self.btn_close.setStyleSheet(f"""
             QPushButton {{
                 background: {close_bg};
                 color: {close_fg};
-                border: none;
-                border-radius: 11px;
+                border: 1px solid {card_border};
+                border-radius: 12px;
                 font-weight: bold;
                 font-size: 9pt;
                 padding: 0;
@@ -740,73 +740,72 @@ class StatusPopup(QWidget):
             QPushButton:hover {{
                 background: #e74c3c;
                 color: white;
+                border-color: #e74c3c;
             }}
         """)
-        menu_bg = "#2980b9" if self.is_dark else "#3498db"
-        menu_hover = "#3498db" if self.is_dark else "#2980b9"
+
         self.btn_menu.setStyleSheet(f"""
             QPushButton {{
-                background-color: {menu_bg};
+                background-color: {close_bg};
+                color: {fg};
+                border: 1px solid {combo_border};
+                padding: 2px 18px 2px 9px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 8.5pt;
+            }}
+            QPushButton:hover {{
+                background-color: {"#39404a" if self.is_dark else "#e3e7ed"};
+            }}
+            QPushButton::menu-indicator {{
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
+                right: 6px;
+            }}
+        """)
+
+        combo_qss = f"""
+            QComboBox {{
+                border: 1px solid {combo_border};
+                border-radius: 5px;
+                padding: 2px 8px;
+                font-size: 8.5pt;
+                font-weight: bold;
+                background-color: {combo_bg};
+                color: {combo_fg};
+            }}
+            QComboBox:disabled {{
+                color: {muted};
+            }}
+        """
+        self.remote_combo.setStyleSheet(combo_qss)
+        self.combo_bwlimit.setStyleSheet(combo_qss)
+
+        self.btn_clear_inactive.setStyleSheet(self._secondary_button_qss(font_size="8pt", padding="2px 8px", radius=5))
+        self.btn_refresh.setStyleSheet(self._secondary_button_qss(font_size="9pt", padding="4px 10px", radius=6))
+
+        dis_bg = "#2d3238" if self.is_dark else "#e4e8ee"
+        self.btn_open.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #2980b9;
                 color: white;
                 border: none;
-                padding: 2px 8px;
-                border-radius: 4px;
+                padding: 6px 12px;
+                border-radius: 6px;
                 font-weight: bold;
-                font-size: 8.5pt;
+                font-size: 9.5pt;
             }}
             QPushButton:hover {{
-                background-color: {menu_hover};
-            }}
-        """)
-        combo_border = "#454a4f" if self.is_dark else "#bdc3c7"
-        combo_bg = "#202326" if self.is_dark else "#ffffff"
-        combo_fg = "#eff0f1" if self.is_dark else "#2c3e50"
-        self.remote_combo.setStyleSheet(f"""
-            QComboBox {{
-                border: 1px solid {combo_border};
-                border-radius: 4px;
-                padding: 1px 6px;
-                font-size: 8.5pt;
-                font-weight: bold;
-                background-color: {combo_bg};
-                color: {combo_fg};
-            }}
-        """)
-        self.combo_bwlimit.setStyleSheet(f"""
-            QComboBox {{
-                border: 1px solid {combo_border};
-                border-radius: 4px;
-                padding: 1px 6px;
-                font-size: 8.5pt;
-                font-weight: bold;
-                background-color: {combo_bg};
-                color: {combo_fg};
-            }}
-        """)
-        btn_clear_bg = "#3a4048" if self.is_dark else "#ecf0f1"
-        btn_clear_fg = "#eff0f1" if self.is_dark else "#2c3e50"
-        self.btn_clear_inactive.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {btn_clear_bg};
-                color: {btn_clear_fg};
-                border: 1px solid {combo_border};
-                border-radius: 4px;
-                font-size: 8pt;
-                font-weight: bold;
-                padding: 2px 6px;
-            }}
-            QPushButton:hover {{
-                background-color: #e67e22;
-                color: white;
+                background-color: #3498db;
             }}
             QPushButton:disabled {{
-                background-color: {bar_bg};
+                background-color: {dis_bg};
                 color: {muted};
             }}
         """)
-        self.lbl_bw.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
-        self.lbl_vfs_title.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {muted};")
-        self.lbl_vfs_info.setStyleSheet(f"font-size: 8.5pt; color: {speed_col};")
+
+        active_daemon = self.get_active_daemon()
+        self._apply_status_badge_ui(bool(active_daemon and active_daemon.is_running()))
         self._apply_pause_button_ui()
         self.chart_widget.is_dark = self.is_dark
         if self.isVisible():
@@ -835,7 +834,7 @@ class StatusPopup(QWidget):
 
     def retranslate_ui(self) -> None:
         """Updates all visible labels and tooltips in the popup when the language changes."""
-        self.btn_menu.setText(tr("Menu ▾"))
+        self.btn_menu.setText(tr("Menu"))
         if self.window_mode:
             self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
@@ -854,7 +853,7 @@ class StatusPopup(QWidget):
         self.btn_refresh.setToolTip(tr("Recarregar cache de pastas (vfs/refresh)"))
         active_daemon = self.get_active_daemon()
         if active_daemon and active_daemon.is_running():
-            self.status_badge.setText(tr("● Online"))
+            self._apply_status_badge_ui(True)
             if self._last_quota_values is not None:
                 self._on_quota_success(*self._last_quota_values)
             else:
@@ -866,7 +865,7 @@ class StatusPopup(QWidget):
                 else:
                     self._fetch_quota()
         else:
-            self.status_badge.setText(tr("● Offline"))
+            self._apply_status_badge_ui(False)
             if active_daemon and active_daemon.state == "starting":
                 self.quota_label.setText(tr("Calculando espaço..."))
             else:
@@ -897,7 +896,7 @@ class StatusPopup(QWidget):
             for r in remotes_to_show:
                 d = self.daemons.get(r)
                 is_active = d.is_running() if d else False
-                badge = f"☁ {r} (" + tr("Ativo") + ")" if is_active else f"☁ {r}"
+                badge = f"● {r} (" + tr("Ativo") + ")" if is_active else r
                 self.remote_combo.addItem(badge, r)
 
             target = self.current_remote_name or remotes_to_show[0]
@@ -910,11 +909,27 @@ class StatusPopup(QWidget):
 
         self.remote_combo.blockSignals(False)
 
+    def sync_bwlimit_combo(self) -> None:
+        """Synchronizes combo_bwlimit with the effective bandwidth limit of the selected remote."""
+        from rclone_settings import get_remote_config, load_config
+
+        clean_sel = (self.current_remote_name or "").rstrip(":")
+        rem_cfg = get_remote_config(clean_sel) if clean_sel else {}
+        bw_limit = str(rem_cfg.get("bwlimit") or load_config().get("bwlimit") or "off")
+        self.combo_bwlimit.blockSignals(True)
+        idx = self.combo_bwlimit.findData(bw_limit)
+        if idx < 0 and bw_limit:
+            self.combo_bwlimit.addItem(tr("Personalizado (%s)") % bw_limit, bw_limit)
+            idx = self.combo_bwlimit.count() - 1
+        self.combo_bwlimit.setCurrentIndex(max(0, idx))
+        self.combo_bwlimit.blockSignals(False)
+
     def _on_remote_combo_changed(self, index: int) -> None:
         selected = str(self.remote_combo.currentData() or "")
         if selected and selected != self.current_remote_name:
             self.current_remote_name = selected
             d = self.get_active_daemon()
+            self.is_paused = bool(d and d.is_user_paused)
             self._on_daemon_state_changed(d.state if d else "stopped", remote_name=selected)
             if hasattr(self, "_remote_speed_history") and selected in self._remote_speed_history:
                 self.chart_widget.speed_history = deque(self._remote_speed_history[selected], maxlen=self.chart_widget.max_points)
@@ -922,18 +937,9 @@ class StatusPopup(QWidget):
                     self.chart_widget.update()
             if selected in self._remote_stats:
                 self._latest_stats = self._remote_stats[selected]
-                self._render_stats(self._latest_stats)
-            from rclone_settings import get_remote_config, load_config
-            clean_sel = selected.rstrip(":")
-            rem_cfg = get_remote_config(clean_sel) if clean_sel else {}
-            bw_limit = str(rem_cfg.get("bwlimit") or load_config().get("bwlimit") or "off")
-            idx = self.combo_bwlimit.findData(bw_limit)
-            self.combo_bwlimit.blockSignals(True)
-            if idx >= 0:
-                self.combo_bwlimit.setCurrentIndex(idx)
-            else:
-                self.combo_bwlimit.setCurrentIndex(0)
-            self.combo_bwlimit.blockSignals(False)
+                if self.isVisible():
+                    self._render_stats(self._latest_stats)
+            self.sync_bwlimit_combo()
             self._fetch_quota()
 
     def update_stats_for_remote(self, remote_name: str, stats: StatsData) -> None:
@@ -950,7 +956,8 @@ class StatusPopup(QWidget):
             self.current_remote_name = clean
             self._latest_stats = stats
             self.chart_widget.add_speed_point(stats.speed_mb_s if stats.is_online else 0.0)
-            self._render_stats(stats)
+            if self.isVisible():
+                self._render_stats(stats)
 
     def _detach_quota_worker(self) -> None:
         """Detaches signals from active quota worker so it never updates UI after remote/state switch."""
@@ -988,9 +995,12 @@ class StatusPopup(QWidget):
 
         cur_remote = self.current_remote_name or (active_daemon.current_remote if active_daemon else None)
         if state in ("stopped", "unmounting", "starting", "error") or cur_remote != self._quota_remote:
-            self.is_paused = False
-            if active_daemon is not None:
-                active_daemon.is_user_paused = False
+            if state in ("stopped", "unmounting", "starting", "error"):
+                self.is_paused = False
+                if active_daemon is not None:
+                    active_daemon.is_user_paused = False
+            else:
+                self.is_paused = bool(active_daemon and active_daemon.is_user_paused)
             self._pause_busy = False
             self._last_quota_update = 0
             self._last_quota_values = None
@@ -998,7 +1008,10 @@ class StatusPopup(QWidget):
             if state in ("stopped", "unmounting", "error"):
                 self._quota_remote = None
                 self._latest_stats = StatsData(is_online=False, status_text=tr("Drive não conectado"))
-                self._render_stats(self._latest_stats)
+                if self.isVisible():
+                    self._render_stats(self._latest_stats)
+                else:
+                    self._apply_pause_button_ui()
             elif state == "starting":
                 self._quota_remote = None
                 self.quota_label.setText(tr("Calculando espaço..."))
@@ -1008,8 +1021,14 @@ class StatusPopup(QWidget):
                 self._apply_pause_button_ui()
             else:
                 self._quota_remote = cur_remote
-                self._latest_stats = StatsData(is_online=True, status_text=tr("Sincronizado / Ocioso"))
-                self._render_stats(self._latest_stats)
+                if clean_remote in self._remote_stats:
+                    self._latest_stats = self._remote_stats[clean_remote]
+                else:
+                    self._latest_stats = StatsData(is_online=True, status_text=tr("Sincronizado / Ocioso"))
+                if self.isVisible():
+                    self._render_stats(self._latest_stats)
+                else:
+                    self._apply_pause_button_ui()
                 clean_r = (cur_remote or "").rstrip(":")
                 if clean_r in _quota_cache:
                     self._on_quota_success(*_quota_cache[clean_r])
@@ -1019,6 +1038,7 @@ class StatusPopup(QWidget):
     def showEvent(self, event: Any) -> None:
         """Refreshes theme and starts quota timer when popup becomes visible."""
         self.apply_theme()
+        self.sync_bwlimit_combo()
         super().showEvent(event)
         if self._latest_stats is not None:
             self._render_stats(self._latest_stats)
@@ -1057,9 +1077,9 @@ class StatusPopup(QWidget):
         self._last_quota_update = time.time()
 
     def _apply_pause_button_ui(self) -> None:
-        """Synchronizes the action button label, enabled state, and color with daemon and pause state."""
-        disabled_bg = "#2d3238" if self.is_dark else "#ecf0f1"
-        disabled_fg = "#a1a9b1" if self.is_dark else "#7f8c8d"
+        """Synchronizes the pause/reconnect button label, enabled state, and semantic style."""
+        disabled_bg = "#262a30" if self.is_dark else "#f4f6f8"
+        disabled_fg = "#6e7681" if self.is_dark else "#9aa5b1"
 
         if self._pause_busy:
             self.btn_pause.setEnabled(False)
@@ -1076,16 +1096,16 @@ class StatusPopup(QWidget):
                 self.btn_pause.setEnabled(True)
             self.btn_pause.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: #3498db;
+                    background-color: #2980b9;
                     color: white;
                     border: none;
-                    padding: 6px;
-                    border-radius: 4px;
+                    padding: 4px 10px;
+                    border-radius: 6px;
                     font-weight: bold;
                     font-size: 9pt;
                 }}
                 QPushButton:hover {{
-                    background-color: #2980b9;
+                    background-color: #3498db;
                 }}
                 QPushButton:disabled {{
                     background-color: {disabled_bg};
@@ -1102,8 +1122,8 @@ class StatusPopup(QWidget):
                     background-color: #27ae60;
                     color: white;
                     border: none;
-                    padding: 6px;
-                    border-radius: 4px;
+                    padding: 4px 10px;
+                    border-radius: 6px;
                     font-weight: bold;
                     font-size: 9pt;
                 }}
@@ -1117,22 +1137,27 @@ class StatusPopup(QWidget):
             """)
         else:
             self.btn_pause.setText(tr("Pausar Transferências"))
+            p_bg = "#3b2f1c" if self.is_dark else "#fef5e7"
+            p_fg = "#f5b041" if self.is_dark else "#b9770e"
+            p_bd = "#7e5109" if self.is_dark else "#f5cba7"
+            p_hv = "#4e3d21" if self.is_dark else "#fdebd0"
             self.btn_pause.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: #f39c12;
-                    color: white;
-                    border: none;
-                    padding: 6px;
-                    border-radius: 4px;
+                    background-color: {p_bg};
+                    color: {p_fg};
+                    border: 1px solid {p_bd};
+                    padding: 4px 10px;
+                    border-radius: 6px;
                     font-weight: bold;
                     font-size: 9pt;
                 }}
                 QPushButton:hover {{
-                    background-color: #e67e22;
+                    background-color: {p_hv};
                 }}
                 QPushButton:disabled {{
                     background-color: {disabled_bg};
                     color: {disabled_fg};
+                    border-color: transparent;
                 }}
             """)
 
@@ -1220,10 +1245,14 @@ class StatusPopup(QWidget):
 
         if total > 0:
             self.quota_bar.show()
-            percent = int((used / total) * 100)
-            txt = tr("Usando %s de %s (%s%%)") % (format_bytes(used), format_bytes(total), percent)
+            pct_float = (used / total) * 100.0
+            pct_str = f"{pct_float:.1f}" if 0 < pct_float < 1.0 else str(int(pct_float))
+            txt = tr("Usando %s de %s (%s%%)") % (format_bytes(used), format_bytes(total), pct_str)
             self.quota_label.setText(txt)
-            self.quota_bar.setValue(percent)
+            bar_val = int((used / total) * 1000)
+            if used > 0 and bar_val < 12:
+                bar_val = 12
+            self.quota_bar.setValue(min(1000, max(0, bar_val)))
         else:
             self.quota_bar.hide()
             txt = tr("Usado: %s (Total Ilimitado/Desconhecido)") % format_bytes(used)
@@ -1267,8 +1296,7 @@ class StatusPopup(QWidget):
             self.empty_label.show()
 
         if stats.is_online:
-            self.status_badge.setText(tr("● Online"))
-            self.status_badge.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
+            self._apply_status_badge_ui(True)
             self.speed_value.setText(stats.speed_str)
             self.eta_value.setText(stats.eta_str)
 
@@ -1280,6 +1308,8 @@ class StatusPopup(QWidget):
 
             self.combo_bwlimit.setEnabled(True)
             self.btn_clear_inactive.setEnabled(True)
+            speed_col = "#5dade2" if self.is_dark else "#2980b9"
+            self.lbl_vfs_info.setStyleSheet(f"font-size: 8.5pt; font-weight: bold; color: {speed_col};")
             vfs_cache_bytes = getattr(stats, "vfs_disk_cache_bytes", 0)
             cache_str = format_bytes(vfs_cache_bytes)
             q_str = tr("%d na fila") % stats.vfs_queue_count if stats.vfs_queue_count > 0 else tr("0 na fila")
@@ -1355,8 +1385,7 @@ class StatusPopup(QWidget):
                     clear_transfers()
         else:
             self.title_label.setText("<b>DucksDrive</b>")
-            self.status_badge.setText(tr("● Offline"))
-            self.status_badge.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
+            self._apply_status_badge_ui(False)
             self.speed_value.setText("0.00 MB/s")
             self.eta_value.setText("--:--:--")
             if self.daemon.state == "starting":
@@ -1368,6 +1397,8 @@ class StatusPopup(QWidget):
             self._last_quota_update = 0
             self.combo_bwlimit.setEnabled(False)
             self.btn_clear_inactive.setEnabled(False)
+            muted_col = "#9ca5b0" if self.is_dark else "#6c7a89"
+            self.lbl_vfs_info.setStyleSheet(f"font-size: 8.5pt; color: {muted_col};")
             self.lbl_vfs_info.setText(tr("Desconectado"))
             self.lbl_inhibitor_banner.hide()
             clear_transfers()

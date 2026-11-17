@@ -144,11 +144,31 @@ def mask_command(cmd: List[str]) -> str:
 
 
 
+_REMOTE_NAMES_CACHE: Optional[Tuple[str, float, List[str]]] = None
+
+
+def _get_default_rclone_conf_path() -> str:
+    """Returns the default or RCLONE_CONFIG path without spawning a subprocess."""
+    env_path = os.environ.get("RCLONE_CONFIG")
+    if env_path:
+        return os.path.expanduser(env_path)
+    xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    return os.path.join(xdg, "rclone", "rclone.conf")
+
+
 def get_clean_env() -> Dict[str, str]:
     """Returns a clean environment for subprocesses to avoid AppImage LD_LIBRARY_PATH breaking browsers."""
     env = os.environ.copy()
     env.pop("LD_LIBRARY_PATH", None)
     env.pop("APPDIR", None)
+    try:
+        from keyring_manager import get_password_command, is_keyring_available
+        from rclone_settings import load_config
+
+        if load_config().get("use_system_keyring") and is_keyring_available():
+            env["RCLONE_PASSWORD_COMMAND"] = get_password_command()
+    except Exception:
+        pass
     return env
 
 def get_rclone_conf_path() -> str:
@@ -163,8 +183,7 @@ def get_rclone_conf_path() -> str:
             return lines[-1]
     except Exception:
         pass
-    xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
-    return os.path.join(xdg, "rclone", "rclone.conf")
+    return _get_default_rclone_conf_path()
 
 
 def get_rclone_path() -> str:
@@ -227,6 +246,55 @@ def list_remotes() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _list_remote_names_from_conf_fast() -> Optional[List[str]]:
+    """
+    Reads remote names directly from an unencrypted rclone.conf using an mtime cache.
+    Returns None if the config file is missing, encrypted, or has no sections.
+    """
+    global _REMOTE_NAMES_CACHE
+    conf_path = _get_default_rclone_conf_path()
+    try:
+        mtime = os.path.getmtime(conf_path)
+    except OSError:
+        return None
+
+    if (
+        _REMOTE_NAMES_CACHE is not None
+        and _REMOTE_NAMES_CACHE[0] == conf_path
+        and _REMOTE_NAMES_CACHE[1] == mtime
+    ):
+        return list(_REMOTE_NAMES_CACHE[2])
+
+    names: List[str] = []
+    seen_section = False
+    try:
+        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or line.startswith(";"):
+                    if "RCLONE ENCRYPTED" in line.upper():
+                        return None
+                    continue
+                if "RCLONE_ENCRYPT" in line or "RCLONE ENCRYPTED" in line.upper():
+                    return None
+                if line.startswith("[") and line.endswith("]") and len(line) > 2:
+                    seen_section = True
+                    section_name = line[1:-1].strip()
+                    if section_name:
+                        names.append(section_name)
+                elif not seen_section:
+                    return None
+    except OSError:
+        return None
+
+    if not seen_section:
+        return None
+
+    result = sorted(set(names))
+    _REMOTE_NAMES_CACHE = (conf_path, mtime, result)
+    return list(result)
+
+
 def list_remote_names() -> List[str]:
     """
     Returns a sorted list of configured remote names (without trailing colons).
@@ -234,6 +302,9 @@ def list_remote_names() -> List[str]:
     Returns:
         List[str]: List of remote names.
     """
+    fast_names = _list_remote_names_from_conf_fast()
+    if fast_names is not None:
+        return fast_names
     remotes = list_remotes()
     return sorted(list(remotes.keys()))
 
@@ -244,12 +315,7 @@ def get_remote_type_fast(remote_name: str) -> Optional[str]:
     Safe to call on the GUI thread. Returns None if not found or encrypted.
     """
     clean_name = remote_name.rstrip(":")
-    env_path = os.environ.get("RCLONE_CONFIG")
-    if env_path:
-        conf_path = os.path.expanduser(env_path)
-    else:
-        xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
-        conf_path = os.path.join(xdg, "rclone", "rclone.conf")
+    conf_path = _get_default_rclone_conf_path()
 
     if not os.path.isfile(conf_path):
         return None

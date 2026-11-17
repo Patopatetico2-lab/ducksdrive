@@ -834,3 +834,179 @@ class TestDynamicBandwidthAndVFSControls:
             mock_forget.assert_called_with(daemon.rc_credentials)
 
 
+# ============================================================================
+# 16. Bug Fixes & Optimizations Regression Tests
+# ============================================================================
+class TestBugFixesAndOptimizations:
+    def test_clean_env_injects_rclone_password_command(self, monkeypatch):
+        import keyring_manager
+        import rclone_config
+        import rclone_settings
+
+        monkeypatch.setattr(rclone_settings, "load_config", lambda: {"use_system_keyring": True})
+        monkeypatch.setattr(keyring_manager, "is_keyring_available", lambda: True)
+        monkeypatch.setattr(keyring_manager, "get_password_command", lambda: "secret-tool lookup service ducksdrive user rclone")
+
+        env = rclone_config.get_clean_env()
+        assert env.get("RCLONE_PASSWORD_COMMAND") == "secret-tool lookup service ducksdrive user rclone"
+
+        monkeypatch.setattr(rclone_settings, "load_config", lambda: {"use_system_keyring": False})
+        env_off = rclone_config.get_clean_env()
+        assert "RCLONE_PASSWORD_COMMAND" not in env_off
+
+    def test_fast_remote_names_from_conf_and_encrypted_fallback(self, tmp_path, monkeypatch):
+        import rclone_config
+
+        conf = tmp_path / "rclone.conf"
+        conf.write_text("[onedrive]\ntype = onedrive\n\n[gdrive]\ntype = drive\n", encoding="utf-8")
+        monkeypatch.setenv("RCLONE_CONFIG", str(conf))
+        monkeypatch.setattr(rclone_config, "_REMOTE_NAMES_CACHE", None)
+
+        with patch("rclone_config.list_remotes") as mock_list:
+            names = rclone_config.list_remote_names()
+            assert names == ["gdrive", "onedrive"]
+            mock_list.assert_not_called()
+
+        # Encrypted rclone.conf must fall back to list_remotes()
+        enc_conf = tmp_path / "rclone_enc.conf"
+        enc_conf.write_text("# Encrypted rclone configuration File\nRCLONE_ENCRYPT_V0:\nabc123\n", encoding="utf-8")
+        monkeypatch.setenv("RCLONE_CONFIG", str(enc_conf))
+        monkeypatch.setattr(rclone_config, "_REMOTE_NAMES_CACHE", None)
+
+        with patch("rclone_config.list_remotes", return_value={"vault": {"type": "drive"}}) as mock_list:
+            names = rclone_config.list_remote_names()
+            assert names == ["vault"]
+            mock_list.assert_called_once()
+
+    def test_daemon_preserves_remote_after_stop_and_popup_preserves_pause(self, qapp):
+        from rclone_daemon import RcloneDaemon
+        from status_popup import StatusPopup
+
+        d1 = RcloneDaemon(remote_name="gdrive")
+        d2 = RcloneDaemon(remote_name="onedrive")
+        d1.state = "mounted"
+        d2.state = "mounted"
+        d1.is_running = lambda: True
+        d2.is_running = lambda: True
+        d1.is_user_paused = True
+        d2.is_user_paused = False
+
+        popup = StatusPopup(daemon=d1, daemons={"gdrive": d1, "onedrive": d2})
+        popup._on_daemon_state_changed("mounted", "gdrive")
+        assert popup.is_paused is True
+
+        # Switch to onedrive -> not paused, and gdrive keeps is_user_paused=True
+        idx_od = popup.remote_combo.findData("onedrive")
+        popup.remote_combo.setCurrentIndex(idx_od)
+        assert popup.is_paused is False
+        assert d1.is_user_paused is True
+
+        # Switch back to gdrive -> restored pause state
+        idx_gd = popup.remote_combo.findData("gdrive")
+        popup.remote_combo.setCurrentIndex(idx_gd)
+        assert popup.is_paused is True
+
+        # Stop gdrive daemon -> current_remote is preserved
+        d1._finish_stop(True)
+        assert d1.current_remote == "gdrive"
+        assert d1.is_user_paused is False
+
+    def test_no_duplicate_mount_notifications_and_no_tray_logs_action(self, qapp):
+        from main import RcloneAppController
+
+        controller = RcloneAppController(qapp, tray_available=False)
+        d = controller.get_or_create_daemon("gdrive")
+        d.is_running = lambda: True
+
+        # Tray menu should not have duplicate "Ver Logs" action
+        menu_texts = [act.text() for act in controller.tray._menu.actions()]
+        assert not any("Logs" in text for text in menu_texts)
+
+        with patch("gui_tray.notify_mount_success") as mock_notify:
+            with patch.object(controller.runner, "submit"):
+                d._set_state("mounted")
+                qapp.processEvents()
+                # Exactly one mount notification across controller + tray
+                mock_notify.assert_called_once()
+
+        controller.shutdown()
+
+    def test_sync_complete_notification_reports_file_count(self, qapp):
+        from gui_tray import RcloneTrayIcon
+        from rclone_daemon import RcloneDaemon
+        from rclone_stats import StatsData
+
+        d = RcloneDaemon(remote_name="gdrive")
+        tray = RcloneTrayIcon(daemon=d, daemons={"gdrive": d})
+
+        s_active = StatsData(
+            is_online=True,
+            transfers_count=0,
+            active_transfers=[{"name": "a.txt", "percentage": 50}, {"name": "b.txt", "percentage": 20}],
+        )
+        tray.update_stats_for_remote("gdrive", s_active)
+
+        s_done = StatsData(is_online=True, transfers_count=2, active_transfers=[])
+        with patch("gui_tray.notify_sync_complete") as mock_sync_done:
+            tray.update_stats_for_remote("gdrive", s_done)
+            mock_sync_done.assert_called_once()
+            assert mock_sync_done.call_args.kwargs.get("file_count") == 2
+
+    def test_settings_dialog_clear_cache_handles_multiple_daemons(self, qapp, monkeypatch):
+        import settings_dialog
+        from rclone_daemon import RCCredentials, RcloneDaemon
+        from settings_dialog import SettingsDialog
+
+        monkeypatch.setattr(settings_dialog, "load_config", lambda: {"theme": "auto", "language": "pt_BR"})
+        monkeypatch.setattr(settings_dialog, "get_vfs_cache_usage_bytes", lambda: 1024 * 1024)
+
+        d1 = MagicMock(spec=RcloneDaemon)
+        d1.current_remote = "gdrive"
+        d1.current_read_only = False
+        d1.current_extra_args = None
+        d1.rc_credentials = RCCredentials(user="u1", password="p1", port=5572)
+        d1.is_running.return_value = True
+        d1.stop_async.side_effect = lambda on_done=None: on_done() if on_done else None
+
+        d2 = MagicMock(spec=RcloneDaemon)
+        d2.current_remote = "onedrive"
+        d2.current_read_only = True
+        d2.current_extra_args = ["--fast-list"]
+        d2.rc_credentials = RCCredentials(user="u2", password="p2", port=5573)
+        d2.is_running.return_value = True
+        d2.stop_async.side_effect = lambda on_done=None: on_done() if on_done else None
+
+        dlg = SettingsDialog(daemon=d1, daemons={"gdrive": d1, "onedrive": d2})
+        while dlg._cache_runner._current is not None:
+            dlg._cache_runner._current.wait(1000)
+            qapp.processEvents()
+
+        with patch("settings_dialog.clear_vfs_cache_files", return_value=True) as mock_clear:
+            with patch("settings_dialog.QMessageBox.question", return_value=settings_dialog.QMessageBox.Yes):
+                with patch("settings_dialog.QMessageBox.information"):
+                    dlg._on_pre_clear_checked((1024 * 1024, 0))
+                    while dlg._cache_runner._current is not None or dlg._clearing_cache:
+                        if dlg._cache_runner._current is not None:
+                            dlg._cache_runner._current.wait(1000)
+                        qapp.processEvents()
+                    mock_clear.assert_called_once()
+                    d1.stop_async.assert_called_once()
+                    d2.stop_async.assert_called_once()
+                    d1.start.assert_called_once_with("gdrive", extra_args=None, read_only=False)
+                    d2.start.assert_called_once_with("onedrive", extra_args=["--fast-list"], read_only=True)
+
+    def test_en_us_translations_complete(self):
+        from i18n import set_language, tr
+
+        try:
+            set_language("en_US")
+            assert tr("Banda:") == "Bandwidth:"
+            assert tr("Atualizar Pastas") == "Refresh Folders"
+            assert tr("Testar Conexão") == "Test Connection"
+            assert tr("Não mostrar esta mensagem novamente") == "Do not show this message again"
+            assert tr("100 MB/s (Ultra Rápido)") == "100 MB/s (Ultra Fast)"
+        finally:
+            set_language("pt_BR")
+
+
+

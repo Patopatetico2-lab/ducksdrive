@@ -24,7 +24,7 @@ from typing import Any, Callable, List, Optional
 from PySide6.QtCore import QObject, Signal, Slot, QTimer, QCoreApplication, QThread
 
 from i18n import tr
-from rclone_config import get_clean_env, get_remote_type_fast
+from rclone_config import get_clean_env, get_remote_type_fast, mask_command
 from rclone_settings import (
     _allocated_ports,
     allocate_rc_port,
@@ -365,6 +365,7 @@ class RcloneDaemon(QObject):
         super().__init__(parent)
         self.current_remote: Optional[str] = remote_name
         clean_name = remote_name.rstrip(":") if remote_name else ""
+        self._configured_remote: Optional[str] = clean_name or None
         if mount_point == DEFAULT_MOUNT_POINT and clean_name:
             rc_cfg = get_remote_config(clean_name)
             custom_mp = rc_cfg.get("custom_mount_point") or rc_cfg.get("mount_path")
@@ -572,6 +573,7 @@ class RcloneDaemon(QObject):
             except OSError:
                 pass
 
+        self._configured_remote = clean_remote_name
         self.current_remote = remote_name
         self.current_read_only = read_only
         self.current_extra_args = list(extra_args) if extra_args else None
@@ -604,11 +606,13 @@ class RcloneDaemon(QObject):
             "5s",
             "--vfs-read-ahead",
             "128M",
+            "--buffer-size",
+            "32M",
             "--vfs-fast-fingerprint",
             "--vfs-read-chunk-size",
-            "8M",
+            "16M",
             "--vfs-read-chunk-size-limit",
-            "off",
+            "512M",
             "--dir-cache-time",
             "30m",
             "--poll-interval",
@@ -619,15 +623,30 @@ class RcloneDaemon(QObject):
             "--checkers",
             checkers,
         ]
-        if get_remote_type_fast(clean_remote_name) == "drive":
+        if vfs_cache_mode in ("full", "writes"):
+            cmd.extend(["--vfs-cache-min-free-space", "1G"])
+
+        remote_type = get_remote_type_fast(clean_remote_name)
+        if remote_type == "drive":
             cmd.extend([
                 "--drive-pacer-min-sleep",
                 "10ms",
                 "--drive-pacer-burst",
                 "200",
                 "--drive-chunk-size",
-                "32M",
+                "64M",
             ])
+        elif remote_type == "onedrive":
+            cmd.extend(["--onedrive-chunk-size", "60M"])
+        elif remote_type == "s3":
+            cmd.extend([
+                "--s3-chunk-size",
+                "16M",
+                "--s3-upload-concurrency",
+                "4",
+            ])
+        elif remote_type == "dropbox":
+            cmd.extend(["--dropbox-chunk-size", "48M"])
         try:
             if os.path.isdir(self.mount_point) and os.listdir(self.mount_point):
                 logger.warning("Mount directory '%s' is not empty; passing --allow-non-empty.", self.mount_point)
@@ -671,7 +690,7 @@ class RcloneDaemon(QObject):
             cmd.extend(extra_args)
 
         self._set_state("starting")
-        logger.info("Starting rclone mount: %s", " ".join(cmd))
+        logger.info("Starting rclone mount: %s", mask_command(cmd))
 
         # Open dedicated log file to prevent stdout/stderr pipe deadlock
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -711,7 +730,7 @@ class RcloneDaemon(QObject):
         self._startup_start_time = time.time()
         startup_timer = QTimer(self)
         self._startup_timer = startup_timer
-        startup_timer.setInterval(500)
+        startup_timer.setInterval(150)
 
         def _dispose_startup_timer() -> None:
             startup_timer.stop()
@@ -846,7 +865,7 @@ class RcloneDaemon(QObject):
 
         self.process = None
         self.rc_credentials = None
-        self.current_remote = None
+        self.current_remote = self._configured_remote
         self.current_read_only = False
         self.current_extra_args = None
         self.is_user_paused = False

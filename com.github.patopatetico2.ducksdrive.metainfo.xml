@@ -77,6 +77,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.1.1" date="2026-11-17">
+      <description>
+        <p>Bug fixes, performance optimizations, and UI redesign: redesigned transfer status popup and settings dialog with aligned cards and clear action hierarchy, eliminated duplicate mount notifications and tray log entries, non-blocking per-remote VFS refresh, preserved pause state and remote names across multi-mount switches, global keyring support via RCLONE_PASSWORD_COMMAND, direct mtime-cached rclone.conf reading, reduced RC telemetry polling overhead, provider-tuned mount chunk sizes, complete English translations, and fixed Flatpak CI release build.</p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-11-08">
       <description>
         <p>Security and performance hardening: dedicated per-remote Unix Domain Sockets with cryptographically random session authentication replacing open TCP ports, systemd/logind delay inhibitor lock preventing system shutdown and sleep while VFS writeback uploads are pending, Linux desktop Secret Service / Keyring integration for encrypted rclone configs via --password-command, real-time VFS SSD cache meter with 1-click inactive cache cleaner (vfs/forget), on-the-fly bandwidth limit dropdown selector, and multi-format release packaging pipeline (.deb, .pkg.tar.zst, AppImage, Flatpak).</p>

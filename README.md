@@ -8,7 +8,7 @@
   <a href="https://patopatetico2-lab.github.io/ducksdrive/"><img src="https://img.shields.io/badge/Site%20Oficial-patopatetico2--lab.github.io%2Fducksdrive-0078d4?style=flat&logo=googlechrome&logoColor=white" alt="Site Oficial" /></a>
   <a href="https://github.com/Patopatetico2-lab/ducksdrive/releases"><img src="https://img.shields.io/github/v/release/Patopatetico2-lab/ducksdrive?color=2ea44f&label=Releases&logo=github" alt="GitHub Releases" /></a>
   <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/tests-45%20passed-brightgreen?logo=pytest&logoColor=white" alt="Tests Status" /></a>
+  <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/tests-52%20passed-brightgreen?logo=pytest&logoColor=white" alt="Tests Status" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Code style: ruff" /></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=flat&logo=python&logoColor=white" alt="Python 3.10+" /></a>
   <a href="https://pypi.org/project/PySide6/"><img src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41cd52?style=flat&logo=qt&logoColor=white" alt="PySide6 / Qt6" /></a>
@@ -26,7 +26,7 @@ Compatível com KDE Plasma, GNOME, XFCE, Cinnamon e outros ambientes de desktop 
 
 ### Conteúdo
 - [O que ele faz](#o-que-ele-faz)
-- [Novidades da Versão 1.0.9](#novidades-da-versão-109)
+- [Novidades da Versão 1.1.1](#novidades-da-versão-111)
 - [Como configurar uma nuvem](#como-configurar-uma-nuvem)
 - [Configurações](#configurações)
 - [Arquitetura e Módulos do Projeto](#arquitetura-e-módulos-do-projeto)
@@ -67,9 +67,13 @@ Os logs ficam em `~/.local/share/ducksdrive/ducksdrive.log`, com rotação autom
 
 ---
 
-## Novidades da Versão 1.0.9
+## Novidades da Versão 1.1.1
 
-A versão **1.0.9** traz a maior atualização de funcionalidades da história do DucksDrive:
+A versão **1.1.1** traz melhorias de interface, correções de estabilidade e otimizações de desempenho sobre a base **1.1.0**:
+
+- **Novo visual do Painel Flutuante e das Configurações**: cartões agrupados, rótulos e botões alinhados, remoção da seta dupla no botão *Menu*, badge de versão no topo das configurações e separação clara das ações de manutenção e desinstalação.
+- **Transferências e Telemetria otimizadas**: ajustes automáticos de chunks por provedor (Google Drive, OneDrive, S3, Dropbox), `--buffer-size 32M`, leitura direta e cacheada de `rclone.conf`, menos chamadas redundantes na API RC e detecção mais rápida de montagem FUSE.
+- **Correções importantes**: fim das notificações duplicadas ao montar, chaveiro do sistema (`RCLONE_PASSWORD_COMMAND`) funcionando em todos os comandos do rclone, botão de logs centralizado em **Configurações...**, preservação do estado de pausa por nuvem no painel e limpeza/desinstalação compatíveis com Multi-Mount e caminhos customizados.
 
 ```
                ┌────────────────────────────────────────────────────────┐
@@ -92,7 +96,7 @@ A versão **1.0.9** traz a maior atualização de funcionalidades da história d
 - **Ações individuais e Desconexão Geral Segura**: a bandeja oferece controle individual de montagem/desmontagem por nuvem e a opção **"Desconectar Todas as Nuvens"**, que inspeciona a fila VFS de cada daemon ativo para garantir que nenhum upload seja interrompido.
 
 ### 2. 📋 Visualizador de Logs Integrado (Log Viewer)
-- **Janela diagnóstica em tempo real**: acesse os logs diretamente pelo menu da bandeja em **Visualizador de Logs...**.
+- **Janela diagnóstica em tempo real**: acesse os logs diretamente em **Configurações... → Ver Logs de Diagnóstico**.
 - **Filtro de severidade e busca ao vivo**: filtre por `Todos`, `Avisos e Erros (WARN + ERR)` ou `Somente Erros (ERROR)`, com barra de pesquisa instantânea e auto-scroll inteligente.
 - **Alternância entre fontes de log**: selecione entre o log geral do aplicativo (`ducksdrive.log`) ou os logs individuais gerados por cada remoto montado (`rclone-{remoto}-{timestamp}.log`).
 - **Botão de cópia rápida**: copie com um clique todo o conteúdo formatado para a área de transferência para agilizar a abertura de chamados e suporte.
@@ -175,7 +179,7 @@ O DucksDrive é modular e orquestrado em Python puro com PySide6 (Qt6), dividind
 ### Arch Linux / CachyOS / Manjaro (Nativo via Pacman)
 Instalação direta em 1 comando via Pacman:
 ```bash
-curl -Lo /tmp/ducksdrive-1.0.9-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.9/ducksdrive-1.0.9-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.0.9-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.0.9-1-any.pkg.tar.zst
+curl -Lo /tmp/ducksdrive-1.1.1-1-any.pkg.tar.zst https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.1.1/ducksdrive-1.1.1-1-any.pkg.tar.zst && sudo pacman -U /tmp/ducksdrive-1.1.1-1-any.pkg.tar.zst && rm -f /tmp/ducksdrive-1.1.1-1-any.pkg.tar.zst
 ```
 Ou compilando direto do repositório com `makepkg`:
 ```bash
@@ -185,7 +189,7 @@ git clone https://github.com/Patopatetico2-lab/ducksdrive.git && cd ducksdrive &
 ### Debian / Ubuntu / Linux Mint / Zorin OS (Nativo via .deb)
 Instalação direta em 1 comando via `apt`:
 ```bash
-curl -Lo /tmp/ducksdrive_1.0.9-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.9/ducksdrive_1.0.9-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.0.9-1_all.deb && rm -f /tmp/ducksdrive_1.0.9-1_all.deb
+curl -Lo /tmp/ducksdrive_1.1.1-1_all.deb https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.1.1/ducksdrive_1.1.1-1_all.deb && sudo apt install -y /tmp/ducksdrive_1.1.1-1_all.deb && rm -f /tmp/ducksdrive_1.1.1-1_all.deb
 ```
 
 ### Pelo script (instala no sistema)
@@ -200,7 +204,7 @@ O script detecta se a distro usa `apt` (Debian/Ubuntu), `pacman` (Arch), `dnf` (
 ### Pelo Flatpak
 Baixe o `ducksdrive.flatpak` da aba de [Releases](https://github.com/Patopatetico2-lab/ducksdrive/releases) e instale (o rclone já vem junto; o runtime `org.kde.Platform 6.8` é baixado do Flathub automaticamente):
 ```bash
-curl -Lo /tmp/ducksdrive.flatpak https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.0.9/ducksdrive.flatpak && flatpak install --user -y /tmp/ducksdrive.flatpak && rm -f /tmp/ducksdrive.flatpak
+curl -Lo /tmp/ducksdrive.flatpak https://github.com/Patopatetico2-lab/ducksdrive/releases/download/v1.1.1/ducksdrive.flatpak && flatpak install --user -y /tmp/ducksdrive.flatpak && rm -f /tmp/ducksdrive.flatpak
 ```
 > Para montar via FUSE e criar os atalhos no gerenciador de arquivos, o Flatpak precisa de acesso amplo ao sistema (`--filesystem=host` e `--device=all`).
 
@@ -227,7 +231,7 @@ O botão **Desinstalar** na tela de configurações do app desmonta as nuvens, l
 
 ## Solução de problemas
 
-- **Logs:** Acesse pelo menu **Visualizador de Logs...** ou inspecione diretamente `~/.local/share/ducksdrive/ducksdrive.log` (app) e `~/.local/share/ducksdrive/rclone-*.log` (rclone). Anexe esses arquivos ao abrir uma [issue](https://github.com/Patopatetico2-lab/ducksdrive/issues).
+- **Logs:** Acesse em **Configurações... → Ver Logs de Diagnóstico** ou inspecione diretamente `~/.local/share/ducksdrive/ducksdrive.log` (app) e `~/.local/share/ducksdrive/rclone-*.log` (rclone). Anexe esses arquivos ao abrir uma [issue](https://github.com/Patopatetico2-lab/ducksdrive/issues).
 - **Pasta travada / "Transport endpoint is not connected":** feche o app e rode `fusermount3 -uz ~/CloudDrives/NOME_DA_NUVEM`.
 - **Nuvem parou de conectar do nada:** use **Gerenciar Nuvens → (sua nuvem) → Testar Conexão**. Se o token OAuth tiver expirado, o app oferece reautorizar pelo navegador.
 - **Ambiente GNOME sem ícone na bandeja:** se você utiliza GNOME puro no Fedora, Debian ou Ubuntu sem bandeja, instale a extensão [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). O DucksDrive funcionará perfeitamente em Modo Janela enquanto a extensão não estiver presente.
@@ -251,7 +255,7 @@ Relatos de vulnerabilidades de segurança devem seguir as orientações em **[SE
 
 Designed as a modern, lightweight alternative to **Insync**, **RaiDrive**, **Rclone Browser**, and **RcloneTray** on Linux.
 
-### Key Features (v1.0.9)
+### Key Features (v1.1.1)
 - **Simultaneous Multi-Mount**: Mount multiple cloud remotes concurrently (Google Drive, OneDrive, S3, Nextcloud) with independent `RcloneDaemon` processes, collision-free dynamic RC port cycling (5572+), separate mount paths, and a quick remote selector dropdown in the telemetry panel.
 - **Integrated Log Viewer**: Live diagnostic window for `ducksdrive.log` and per-remote Rclone logs with severity filters (`ALL`, `WARN+ERR`, `ERROR`), real-time search, and 1-click clipboard export.
 - **Per-Remote Settings**: Dedicated dialog to customize individual mount points, default read-only mode, per-cloud bandwidth limits, and extra Rclone flags (e.g. `--drive-shared-with-me`, `--fast-list`).
