@@ -142,15 +142,12 @@ jobs:
   build-flatpak:
     name: Build Flatpak (.flatpak)
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
+      options: --privileged
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Install Flatpak and Flatpak Builder
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder elfutils
-          flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
       - name: Setup Flatpak Builder
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
