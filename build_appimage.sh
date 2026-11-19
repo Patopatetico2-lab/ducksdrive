@@ -59,7 +59,7 @@ Icon=ducksdrive
 Terminal=false
 Type=Application
 Categories=Network;Utility;
-StartupNotify=true
+StartupNotify=false
 StartupWMClass=ducksdrive
 DESKTOP
 cp AppDir/usr/share/applications/ducksdrive.desktop AppDir/

@@ -15,9 +15,12 @@ All writes are atomic (temporary file + os.replace).
 import hashlib
 import logging
 import os
+import re
 import shutil
+import tempfile
 import urllib.parse
 import xml.etree.ElementTree as ET
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -75,31 +78,61 @@ def _replace_atomically(tmp_path: str, target: str) -> None:
     os.replace(tmp_path, target)
 
 
+def _register_existing_namespaces(path: str) -> Optional[str]:
+    """
+    Registers every `xmlns:prefix="uri"` declared in `path` so ElementTree never rewrites
+    KDE/Dolphin prefixes into `ns0:`, and returns any `<!DOCTYPE ...>` declaration to preserve.
+    """
+    doctype: Optional[str] = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            head = f.read(8192)
+        m_doc = re.search(r"<!DOCTYPE\s+[^>]+>", head)
+        if m_doc:
+            doctype = m_doc.group(0)
+        for prefix, uri in re.findall(r'xmlns:([A-Za-z0-9_.-]+)\s*=\s*"([^"]+)"', head):
+            ET.register_namespace(prefix, uri)
+    except OSError:
+        pass
+    return doctype
+
+
 def _atomic_write_text(path: str, content: str) -> None:
     target = os.path.realpath(path)  # follow symlinks (e.g. dotfile managers)
-    tmp_path = f"{target}.tmp"
+    parent_dir = os.path.dirname(target) or "."
+    os.makedirs(parent_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".ducksdrive-", suffix=".tmp", dir=parent_dir)
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
         _replace_atomically(tmp_path, target)
     except Exception:
         if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         raise
 
 
-def _atomic_write_tree(tree: ET.ElementTree, path: str) -> None:
+def _atomic_write_tree(tree: ET.ElementTree, path: str, doctype: Optional[str] = None) -> None:
     target = os.path.realpath(path)
-    tmp_path = f"{target}.tmp"
-    try:
-        if hasattr(ET, "indent"):
-            ET.indent(tree, space=" ")  # keep the file human-readable like KDE writes it
-        tree.write(tmp_path, encoding="utf-8", xml_declaration=True)
-        _replace_atomically(tmp_path, target)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+    parent_dir = os.path.dirname(target) or "."
+    os.makedirs(parent_dir, exist_ok=True)
+    if hasattr(ET, "indent"):
+        ET.indent(tree, space=" ")  # keep the file human-readable like KDE writes it
+    xml_bytes = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
+    xml_text = xml_bytes.decode("utf-8")
+    if doctype and "<!DOCTYPE" not in xml_text:
+        lines = xml_text.splitlines(keepends=True)
+        if lines and lines[0].startswith("<?xml"):
+            lines.insert(1, doctype + "\n")
+            xml_text = "".join(lines)
+        else:
+            xml_text = doctype + "\n" + xml_text
+    if not xml_text.endswith("\n"):
+        xml_text += "\n"
+    _atomic_write_text(target, xml_text)
 
 
 def add_gtk_bookmark(path: str, label: str = APP_NAME) -> bool:
@@ -177,6 +210,7 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
     uri = f"file://{urllib.parse.quote(path)}"
 
     try:
+        doctype = _register_existing_namespaces(kde_places_path)
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         tree = ET.parse(kde_places_path, parser=parser)
         root = tree.getroot()
@@ -201,7 +235,7 @@ def add_kde_place(path: str, label: str = APP_NAME) -> bool:
         ET.SubElement(meta_kde, "ID").text = hashlib.sha1(path.encode("utf-8")).hexdigest()
         ET.SubElement(meta_kde, "isSystemItem").text = "false"
 
-        _atomic_write_tree(tree, kde_places_path)
+        _atomic_write_tree(tree, kde_places_path, doctype=doctype)
         logger.info("Added KDE place: %s", label)
         return True
     except Exception as e:
@@ -219,6 +253,7 @@ def remove_kde_place(path: str) -> bool:
     uri = f"file://{urllib.parse.quote(path)}"
 
     try:
+        doctype = _register_existing_namespaces(kde_places_path)
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         tree = ET.parse(kde_places_path, parser=parser)
         root = tree.getroot()
@@ -232,11 +267,49 @@ def remove_kde_place(path: str) -> bool:
         for bookmark in to_remove:
             root.remove(bookmark)
 
-        _atomic_write_tree(tree, kde_places_path)
+        _atomic_write_tree(tree, kde_places_path, doctype=doctype)
         logger.info("Removed KDE place for %s", path)
         return True
     except Exception as e:
         logger.error("Failed to remove KDE place: %s", e)
+        return False
+
+
+def open_local_folder(path: str) -> bool:
+    """
+    Opens `path` in the system file manager (Dolphin, Nautilus, Thunar, etc.) without
+    blocking the GUI thread on FUSE `stat()` and with a clean environment (safe in AppImage/venv).
+    """
+    from rclone_config import get_clean_env
+
+    is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
+    if not is_flatpak:
+        opener = shutil.which("xdg-open")
+        if opener:
+            try:
+                from PySide6.QtCore import QProcess, QProcessEnvironment
+
+                clean_env = get_clean_env(include_keyring=False)
+                qenv = QProcessEnvironment()
+                for k, v in clean_env.items():
+                    qenv.insert(k, v)
+                proc = QProcess()
+                proc.setProgram(opener)
+                proc.setArguments([path])
+                proc.setProcessEnvironment(qenv)
+                started, _pid = proc.startDetached()
+                if started:
+                    return True
+            except Exception as exc:
+                logger.debug("QProcess.startDetached failed for %s: %s", opener, exc)
+
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+    except Exception as exc:
+        logger.error("Failed to open folder '%s': %s", path, exc)
         return False
 
 

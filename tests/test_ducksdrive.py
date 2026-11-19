@@ -1005,8 +1005,328 @@ class TestBugFixesAndOptimizations:
             assert tr("Testar Conexão") == "Test Connection"
             assert tr("Não mostrar esta mensagem novamente") == "Do not show this message again"
             assert tr("100 MB/s (Ultra Rápido)") == "100 MB/s (Ultra Fast)"
+            assert tr("Fechar") == "Close"
+            assert tr("Tamanho Máximo do Cache:") == "Max Cache Size:"
         finally:
             set_language("pt_BR")
+
+
+# ============================================================================
+# 17. Dolphin Performance, Autostart & Comprehensive Audit Regression Tests
+# ============================================================================
+class TestDolphinAutostartAndAuditFixes:
+    def test_daemon_is_running_false_during_starting_and_unmounting(self, qapp):
+        from rclone_daemon import RcloneDaemon
+
+        d = RcloneDaemon(remote_name="gdrive")
+        d.process = MagicMock()
+        d.process.poll.return_value = None
+
+        d.state = "starting"
+        assert d.is_running() is False
+        assert d.is_process_alive() is True
+
+        d.state = "mounted"
+        assert d.is_running() is True
+
+        d.state = "unmounting"
+        assert d.is_running() is False
+        assert d.is_process_alive() is True
+
+    def test_autostart_desktop_entry_format_and_flags(self, tmp_path, monkeypatch):
+        import rclone_settings
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.delenv("FLATPAK_ID", raising=False)
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        fake_bin = tmp_path / "bin" / "ducksdrive"
+        fake_bin.parent.mkdir(parents=True)
+        fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake_bin.chmod(0o755)
+        monkeypatch.setenv("XDG_BIN_HOME", str(fake_bin.parent))
+
+        rclone_settings._sync_autostart(True)
+        desktop = tmp_path / "cfg" / "autostart" / "ducksdrive.desktop"
+        assert desktop.exists()
+        text = desktop.read_text(encoding="utf-8")
+        assert f"TryExec={fake_bin}" in text
+        assert f"Exec={fake_bin} --autostart" in text
+        assert 'Exec="' not in text
+        assert "StartupNotify=false" in text
+        assert "Hidden=false" in text
+        assert "X-GNOME-Autostart-enabled=true" in text
+
+        rclone_settings._sync_autostart(False)
+        assert not desktop.exists()
+
+    def test_load_config_returns_deep_copy_without_mutating_defaults(self, tmp_path, monkeypatch):
+        import rclone_settings
+
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr(rclone_settings, "CONFIG_FILE", str(cfg_file))
+        monkeypatch.setattr(rclone_settings, "CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rclone_settings, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(rclone_settings, "_CONFIG_MTIME", None)
+
+        c1 = rclone_settings.load_config()
+        c1["remotes_config"]["ghost"] = {"read_only": True}
+        assert "ghost" not in rclone_settings.DEFAULT_CONFIG["remotes_config"]
+        c2 = rclone_settings.load_config()
+        assert "ghost" not in c2["remotes_config"]
+
+    def test_kde_places_preserves_doctype_and_custom_namespaces(self, tmp_path, monkeypatch):
+        from filemanager_integration import add_kde_place, remove_kde_place
+
+        places_file = tmp_path / "user-places.xbel"
+        initial_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE xbel>\n'
+            '<xbel xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"'
+            ' xmlns:kdepriv="http://www.kde.org/kdepriv"'
+            ' xmlns:custom="http://example.org/custom">\n'
+            ' <bookmark href="file:///home/user">\n'
+            '  <title>Home</title>\n'
+            '  <info><metadata owner="http://example.org"><custom:flag>1</custom:flag></metadata></info>\n'
+            ' </bookmark>\n'
+            '</xbel>\n'
+        )
+        places_file.write_text(initial_xml, encoding="utf-8")
+        monkeypatch.setattr("filemanager_integration._get_kde_places_path", lambda: str(places_file))
+
+        assert add_kde_place("/home/user/CloudDrives/gdrive", "DucksDrive - gdrive") is True
+        content = places_file.read_text(encoding="utf-8")
+        assert "<!DOCTYPE xbel>" in content
+        assert "ns0:" not in content
+        assert "custom:flag" in content
+
+        assert remove_kde_place("/home/user/CloudDrives/gdrive") is True
+        content_after = places_file.read_text(encoding="utf-8")
+        assert "<!DOCTYPE xbel>" in content_after
+        assert "DucksDrive - gdrive" not in content_after
+
+    def test_updater_force_check_emits_failed_when_offline(self, qapp):
+        from updater import UpdateCheckWorker
+
+        worker = UpdateCheckWorker(force=True)
+        failed_msgs = []
+        finished_calls = []
+        worker.check_failed.connect(lambda msg: failed_msgs.append(msg))
+        worker.check_finished.connect(lambda *args: finished_calls.append(args))
+
+        with patch("urllib.request.urlopen", side_effect=OSError("Network unreachable")):
+            worker.run()
+
+        assert len(failed_msgs) == 1
+        assert len(finished_calls) == 0
+
+    def test_settings_dialog_decimal_cache_size_parsing(self, qapp, monkeypatch):
+        import settings_dialog
+        from settings_dialog import SettingsDialog
+
+        monkeypatch.setattr(
+            settings_dialog,
+            "load_config",
+            lambda: {"vfs_cache_max_size": "2.5G", "theme": "auto", "language": "pt_BR"},
+        )
+        monkeypatch.setattr(settings_dialog, "get_vfs_cache_usage_bytes", lambda: 0)
+
+        dlg = SettingsDialog()
+        dlg._cache_runner.wait_all(1000)
+        assert dlg.cache_spin.value() in (2, 3)  # Must never parse "2.5G" as 25 GB
+        dlg.close()
+
+    def test_inhibitor_does_not_spam_when_binary_fails(self, monkeypatch):
+        from vfs_inhibitor import VFSInhibitorManager
+
+        inhibitor = VFSInhibitorManager()
+        monkeypatch.setattr(inhibitor, "_inhibitor_bin", "/usr/bin/systemd-inhibit")
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 99999
+        fake_proc.poll.return_value = 1
+        fake_proc.returncode = 1
+
+        with patch("vfs_inhibitor.subprocess.Popen", return_value=fake_proc) as mock_popen:
+            with patch("vfs_inhibitor.notify_warning") as mock_warn:
+                assert inhibitor.acquire_lock(pending_count=2) is True
+                # Next poll sees process exited with rc=1 -> disables retries instead of respawning
+                assert inhibitor.acquire_lock(pending_count=2) is False
+                assert mock_popen.call_count == 1
+                assert mock_warn.call_count == 1
+
+    def test_log_viewer_notice_filter_and_tail_read(self, qapp):
+        from log_viewer import LogViewerDialog
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False) as f:
+            f.write("2026/11/19 10:00:00 INFO  : Everything ok\n")
+            f.write("2026/11/19 10:00:01 NOTICE: Rate limit hit, slowing down\n")
+            tmp_log = f.name
+
+        try:
+            viewer = LogViewerDialog(initial_file=tmp_log)
+            viewer.level_combo.setCurrentIndex(1)  # warn_err
+            txt = viewer.text_edit.toPlainText()
+            assert "Rate limit hit" in txt
+            assert "Everything ok" not in txt
+            viewer.close()
+        finally:
+            if os.path.exists(tmp_log):
+                os.remove(tmp_log)
+
+    def test_multi_mount_tray_header_resets_after_sync_and_no_duplicate_signals(self, qapp):
+        from gui_tray import RcloneTrayIcon
+        from rclone_daemon import RcloneDaemon
+        from rclone_stats import StatsData
+
+        d1 = RcloneDaemon(remote_name="gdrive")
+        d2 = RcloneDaemon(remote_name="onedrive")
+        d1.state = "mounted"
+        d2.state = "mounted"
+        d1.is_running = lambda: True
+        d2.is_running = lambda: True
+
+        tray = RcloneTrayIcon(daemon=d1, daemons={"gdrive": d1, "onedrive": d2})
+
+        # Ensure state_changed is only connected once per daemon
+        calls = []
+        orig_handler = tray._on_state_changed
+
+        def _spy(state, rem=None):
+            calls.append((state, rem))
+            return orig_handler(state, rem)
+
+        tray._on_state_changed = _spy
+        d1._set_state("mounted")
+        qapp.processEvents()
+        assert len(calls) == 1
+
+        # Multi-mount syncing then idle restores "2 Nuvens Conectadas"
+        tray.update_stats_for_remote(
+            "gdrive",
+            StatsData(is_online=True, transfers_count=5, active_transfers=[{"name": "a.bin", "percentage": 50}]),
+        )
+        assert "Sincronizando" in tray.action_status.text()
+
+        with patch("gui_tray.notify_sync_complete") as mock_done:
+            tray.update_stats_for_remote(
+                "gdrive",
+                StatsData(is_online=True, transfers_count=6, active_transfers=[]),
+            )
+            mock_done.assert_called_once()
+            assert mock_done.call_args.kwargs.get("file_count") == 1
+        assert "2" in tray.action_status.text()
+        assert "Sincronizando" not in tray.action_status.text()
+
+
+# ============================================================================
+# 18. Transfer & Download Performance Improvements Tests
+# ============================================================================
+class TestTransferAndDownloadImprovements:
+    def test_supports_vfs_read_chunk_streams_version_detection(self, monkeypatch):
+        import rclone_config
+
+        monkeypatch.setattr(rclone_config, "_VFS_CHUNK_STREAMS_SUPPORT_CACHE", None)
+        fake_res = MagicMock()
+        fake_res.returncode = 0
+        fake_res.stdout = "rclone v1.76.0\n- os/version: cachyos\n"
+        with patch("rclone_config.subprocess.run", return_value=fake_res):
+            assert rclone_config.supports_vfs_read_chunk_streams("/usr/bin/rclone") is True
+
+        monkeypatch.setattr(rclone_config, "_VFS_CHUNK_STREAMS_SUPPORT_CACHE", None)
+        fake_old = MagicMock()
+        fake_old.returncode = 0
+        fake_old.stdout = "rclone v1.62.2\n"
+        with patch("rclone_config.subprocess.run", return_value=fake_old):
+            assert rclone_config.supports_vfs_read_chunk_streams("/usr/bin/rclone") is False
+
+    def test_drive_client_credentials_read_and_update(self, tmp_path, monkeypatch):
+        import rclone_config
+
+        conf = tmp_path / "rclone.conf"
+        conf.write_text(
+            "[drive]\ntype = drive\nclient_id = my_id_123.apps.googleusercontent.com\nclient_secret = GOCSPX-secret999\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("RCLONE_CONFIG", str(conf))
+        cid, csec = rclone_config.get_drive_client_credentials("drive:")
+        assert cid == "my_id_123.apps.googleusercontent.com"
+        assert csec == "GOCSPX-secret999"
+        assert rclone_config.has_custom_drive_client_id("drive") is True
+
+        fake_upd = MagicMock()
+        fake_upd.returncode = 0
+        fake_upd.stdout = ""
+        fake_upd.stderr = ""
+        with patch("rclone_config.get_rclone_path", return_value="/usr/bin/rclone"):
+            with patch("rclone_config.subprocess.run", return_value=fake_upd) as mock_run:
+                ok, _ = rclone_config.update_drive_client_credentials("drive", "new_id", "new_secret")
+                assert ok is True
+                called_cmd = mock_run.call_args.args[0]
+                assert "client_id" in called_cmd
+                assert "new_id" in called_cmd
+
+    def test_instant_transfer_speed_and_item_details_formatting(self, qapp):
+        import rclone_stats
+        from rclone_daemon import RCCredentials
+        from status_popup import StatusPopup, _format_transfer_item_details
+
+        creds = RCCredentials(user="u", password="p", host="127.0.0.1", port=5572)
+        rc_payload = {
+            "speed": 100000.0,  # stale historical session average
+            "bytes": 524288000,
+            "transfers": 3,
+            "errors": 0,
+            "eta": 90,
+            "transferring": [
+                {
+                    "name": "video_4k.mp4",
+                    "size": 1073741824,
+                    "bytes": 536870912,
+                    "percentage": 50,
+                    "speed": 6291456.0,  # 6.00 MB/s instantaneous
+                    "direction": "download",
+                }
+            ],
+        }
+        with patch.object(rclone_stats, "rc_request", return_value=(200, rc_payload)):
+            st = rclone_stats.fetch_rclone_stats(creds)
+            assert st.is_online is True
+            assert round(st.speed_mb_s, 2) == 6.00
+
+        disp_name, pct, detail = _format_transfer_item_details(rc_payload["transferring"][0], "Arquivo")
+        assert disp_name.startswith("↓ ")
+        assert pct == 50
+        assert "512.00 MB / 1.00 GB" in detail
+        assert "6.00 MB/s" in detail
+
+        # Verify throttled state display in StatusPopup
+        popup = StatusPopup(daemon=None, window_mode=True)
+        st.is_throttled = True
+        popup._render_stats(st)
+        assert "API" in popup.speed_value.text()
+
+    def test_asymmetric_bandwidth_and_turbo_transfer_endpoints(self, qapp, tmp_path):
+        from status_popup import StatusPopup, TurboTransferDialog
+
+        popup = StatusPopup(daemon=None, window_mode=True)
+        assert popup.combo_bwlimit.findData("4M:off") >= 0
+
+        mount_root = tmp_path / "CloudDrives" / "drive"
+        sub = mount_root / "Projetos" / "2026"
+        sub.mkdir(parents=True)
+        local_dst = tmp_path / "Downloads" / "Backup"
+
+        dlg = TurboTransferDialog(remote_name="drive", mount_point=str(mount_root))
+        dlg.cloud_path_edit.setText(str(sub))
+        dlg.local_path_edit.setText(str(local_dst))
+        resolved = dlg._resolve_endpoints()
+        assert resolved is not None
+        src, dst, mode = resolved
+        assert mode == "download"
+        assert src == "drive:Projetos/2026"
+        assert dst == str(local_dst)
+        dlg.close()
+
 
 
 

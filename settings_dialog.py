@@ -69,6 +69,7 @@ class SettingsDialog(QDialog):
         self._cache_runner = TaskRunner(self)
         self._clearing_cache = False
         self._log_viewer_dialog: Optional[Any] = None
+        self._update_worker: Optional[Any] = None
         self.language_changed = False
         self.bwlimit_changed = False
         self.theme_changed = False
@@ -168,9 +169,20 @@ class SettingsDialog(QDialog):
         net_group = QGroupBox(tr("Rede e Transferência"))
         net_layout = self._create_aligned_form(net_group)
 
+        self.profile_combo = QComboBox()
+        self.profile_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.profile_combo.addItem(tr("Equilibrado (Dolphin Rápido + Multi-Stream)"), "balanced")
+        self.profile_combo.addItem(tr("Downloads Grandes e Streaming (Buffer 32M / Read-Ahead 64M)"), "streaming")
+        self.profile_combo.addItem(tr("Upload Seguro (Evita Saturar a Rede / Bufferbloat)"), "safe_upload")
+        net_layout.addRow(self._aligned_label(tr("Perfil de Desempenho:")), self.profile_combo)
+
         self.bwlimit_combo = QComboBox()
         self.bwlimit_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
+        self.bwlimit_combo.addItem(tr("Upload 2 MB/s • Download Ilimitado"), "2M:off")
+        self.bwlimit_combo.addItem(tr("Upload 4 MB/s • Download Ilimitado (Anti-Lag)"), "4M:off")
+        self.bwlimit_combo.addItem(tr("Upload 10 MB/s • Download Ilimitado"), "10M:off")
+        self.bwlimit_combo.addItem(tr("Upload 25 MB/s • Download Ilimitado"), "25M:off")
         self.bwlimit_combo.addItem(tr("1 MB/s (Econômico)"), "1M")
         self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
         self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
@@ -209,6 +221,15 @@ class SettingsDialog(QDialog):
         self.cache_spin.setSuffix(" GB")
         self.cache_spin.setValue(2)
         cache_layout.addRow(self._aligned_label(tr("Tamanho Máximo do Cache VFS:")), self.cache_spin)
+
+        self.cache_age_combo = QComboBox()
+        self.cache_age_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.cache_age_combo.addItem(tr("1 Hora (Economizar SSD)"), "1h")
+        self.cache_age_combo.addItem(tr("6 Horas"), "6h")
+        self.cache_age_combo.addItem(tr("24 Horas (Recomendado)"), "24h")
+        self.cache_age_combo.addItem(tr("3 Dias"), "72h")
+        self.cache_age_combo.addItem(tr("7 Dias"), "168h")
+        cache_layout.addRow(self._aligned_label(tr("Retenção do Cache no SSD:")), self.cache_age_combo)
 
         cache_usage_row = QHBoxLayout()
         cache_usage_row.setSpacing(8)
@@ -292,6 +313,11 @@ class SettingsDialog(QDialog):
 
     def _load_values(self) -> None:
         """Populates form controls with values loaded from config with proper unit parsing."""
+        prof_val = str(self.config.get("performance_profile", "balanced"))
+        p_idx = self.profile_combo.findData(prof_val)
+        if p_idx >= 0:
+            self.profile_combo.setCurrentIndex(p_idx)
+
         bwlimit_val = str(self.config.get("bwlimit", "off"))
         index = self.bwlimit_combo.findData(bwlimit_val)
         if index >= 0:
@@ -310,25 +336,29 @@ class SettingsDialog(QDialog):
         cache_str = str(self.config.get("vfs_cache_max_size", "2G")).strip().upper()
         cache_gb = 2
         try:
-            match = re.match(r"^(\d+)([KMGT]?)$", cache_str)
+            match = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGT])?I?B?$", cache_str)
             if match:
-                val, unit = match.groups()
-                num = int(val)
+                val_str, unit = match.groups()
+                num = float(val_str)
                 if unit == "K":
-                    cache_gb = max(1, num // (1024 * 1024))
+                    cache_gb = max(1, int(round(num / (1024.0 * 1024.0))))
                 elif unit == "M":
-                    cache_gb = max(1, num // 1024)
+                    cache_gb = max(1, int(round(num / 1024.0)))
                 elif unit == "T":
-                    cache_gb = num * 1024
+                    cache_gb = int(round(num * 1024.0))
                 else:  # G or empty
-                    cache_gb = num
-            else:
-                digits = ''.join(filter(str.isdigit, cache_str))
-                if digits:
-                    cache_gb = int(digits)
+                    cache_gb = int(round(num))
         except Exception:
             pass
         self.cache_spin.setValue(max(1, min(cache_gb, 500)))
+
+        cache_age = str(self.config.get("vfs_cache_max_age", "24h"))
+        age_idx = self.cache_age_combo.findData(cache_age)
+        if age_idx >= 0:
+            self.cache_age_combo.setCurrentIndex(age_idx)
+        else:
+            self.cache_age_combo.addItem(tr("Personalizado (%s)") % cache_age, cache_age)
+            self.cache_age_combo.setCurrentIndex(self.cache_age_combo.count() - 1)
 
         vfs_mode = str(self.config.get("vfs_cache_mode", "full"))
         index = self.vfs_mode_combo.findData(vfs_mode)
@@ -357,9 +387,11 @@ class SettingsDialog(QDialog):
             self.btn_manage_keyring.setEnabled(False)
 
     def _on_vfs_mode_changed(self, _index: int = 0) -> None:
-        """Disables max VFS cache size spinbox when cache mode is 'off' or 'minimal'."""
+        """Disables max VFS cache size spinbox and retention combo when cache mode is 'off' or 'minimal'."""
         mode = self.vfs_mode_combo.currentData()
-        self.cache_spin.setEnabled(mode not in ("off", "minimal"))
+        enabled = mode not in ("off", "minimal")
+        self.cache_spin.setEnabled(enabled)
+        self.cache_age_combo.setEnabled(enabled)
 
     def _on_theme_combo_changed(self, _index: int = 0) -> None:
         """Applies the selected theme immediately when the user changes the theme combo."""
@@ -468,9 +500,12 @@ class SettingsDialog(QDialog):
         self.btn_check_update.setEnabled(False)
         self.btn_check_update.setText(tr("Verificando..."))
 
-        self._update_worker = UpdateCheckWorker(force=True, parent=self)
+        worker = UpdateCheckWorker(force=True, parent=self)
+        self._update_worker = worker
 
         def _on_finished(has_update: bool, latest_ver: str, url: str, notes: str) -> None:
+            if not self.isVisible():
+                return
             self.btn_check_update.setEnabled(True)
             self.btn_check_update.setText(tr("Verificar Atualizações"))
             if has_update:
@@ -492,6 +527,8 @@ class SettingsDialog(QDialog):
                 )
 
         def _on_failed(err_msg: str) -> None:
+            if not self.isVisible():
+                return
             self.btn_check_update.setEnabled(True)
             self.btn_check_update.setText(tr("Verificar Atualizações"))
             QMessageBox.warning(
@@ -500,9 +537,9 @@ class SettingsDialog(QDialog):
                 tr("Não foi possível verificar atualizações no momento."),
             )
 
-        self._update_worker.check_finished.connect(_on_finished)
-        self._update_worker.check_failed.connect(_on_failed)
-        self._update_worker.start()
+        worker.check_finished.connect(_on_finished)
+        worker.check_failed.connect(_on_failed)
+        worker.start()
 
     def _on_view_logs(self) -> None:
         """Opens diagnostic log viewer dialog non-blockingly."""
@@ -519,8 +556,14 @@ class SettingsDialog(QDialog):
         dialog.activateWindow()
 
     def _on_manage_keyring(self) -> None:
-        """Prompts user to store, view, or clear the rclone configuration password in the system keyring."""
-        from keyring_manager import clear_rclone_password, get_rclone_password, is_keyring_available, store_rclone_password
+        """Prompts user to store, update, or clear the rclone configuration password without freezing the GUI."""
+        from keyring_manager import (
+            clear_rclone_password,
+            get_rclone_password,
+            is_keyring_available,
+            is_rclone_conf_encrypted,
+            store_rclone_password,
+        )
         from PySide6.QtWidgets import QInputDialog, QLineEdit
 
         if not is_keyring_available():
@@ -531,46 +574,74 @@ class SettingsDialog(QDialog):
             )
             return
 
-        has_existing = bool(get_rclone_password())
-        if has_existing:
-            box = QMessageBox(
-                QMessageBox.Icon.Question,
-                tr("Chaveiro do Sistema"),
-                tr("Uma senha do rclone já está armazenada no chaveiro do sistema.\nO que você deseja fazer?"),
-                parent=self,
-            )
-            btn_update = box.addButton(tr("Atualizar Senha"), QMessageBox.ButtonRole.AcceptRole)
-            btn_delete = box.addButton(tr("Remover do Chaveiro"), QMessageBox.ButtonRole.DestructiveRole)
-            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.ButtonRole.RejectRole)
-            box.setDefaultButton(btn_update)
-            box.setEscapeButton(btn_cancel)
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is btn_delete:
-                if clear_rclone_password():
-                    QMessageBox.information(self, tr("Chaveiro do Sistema"), tr("Senha removida do chaveiro com sucesso."))
-                else:
-                    QMessageBox.warning(self, tr("Erro"), tr("Não foi possível remover a senha do chaveiro."))
-                return
-            elif clicked is not btn_update:
-                return
+        self.btn_manage_keyring.setEnabled(False)
 
-        pwd, ok = QInputDialog.getText(
-            self,
-            tr("Senha do Rclone no Chaveiro"),
-            tr("Digite a senha de criptografia da configuração do rclone:"),
-            QLineEdit.EchoMode.Password,
-        )
-        if ok and pwd:
-            if store_rclone_password(pwd):
-                QMessageBox.information(
-                    self,
+        def _after_lookup(existing_pwd: Any) -> None:
+            if not self.isVisible():
+                return
+            self.btn_manage_keyring.setEnabled(True)
+            has_existing = bool(existing_pwd)
+            if has_existing:
+                box = QMessageBox(
+                    QMessageBox.Icon.Question,
                     tr("Chaveiro do Sistema"),
-                    tr("Senha gravada com segurança no chaveiro do sistema!\nO DucksDrive usará '--password-command' automaticamente.")
+                    tr("Uma senha do rclone já está armazenada no chaveiro do sistema.\nO que você deseja fazer?"),
+                    parent=self,
                 )
-                self.keyring_checkbox.setChecked(True)
-            else:
-                QMessageBox.warning(self, tr("Erro"), tr("Falha ao gravar a senha no chaveiro do sistema."))
+                btn_update = box.addButton(tr("Atualizar Senha"), QMessageBox.ButtonRole.AcceptRole)
+                btn_delete = box.addButton(tr("Remover do Chaveiro"), QMessageBox.ButtonRole.DestructiveRole)
+                btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.ButtonRole.RejectRole)
+                box.setDefaultButton(btn_update)
+                box.setEscapeButton(btn_cancel)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked is btn_delete:
+                    self.btn_manage_keyring.setEnabled(False)
+
+                    def _after_clear(ok_cleared: Any) -> None:
+                        if not self.isVisible():
+                            return
+                        self.btn_manage_keyring.setEnabled(True)
+                        if ok_cleared:
+                            self.keyring_checkbox.setChecked(False)
+                            QMessageBox.information(self, tr("Chaveiro do Sistema"), tr("Senha removida do chaveiro com sucesso."))
+                        else:
+                            QMessageBox.warning(self, tr("Erro"), tr("Não foi possível remover a senha do chaveiro."))
+
+                    self._cache_runner.submit(clear_rclone_password, callback=_after_clear)
+                    return
+                elif clicked is not btn_update:
+                    return
+
+            pwd, ok = QInputDialog.getText(
+                self,
+                tr("Senha do Rclone no Chaveiro"),
+                tr("Digite a senha de criptografia da configuração do rclone:"),
+                QLineEdit.EchoMode.Password,
+            )
+            if ok and pwd:
+                self.btn_manage_keyring.setEnabled(False)
+
+                def _store_and_check(secret: str) -> tuple[bool, bool]:
+                    return store_rclone_password(secret), is_rclone_conf_encrypted()
+
+                def _after_store(res: Any) -> None:
+                    if not self.isVisible():
+                        return
+                    self.btn_manage_keyring.setEnabled(True)
+                    stored, is_encrypted = res if isinstance(res, tuple) else (False, False)
+                    if stored:
+                        msg = tr("Senha gravada com segurança no chaveiro do sistema!\nO DucksDrive usará '--password-command' automaticamente.")
+                        if not is_encrypted:
+                            msg += "\n\n" + tr("Aviso: seu arquivo rclone.conf ainda não está criptografado. Para criptografá-lo no disco, execute 'rclone config' no terminal (opção 's' -> Definir senha).")
+                        QMessageBox.information(self, tr("Chaveiro do Sistema"), msg)
+                        self.keyring_checkbox.setChecked(True)
+                    else:
+                        QMessageBox.warning(self, tr("Erro"), tr("Falha ao gravar a senha no chaveiro do sistema."))
+
+                self._cache_runner.submit(_store_and_check, pwd, callback=_after_store)
+
+        self._cache_runner.submit(get_rclone_password, callback=_after_lookup)
 
     def _refresh_cache_usage(self) -> None:
         """Asynchronously calculates local VFS cache usage in a background thread."""
@@ -686,26 +757,50 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, tr("Cache Limpo"), tr("O cache VFS local foi limpo com sucesso."))
 
     def done(self, r: int) -> None:
-        if not self._clearing_cache:
-            self._cache_runner.wait_all(2000)
+        if self._update_worker is not None and self._update_worker.isRunning():
+            try:
+                self._update_worker.check_finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self._update_worker.check_failed.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            if not self._update_worker.wait(1500):
+                # Detach parent so closing the dialog never triggers QThread destruction abort
+                self._update_worker.setParent(QApplication.instance())
+                self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_worker = None
+
+        if self._clearing_cache:
+            self._cache_runner.wait_all(10000, run_queued=True)
+        else:
+            self._cache_runner.wait_all(2000, run_queued=False)
         super().done(r)
 
     def _save_and_accept(self) -> None:
         """Validates controls, warns on high SSD cache size, saves to config, and closes."""
+        profile = self.profile_combo.currentData() or "balanced"
         bwlimit = self.bwlimit_combo.currentData() or "off"
         transfers = self.transfers_spin.value()
         cache_gb = self.cache_spin.value()
         cache_size = f"{cache_gb}G"
+        cache_age = self.cache_age_combo.currentData() or "24h"
         vfs_mode = self.vfs_mode_combo.currentData() or "full"
         language = self.lang_combo.currentData() or "pt_BR"
         theme = self.theme_combo.currentData() or "auto"
+        autostart = self.autostart_checkbox.isChecked()
+        use_keyring = self.keyring_checkbox.isChecked()
         language_changed = language != str(self.config.get("language", "pt_BR"))
         theme_changed = theme != str(self.config.get("theme", "auto"))
         bwlimit_changed = bwlimit != str(self.config.get("bwlimit", "off"))
         mount_opts_changed = (
             cache_size != str(self.config.get("vfs_cache_max_size", "2G"))
+            or cache_age != str(self.config.get("vfs_cache_max_age", "24h"))
+            or profile != str(self.config.get("performance_profile", "balanced"))
             or int(transfers) != int(self.config.get("transfers", 4))
             or vfs_mode != str(self.config.get("vfs_cache_mode", "full"))
+            or use_keyring != bool(self.config.get("use_system_keyring", False))
         )
 
         # Validate high cache size warning if >= 50 GB
@@ -720,12 +815,11 @@ class SettingsDialog(QDialog):
             if res != QMessageBox.Yes:
                 return
 
-        autostart = self.autostart_checkbox.isChecked()
-        use_keyring = self.keyring_checkbox.isChecked()
-
         # Update config dict
+        self.config["performance_profile"] = profile
         self.config["bwlimit"] = bwlimit
         self.config["vfs_cache_max_size"] = cache_size
+        self.config["vfs_cache_max_age"] = cache_age
         self.config["transfers"] = transfers
         self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
@@ -802,7 +896,7 @@ class SettingsDialog(QDialog):
 
         import subprocess
         import urllib.parse
-        from filemanager_integration import clean_integration
+        from filemanager_integration import _atomic_write_text, clean_integration
         from rclone_daemon import unmount_fuse_path, is_path_mounted
         from rclone_config import get_rclone_conf_path
 
@@ -811,7 +905,7 @@ class SettingsDialog(QDialog):
             try:
                 if hasattr(d, "health_timer") and d.health_timer:
                     d.health_timer.stop()
-                if d.is_running():
+                if d.is_running() or (hasattr(d, "is_process_alive") and d.is_process_alive()) or getattr(d, "state", "") in ("starting", "unmounting"):
                     d.stop()
             except Exception:
                 pass
@@ -834,6 +928,7 @@ class SettingsDialog(QDialog):
         xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
         xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
         xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        xdg_bin = os.environ.get("XDG_BIN_HOME", os.path.expanduser("~/.local/bin"))
 
         autostart_file = os.path.join(xdg_config, "autostart", "ducksdrive.desktop")
         config_dir = CONFIG_DIR
@@ -842,7 +937,7 @@ class SettingsDialog(QDialog):
         rclone_cache_dir = os.path.join(xdg_cache, "rclone")
         app_share_dir = os.path.join(xdg_data, "ducksdrive")
         desktop_file = os.path.join(xdg_data, "applications", "ducksdrive.desktop")
-        bin_file = os.path.expanduser("~/.local/bin/ducksdrive")
+        bin_file = os.path.join(xdg_bin, "ducksdrive")
         appimage_path = os.environ.get("APPIMAGE")
 
         wipe_rclone = False
@@ -890,6 +985,9 @@ class SettingsDialog(QDialog):
                     pass
 
         # 3. Remove orphaned GUI bookmarks and .bak files
+        cloud_drives_uri = f"file://{urllib.parse.quote(os.path.abspath(cloud_drives_base))}"
+        legacy_gdrive_uri = f"file://{urllib.parse.quote(os.path.abspath(os.path.expanduser('~/GoogleDrive')))}"
+
         for p in [
             os.path.join(xdg_data, "user-places.xbel"),
             os.path.join(xdg_config, "user-places.xbel"),
@@ -898,10 +996,10 @@ class SettingsDialog(QDialog):
                 try:
                     with open(p, encoding="utf-8") as f:
                         s = f.read()
-                    s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
-                    s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', s, flags=re.DOTALL)
-                    with open(p, "w", encoding="utf-8") as f:
-                        f.write(s)
+                    new_s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
+                    new_s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', new_s, flags=re.DOTALL)
+                    if new_s != s:
+                        _atomic_write_text(p, new_s)
                 except Exception:
                     pass
             bak_p = f"{p}.bak"
@@ -916,11 +1014,19 @@ class SettingsDialog(QDialog):
             try:
                 with open(gtk_bookmarks, encoding="utf-8") as f:
                     lines = f.readlines()
-                with open(gtk_bookmarks, "w", encoding="utf-8") as f:
-                    for line in lines:
-                        unquoted = urllib.parse.unquote(line)
-                        if "CloudDrives" not in line and "GoogleDrive" not in line and "CloudDrives" not in unquoted and "GoogleDrive" not in unquoted:
-                            f.write(line)
+                kept = []
+                for line in lines:
+                    stripped = line.strip()
+                    uri_part = stripped.split(" ", 1)[0] if stripped else ""
+                    is_ducksdrive_uri = (
+                        uri_part == cloud_drives_uri
+                        or uri_part.startswith(cloud_drives_uri + "/")
+                        or uri_part == legacy_gdrive_uri
+                    )
+                    if not is_ducksdrive_uri:
+                        kept.append(line)
+                if len(kept) != len(lines):
+                    _atomic_write_text(gtk_bookmarks, "".join(kept))
             except Exception:
                 pass
 

@@ -42,7 +42,9 @@ from PySide6.QtWidgets import (
     QComboBox
 )
 
+from filemanager_integration import open_local_folder
 from rclone_config import (
+    BackgroundTask,
     SUPPORTED_REMOTE_TYPES,
     TaskRunner,
     list_remote_names,
@@ -52,7 +54,13 @@ from rclone_config import (
     reconnect_remote,
 )
 from rclone_daemon import RcloneDaemon, is_path_mounted
-from rclone_settings import apply_app_theme, get_remote_config, load_config, save_last_remote
+from rclone_settings import (
+    apply_app_theme,
+    delete_remote_config,
+    get_remote_config,
+    load_config,
+    save_last_remote,
+)
 from rclone_stats import StatsData, fetch_vfs_queue, rc_vfs_refresh, set_rc_bwlimit
 from status_popup import StatusPopup
 from settings_dialog import SettingsDialog
@@ -384,7 +392,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._settings_dialog: Optional[SettingsDialog] = None
         self._new_remote_dialog: Optional[NewRemoteDialog] = None
         self._log_viewer_dialog: Optional[LogViewerDialog] = None
+        self._reconnect_tasks: list[BackgroundTask] = []
+        self._connected_daemon_ids: set[int] = set()
         self.latest_stats: Optional[StatsData] = None
+        self._remote_latest_stats: dict[str, StatsData] = {}
         self._was_syncing = False
         self._idle_confirm_polls = 0
         self._current_icon_state = "idle"
@@ -410,7 +421,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.status_popup._tray = self
 
         self._remote_vfs_queue: dict[str, int] = {}
-        self.inhibitor = VFSInhibitorManager(self)
+        self.inhibitor = VFSInhibitorManager(self, notify_on_release=False)
         self.inhibitor.lock_state_changed.connect(self.status_popup.set_inhibitor_active)
 
         self._menu = QMenu()
@@ -450,9 +461,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.menu_remotes.aboutToShow.connect(self._on_remotes_menu_about_to_show)
         self._populate_remotes_menu()
 
-        self.action_logs = QAction(tr("Ver Logs de Diagnóstico..."), self)
-        self.action_logs.triggered.connect(self._show_log_viewer_dialog)
-
         self.action_settings = QAction(tr("Configurações..."), self)
         self.action_settings.triggered.connect(self._show_settings_dialog)
         self._menu.addAction(self.action_settings)
@@ -468,14 +476,20 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.status_popup.set_tray_menu(self._menu)
         self.apply_theme(str(load_config().get("theme") or "auto"))
 
-        if daemon is not None:
-            daemon.state_changed.connect(lambda s: self._on_state_changed(s, getattr(daemon, "current_remote", None)))
-            daemon.mount_error.connect(self._on_mount_error)
         for r, d in list(self.daemons.items()):
-            d.state_changed.connect(lambda s, rem=r: self._on_state_changed(s, rem))
-            d.mount_error.connect(self._on_mount_error)
+            self._connect_daemon_signals(r, d)
 
         self.activated.connect(self._on_activated)
+
+    def _connect_daemon_signals(self, remote_name: str, daemon: RcloneDaemon) -> None:
+        """Connects a daemon's signals once, preventing duplicate slot invocations."""
+        did = id(daemon)
+        if did in self._connected_daemon_ids:
+            return
+        self._connected_daemon_ids.add(did)
+        clean = remote_name.rstrip(":")
+        daemon.state_changed.connect(lambda s, rem=clean: self._on_state_changed(s, rem))
+        daemon.mount_error.connect(self._on_mount_error)
 
     @property
     def daemon(self) -> RcloneDaemon:
@@ -517,8 +531,22 @@ class RcloneTrayIcon(QSystemTrayIcon):
         clean = remote_name.rstrip(":")
         self.daemons[clean] = daemon
         self.status_popup.register_daemon(clean, daemon)
-        daemon.state_changed.connect(lambda s, rem=clean: self._on_state_changed(s, rem))
-        daemon.mount_error.connect(self._on_mount_error)
+        self._connect_daemon_signals(clean, daemon)
+
+    def remove_daemon(self, remote_name: str) -> None:
+        """Removes a deleted remote's daemon and state from tray and popup."""
+        clean = remote_name.rstrip(":")
+        removed = self.daemons.pop(clean, None)
+        if removed is not None:
+            self._connected_daemon_ids.discard(id(removed))
+        self._remote_latest_stats.pop(clean, None)
+        self._remote_syncing_state.pop(clean, None)
+        self._remote_vfs_queue.pop(clean, None)
+        self._sync_start_transfers.pop(clean, None)
+        self._last_notified_state.pop(clean, None)
+        self.inhibitor.update_queue_status(sum(self._remote_vfs_queue.values()))
+        self.status_popup.remove_daemon(clean)
+        self._populate_remotes_menu(force=True)
 
     def _open_update_url(self) -> None:
         """Opens GitHub releases page in default web browser."""
@@ -573,7 +601,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def shutdown_workers(self) -> None:
         """Waits for pending background rclone calls and creation threads. Call only when the app is exiting."""
-        self.runner.wait_all()
+        self.runner.wait_all(3000, run_queued=False)
         if hasattr(self, "_creation_thread") and self._creation_thread is not None:
             self._creation_thread.cancel()
             if self._creation_thread.isRunning():
@@ -582,6 +610,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
             try:
                 if t.isRunning():
                     t.wait(2000)
+            except RuntimeError:
+                pass
+        for t in list(getattr(self, "_reconnect_tasks", [])):
+            try:
+                if t.isRunning():
+                    t.wait(1500)
             except RuntimeError:
                 pass
         self.status_popup.shutdown_workers()
@@ -807,7 +841,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if is_active and d is not None:
                     action_open_r = QAction(tr("Abrir Pasta Local"), remote_menu)
                     action_open_r.triggered.connect(
-                        lambda checked=False, mp=d.mount_point: QDesktopServices.openUrl(QUrl.fromLocalFile(mp))
+                        lambda checked=False, mp=d.mount_point: open_local_folder(mp)
                     )
                     remote_menu.addAction(action_open_r)
 
@@ -876,7 +910,6 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_refresh_vfs.setText(tr("Atualizar Pastas"))
         self.action_panel.setText(tr("Abrir Painel de Transferências"))
         self.menu_remotes.setTitle(tr("Gerenciar Nuvens"))
-        self.action_logs.setText(tr("Ver Logs de Diagnóstico..."))
         self.action_settings.setText(tr("Configurações..."))
         self.action_exit.setText(tr("Sair"))
 
@@ -901,7 +934,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
             return
-        dialog = SettingsDialog(parent=None, daemon=self.daemon, daemons=self.daemons, runner=self.runner)
+        dialog = SettingsDialog(
+            parent=None,
+            daemon=self.get_active_daemon(),
+            daemons=self.daemons,
+            runner=self.runner,
+        )
         self._settings_dialog = dialog
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         if dialog.exec() == QDialog.Accepted:
@@ -1008,6 +1046,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Updates live telemetry for a specific remote across tray and status popup."""
         clean = remote_name.rstrip(":")
         self.latest_stats = stats
+        self._remote_latest_stats[clean] = stats
         self.status_popup.update_stats_for_remote(clean, stats)
 
         self._remote_vfs_queue[clean] = stats.vfs_queue_count
@@ -1019,7 +1058,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
             if has_active:
                 if not was_syncing:
-                    self._sync_start_transfers[clean] = max(0, stats.transfers_count - len(stats.active_transfers))
+                    self._sync_start_transfers[clean] = stats.transfers_count
                 self._remote_syncing_state[clean] = True
                 self.update_tray_icon("syncing")
                 menu_header = f"{clean} • {tr('Sincronizando...')}"
@@ -1037,16 +1076,22 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     if not any(self._remote_syncing_state.values()):
                         self.update_tray_icon("idle")
                     start_count = self._sync_start_transfers.pop(clean, 0)
-                    completed_in_batch = max(1, stats.transfers_count - start_count) if stats.transfers_count > 0 else 0
+                    delta = stats.transfers_count - start_count
+                    completed_in_batch = delta if delta > 0 else (1 if stats.transfers_count > 0 else 0)
                     notify_sync_complete(
                         clean,
                         file_count=completed_in_batch,
                         fallback_tray=self if self.tray_available else None,
                     )
-                active = self.active_daemons()
-                if len(active) <= 1:
-                    menu_header = f"{clean} • {tr('Conectado')}"
-                    self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
+                if not any(self._remote_syncing_state.values()):
+                    active = self.active_daemons()
+                    if len(active) > 1:
+                        names = ", ".join(active.keys())
+                        menu_header = f"DucksDrive • {tr('%d Nuvens Conectadas') % len(active)} ({names})"
+                        self._set_status_and_tooltip(menu_header, menu_header)
+                    elif len(active) == 1:
+                        menu_header = f"{clean} • {tr('Conectado')}"
+                        self._set_status_and_tooltip(menu_header, f"{APP_NAME}: {stats.status_text}")
         else:
             self._remote_syncing_state[clean] = False
             if not any(self._remote_syncing_state.values()):
@@ -1059,7 +1104,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.update_stats_for_remote(clean, stats)
 
     def _has_active_transfer(self) -> bool:
-        """Checks if there is any active file transfer in progress."""
+        """Checks if any active remote currently has file transfers in progress."""
+        if any(st.has_active_transfers for st in self._remote_latest_stats.values()):
+            return True
         return bool(self.latest_stats and self.latest_stats.has_active_transfers)
 
     def _show_transfer_panel(self) -> None:
@@ -1149,11 +1196,13 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Shows a cancellable progress dialog and exits once all VFS upload queues are empty."""
         if self._upload_dialog is not None:
             return
-        orig_rate = str(load_config().get("bwlimit") or "off")
-        for d in self.daemons.values():
+        global_rate = str(load_config().get("bwlimit") or "off")
+        for r_name, d in self.daemons.items():
             if d.is_running() and d.rc_credentials is not None:
                 d.is_user_paused = False
-                self.runner.submit(set_rc_bwlimit, d.rc_credentials, orig_rate)
+                rem_bw = str(get_remote_config(r_name).get("bwlimit") or "").strip()
+                effective_rate = rem_bw or global_rate
+                self.runner.submit(set_rc_bwlimit, d.rc_credentials, effective_rate)
 
         self.status_popup.is_paused = False
         self.status_popup._apply_pause_button_ui()
@@ -1231,22 +1280,22 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self.request_exit.emit()
 
     def _open_folder(self) -> None:
-        """Opens the mount point in the system file manager using QDesktopServices."""
+        """Opens the mount point in the system file manager without blocking the GUI thread on FUSE stat."""
         active = self.active_daemons()
         if len(active) == 1:
             d = next(iter(active.values()))
             path = d.mount_point
         elif len(active) > 1:
             cd_path = os.path.abspath(os.path.expanduser("~/CloudDrives"))
-            path = cd_path if (os.path.exists(cd_path) or is_path_mounted(cd_path)) else next(iter(active.values())).mount_point
+            path = cd_path if (is_path_mounted(cd_path) or os.path.isdir(cd_path)) else next(iter(active.values())).mount_point
         else:
-            path = self.daemon.mount_point
+            active_d = self.get_active_daemon()
+            if active_d is None:
+                return
+            path = active_d.mount_point
 
-        if os.path.exists(path) or is_path_mounted(path):
-            try:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-            except Exception as e:
-                logger.error("Failed to open folder with QDesktopServices: %s", e)
+        if is_path_mounted(path) or os.path.exists(path):
+            open_local_folder(path)
         else:
             QMessageBox.warning(None, tr("Pasta Ausente"), tr("O diretório %s não existe.") % path)
 
@@ -1254,7 +1303,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         """Sends POST /vfs/refresh asynchronously for a single active daemon."""
         if not daemon_item.is_running() or not daemon_item.rc_credentials:
             return
-        self.runner.submit(rc_vfs_refresh, daemon_item.rc_credentials, timeout=15.0)
+        creds = daemon_item.rc_credentials
+        self.runner.submit(lambda c=creds: rc_vfs_refresh(c, timeout=15.0, recursive=True, async_mode=True))
         send_desktop_notification(
             APP_NAME,
             tr("Atualizando cache de pastas do rclone em segundo plano..."),
@@ -1268,7 +1318,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
             return
         for r, d in active.items():
             if d.rc_credentials:
-                self.runner.submit(rc_vfs_refresh, d.rc_credentials, timeout=15.0)
+                creds = d.rc_credentials
+                self.runner.submit(lambda c=creds: rc_vfs_refresh(c, timeout=15.0, recursive=True, async_mode=True))
         send_desktop_notification(
             APP_NAME,
             tr("Atualizando cache de pastas do rclone em segundo plano..."),
@@ -1278,7 +1329,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _test_connection(self, remote: str) -> None:
         """Executes non-blocking rclone about diagnostic in background."""
         clean_remote = remote.rstrip(":")
-        self.showMessage(APP_NAME, tr("Testando conexão com '%s'...") % clean_remote, QSystemTrayIcon.Information, 2000)
+        send_desktop_notification(
+            APP_NAME,
+            tr("Testando conexão com '%s'...") % clean_remote,
+            fallback_tray=self if self.tray_available else None,
+        )
         self.runner.submit(
             check_remote_connection,
             clean_remote,
@@ -1310,24 +1365,35 @@ class RcloneTrayIcon(QSystemTrayIcon):
             QMessageBox.warning(None, tr("Falha na Conexão"), message)
 
     def _reauthorize_oauth(self, remote: str) -> None:
-        """Handles non-blocking OAuth reauthorization in background, unmounting first if active."""
+        """Handles non-blocking OAuth reauthorization in a dedicated thread, unmounting asynchronously if active."""
         clean_remote = remote.rstrip(":")
         d = self.daemons.get(clean_remote)
-        was_mounted = bool(d and d.is_running())
-        if was_mounted and d:
-            d.stop()
+        was_mounted = bool(d and (d.is_running() or d.is_process_alive()))
 
-        self.showMessage(
-            APP_NAME,
-            tr("Abrindo o navegador para reautorizar '%s'...") % clean_remote,
-            QSystemTrayIcon.Information,
-            5000,
-        )
-        self.runner.submit(
-            reconnect_remote,
-            clean_remote,
-            callback=lambda res, r=clean_remote, wm=was_mounted: self._on_reconnect_done(r, wm, res),
-        )
+        def _launch_reconnect() -> None:
+            send_desktop_notification(
+                APP_NAME,
+                tr("Abrindo o navegador para reautorizar '%s'...") % clean_remote,
+                fallback_tray=self if self.tray_available else None,
+            )
+            task = BackgroundTask(reconnect_remote, clean_remote)
+            self._reconnect_tasks.append(task)
+
+            def _done(finished_task: BackgroundTask) -> None:
+                if finished_task in self._reconnect_tasks:
+                    self._reconnect_tasks.remove(finished_task)
+                res = finished_task.result
+                finished_task.wait()
+                finished_task.deleteLater()
+                self._on_reconnect_done(clean_remote, was_mounted, res)
+
+            task.completed.connect(_done)
+            task.start()
+
+        if was_mounted and d:
+            d.stop_async(on_done=_launch_reconnect)
+        else:
+            _launch_reconnect()
 
     def _on_reconnect_done(self, remote: str, was_mounted: bool, result: Any) -> None:
         """GUI-thread handler after rclone config reconnect finishes."""
@@ -1391,12 +1457,19 @@ class RcloneTrayIcon(QSystemTrayIcon):
         )
 
     def _on_remote_deleted(self, remote: str, deleted: bool) -> None:
-        self.refresh_remotes()
+        clean = remote.rstrip(":")
         if deleted:
-            if str(load_config().get("last_remote") or "").rstrip(":") == remote.rstrip(":"):
+            if self.controller is not None and hasattr(self.controller, "remove_daemon"):
+                self.controller.remove_daemon(clean)
+            else:
+                self.remove_daemon(clean)
+            delete_remote_config(clean)
+            if str(load_config().get("last_remote") or "").rstrip(":") == clean:
                 save_last_remote("")
+            self.refresh_remotes()
             QMessageBox.information(None, tr("Nuvem Removida"), tr("A nuvem '%s' foi removida com sucesso.") % remote)
         else:
+            self.refresh_remotes()
             QMessageBox.critical(None, tr("Erro"), tr("Falha ao remover a nuvem '%s'.") % remote)
 
     def _show_new_remote_dialog(self) -> None:
@@ -1426,11 +1499,22 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self._pending_remote_name = name
             if hasattr(self, "_creation_thread") and self._creation_thread is not None:
                 old_t = self._creation_thread
+                for sig, slot in (
+                    (old_t.output_line, self._on_creation_output_line),
+                    (old_t.finished_creation, self._close_progress),
+                    (old_t.finished_creation, self._on_creation_finished),
+                ):
+                    try:
+                        sig.disconnect(slot)
+                    except (RuntimeError, TypeError):
+                        pass
                 if old_t.isRunning():
                     if not hasattr(self, "_old_creation_threads"):
                         self._old_creation_threads = []
                     self._old_creation_threads.append(old_t)
                     old_t.finished.connect(lambda t=old_t: self._cleanup_old_creation_thread(t))
+                else:
+                    old_t.deleteLater()
             self._creation_thread = RemoteCreationThread(name, rtype, extra_params=extra_params)
 
             is_oauth = rtype in ("drive", "onedrive", "dropbox", "box", "pcloud")

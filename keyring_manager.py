@@ -11,9 +11,12 @@ allowing `--password-command` to decrypt `rclone.conf` without hardcoded master 
 """
 
 import logging
+import os
 import shutil
 import subprocess
 from typing import Optional
+
+from rclone_config import _get_default_rclone_conf_path, get_clean_env
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,25 @@ DEFAULT_LABEL = "DucksDrive Rclone Configuration Password"
 def is_keyring_available() -> bool:
     """Checks whether the `secret-tool` utility is available on this system."""
     return shutil.which("secret-tool") is not None
+
+
+def is_rclone_conf_encrypted() -> bool:
+    """Checks whether the active rclone.conf file appears to be encrypted by rclone."""
+    conf_path = _get_default_rclone_conf_path()
+    if not os.path.isfile(conf_path):
+        return False
+    try:
+        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
+            for _ in range(10):
+                line = f.readline()
+                if not line:
+                    break
+                upper = line.upper()
+                if "RCLONE_ENCRYPT" in upper or "RCLONE ENCRYPTED" in upper:
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 def get_password_command(service: str = DEFAULT_SERVICE, user: str = DEFAULT_USER) -> str:
@@ -63,6 +85,7 @@ def store_rclone_password(
             text=True,
             capture_output=True,
             timeout=5,
+            env=get_clean_env(include_keyring=False),
         )
         if proc.returncode == 0:
             logger.info("Successfully stored rclone password in system keyring.")
@@ -91,6 +114,7 @@ def get_rclone_password(service: str = DEFAULT_SERVICE, user: str = DEFAULT_USER
             capture_output=True,
             text=True,
             timeout=5,
+            env=get_clean_env(include_keyring=False),
         )
         if proc.returncode == 0 and proc.stdout:
             return proc.stdout.strip()
@@ -117,6 +141,7 @@ def clear_rclone_password(service: str = DEFAULT_SERVICE, user: str = DEFAULT_US
             capture_output=True,
             text=True,
             timeout=5,
+            env=get_clean_env(include_keyring=False),
         )
         return proc.returncode == 0
     except Exception as exc:

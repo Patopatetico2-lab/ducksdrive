@@ -9,16 +9,43 @@ Dispatches desktop notifications via D-Bus org.freedesktop.Notifications
 or the notify-send CLI with graceful fallback to QSystemTrayIcon.showMessage().
 """
 
+import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
-from typing import Any, Optional
+import threading
+from typing import Any, List, Optional
 
 from i18n import tr
+from rclone_config import get_clean_env
 
 logger = logging.getLogger(__name__)
+
+
+def _spawn_reaped(cmd: List[str]) -> bool:
+    """Spawns a short-lived command with a clean environment and reaps it in a daemon thread (zero zombies)."""
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        env=get_clean_env(include_keyring=False),
+    )
+
+    def _reap(p: subprocess.Popen[bytes]) -> None:
+        try:
+            p.wait(timeout=10)
+        except Exception:
+            try:
+                p.kill()
+                p.wait(timeout=1)
+            except Exception:
+                pass
+
+    threading.Thread(target=_reap, args=(proc,), name="ducksdrive-notify-reaper", daemon=True).start()
+    return True
 
 
 def _find_notification_icon() -> str:
@@ -43,8 +70,8 @@ def send_desktop_notification(
     fallback_tray: Optional[Any] = None,
 ) -> bool:
     """
-    Sends a desktop notification. Tries D-Bus org.freedesktop.Notifications first,
-    then notify-send, then falls back to tray.showMessage().
+    Sends a desktop notification. Tries `notify-send` first, then `gdbus`
+    (`org.freedesktop.Notifications.Notify`), then falls back to `tray.showMessage()`.
 
     Args:
         title: Notification header summary.
@@ -70,18 +97,13 @@ def send_desktop_notification(
                 title,
                 message,
             ]
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+            _spawn_reaped(cmd)
             logger.debug("Desktop notification dispatched via notify-send: %s", title)
             return True
         except Exception as exc:
             logger.debug("notify-send execution failed: %s", exc)
 
-    # 2. Try gdbus CLI (calls org.freedesktop.Notifications.Notify directly via D-Bus)
+    # 2. Try gdbus CLI (calls org.freedesktop.Notifications.Notify directly via D-Bus, non-blocking)
     gdbus_bin = shutil.which("gdbus")
     if gdbus_bin:
         try:
@@ -94,17 +116,16 @@ def send_desktop_notification(
                 "--method", "org.freedesktop.Notifications.Notify",
                 "DucksDrive",
                 "0",
-                active_icon,
-                title,
-                message,
+                json.dumps(active_icon, ensure_ascii=False),
+                json.dumps(title, ensure_ascii=False),
+                json.dumps(message, ensure_ascii=False),
                 "[]",
                 "{}",
                 "5000",
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
-            if res.returncode == 0:
-                logger.debug("Desktop notification dispatched via gdbus: %s", title)
-                return True
+            _spawn_reaped(cmd)
+            logger.debug("Desktop notification dispatched via gdbus: %s", title)
+            return True
         except Exception as exc:
             logger.debug("gdbus execution failed: %s", exc)
 

@@ -9,6 +9,7 @@ Manages loading and saving user preferences in ~/.config/ducksdrive/config.json
 with safe default values and automatic system autostart synchronization.
 """
 
+import copy
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import re
 import shutil
 import socket
 import sys
+import tempfile
 from typing import Any, Dict, Set
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,9 @@ def get_available_rc_port(host: str = "127.0.0.1", preferred_port: int = 5572) -
 DEFAULT_CONFIG: Dict[str, Any] = {
     "bwlimit": "off",
     "vfs_cache_max_size": "2G",
+    "vfs_cache_max_age": "24h",
+    "vfs_read_chunk_streams": 4,
+    "performance_profile": "balanced",
     "transfers": 4,
     "vfs_cache_mode": "full",
     "autostart": True,
@@ -92,6 +97,7 @@ DEFAULT_REMOTE_CONFIG: Dict[str, Any] = {
     "custom_flags": "",
     "bwlimit": "",
     "vfs_cache_max_size": "",
+    "performance_profile": "",
 }
 
 
@@ -99,10 +105,28 @@ _CONFIG_CACHE: Dict[str, Any] | None = None
 _CONFIG_MTIME: float | None = None
 
 
+def _atomic_write_file(target_path: str, content: str) -> None:
+    """Atomically writes text content to target_path via a temp file + os.replace."""
+    parent = os.path.dirname(target_path) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".ducksdrive-", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, target_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+
 def load_config() -> Dict[str, Any]:
     """
     Loads configuration from ~/.config/ducksdrive/config.json.
-    Merges with defaults if missing keys.
+    Merges with defaults if missing keys, returning an isolated deep copy.
     """
     global _CONFIG_CACHE, _CONFIG_MTIME
     try:
@@ -111,9 +135,9 @@ def load_config() -> Dict[str, Any]:
         mtime = None
 
     if _CONFIG_CACHE is not None and mtime == _CONFIG_MTIME:
-        return _CONFIG_CACHE.copy()
+        return copy.deepcopy(_CONFIG_CACHE)
 
-    config = DEFAULT_CONFIG.copy()
+    config = copy.deepcopy(DEFAULT_CONFIG)
     if mtime is not None:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -123,27 +147,25 @@ def load_config() -> Dict[str, Any]:
         except Exception as e:
             logger.error("Failed to load config file: %s. Using defaults.", e)
 
-    _CONFIG_CACHE = config.copy()
+    _CONFIG_CACHE = copy.deepcopy(config)
     _CONFIG_MTIME = mtime
     return config
 
 
 def save_config(config: Dict[str, Any]) -> bool:
     """
-    Saves configuration dictionary to ~/.config/ducksdrive/config.json
+    Atomically saves configuration dictionary to ~/.config/ducksdrive/config.json
     and synchronizes system autostart (.desktop file).
     """
     global _CONFIG_CACHE, _CONFIG_MTIME
     try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4)
+        _atomic_write_file(CONFIG_FILE, json.dumps(config, indent=4) + "\n")
         try:
             _CONFIG_MTIME = os.path.getmtime(CONFIG_FILE)
         except OSError:
             _CONFIG_MTIME = None
-        merged = DEFAULT_CONFIG.copy()
-        merged.update(config)
+        merged = copy.deepcopy(DEFAULT_CONFIG)
+        merged.update(copy.deepcopy(config))
         _CONFIG_CACHE = merged
         logger.info("Saved configuration successfully to %s", CONFIG_FILE)
 
@@ -156,7 +178,7 @@ def save_config(config: Dict[str, Any]) -> bool:
 
 
 def save_last_remote(remote_name: str) -> None:
-    """Persists the most recently mounted remote name in ~/.config/ducksdrive/config.json."""
+    """Atomically persists the most recently mounted remote name in ~/.config/ducksdrive/config.json."""
     global _CONFIG_CACHE, _CONFIG_MTIME
     clean = remote_name.rstrip(":") if remote_name else ""
     config = load_config()
@@ -164,14 +186,12 @@ def save_last_remote(remote_name: str) -> None:
         return
     config["last_remote"] = clean
     try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4)
+        _atomic_write_file(CONFIG_FILE, json.dumps(config, indent=4) + "\n")
         try:
             _CONFIG_MTIME = os.path.getmtime(CONFIG_FILE)
         except OSError:
             _CONFIG_MTIME = None
-        _CONFIG_CACHE = config.copy()
+        _CONFIG_CACHE = copy.deepcopy(config)
         logger.info("Updated last_remote to '%s'", clean)
     except Exception as e:
         logger.error("Failed to save last_remote: %s", e)
@@ -232,56 +252,37 @@ _SYSTEM_DARK_CACHE: bool | None = None
 
 def set_system_default_palette(palette: Any) -> None:
     """Stores a copy of the original system QPalette captured at application startup."""
-    global SYSTEM_DEFAULT_PALETTE, _SYSTEM_DARK_CACHE
+    global SYSTEM_DEFAULT_PALETTE
     try:
         from PySide6.QtGui import QPalette
 
         SYSTEM_DEFAULT_PALETTE = QPalette(palette)
-        win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
-        if win_col.isValid():
-            _SYSTEM_DARK_CACHE = win_col.lightness() < 128
     except Exception:
         SYSTEM_DEFAULT_PALETTE = palette
 
 
 def _detect_system_dark() -> bool:
-    """Detects whether the desktop environment is using a dark color scheme before custom palettes are applied."""
-    global _SYSTEM_DARK_CACHE
-    if _SYSTEM_DARK_CACHE is not None:
-        return _SYSTEM_DARK_CACHE
-
-    # 1. Check saved system default palette or initial QApplication palette
+    """
+    Detects whether the desktop environment is using a dark color scheme.
+    Prioritizes Qt6 desktop colorScheme hints, KDE kdeglobals, and GTK_THEME before
+    falling back to Qt's default palette (which is often light in pip-installed PySide6).
+    """
+    # 1. Qt 6.5+ desktop portal / platform colorScheme hint
     try:
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QGuiApplication, QPalette
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QGuiApplication
 
         hints = QGuiApplication.styleHints()
         if hasattr(hints, "colorScheme") and hasattr(Qt, "ColorScheme"):
             scheme = hints.colorScheme()
             if scheme == Qt.ColorScheme.Dark:
-                _SYSTEM_DARK_CACHE = True
                 return True
             if scheme == Qt.ColorScheme.Light:
-                _SYSTEM_DARK_CACHE = False
                 return False
-
-        if SYSTEM_DEFAULT_PALETTE is not None:
-            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
-            if win_col.isValid() and win_col.lightness() < 128:
-                _SYSTEM_DARK_CACHE = True
-                return True
-
-        app = QApplication.instance()
-        if app is not None:
-            window_color = app.palette().color(QPalette.Window)
-            if window_color.isValid() and window_color.lightness() < 128:
-                _SYSTEM_DARK_CACHE = True
-                return True
     except Exception:
         pass
 
-    # 2. Check KDE kdeglobals
+    # 2. Check KDE kdeglobals (works even when pip PySide6 lacks plasma-integration)
     kdeglobals = os.path.join(
         os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
         "kdeglobals",
@@ -291,25 +292,39 @@ def _detect_system_dark() -> bool:
             with open(kdeglobals, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             if re.search(r"^(?:ColorScheme|Name|LookAndFeelPackage)\s*=\s*.*dark", content, re.IGNORECASE | re.MULTILINE):
-                _SYSTEM_DARK_CACHE = True
                 return True
             m = re.search(r"^\s*BackgroundNormal\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", content, re.MULTILINE)
             if m:
                 r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
                 lum = 0.299 * r + 0.587 * g + 0.114 * b
-                _SYSTEM_DARK_CACHE = lum < 128
-                return _SYSTEM_DARK_CACHE
+                return lum < 128
             if re.search(r"^(?:ColorScheme|Name|LookAndFeelPackage)\s*=\s*.*(?:light|breeze)", content, re.IGNORECASE | re.MULTILINE):
-                _SYSTEM_DARK_CACHE = False
                 return False
         except Exception:
             pass
 
+    # 3. Check GTK_THEME environment variable
     if "dark" in os.environ.get("GTK_THEME", "").lower():
-        _SYSTEM_DARK_CACHE = True
         return True
 
-    _SYSTEM_DARK_CACHE = False
+    # 4. Fallback to saved system default palette / QApplication palette
+    try:
+        from PySide6.QtGui import QPalette
+        from PySide6.QtWidgets import QApplication
+
+        if SYSTEM_DEFAULT_PALETTE is not None:
+            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
+            if win_col.isValid() and win_col.lightness() < 128:
+                return True
+
+        app = QApplication.instance()
+        if app is not None:
+            window_color = app.palette().color(QPalette.Window)
+            if window_color.isValid() and window_color.lightness() < 128:
+                return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -428,65 +443,126 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
         return None
 
 
+_DESKTOP_EXEC_SPECIAL = set(' \t\n"\'\\><~|&;$*?#()`')
+
+
+def _format_desktop_arg(arg: str) -> str:
+    """Formats an Exec= argument per the FreeDesktop Desktop Entry Specification."""
+    if not arg:
+        return '""'
+    if not any(ch in _DESKTOP_EXEC_SPECIAL for ch in arg):
+        return arg
+    escaped = (
+        arg.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("`", "\\`")
+        .replace("$", "\\$")
+    )
+    return f'"{escaped}"'
+
+
+def _is_executable_file(path: str) -> bool:
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def _resolve_autostart_command() -> tuple[str, str, str]:
+    """
+    Determines the exact (exec_cmd, try_exec, icon_path) for the currently running installation.
+    Prioritizes the active runtime environment (Flatpak, AppImage, system package, user install,
+    or source checkout) so autostart never points to a missing or stale launcher.
+    """
+    xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    xdg_bin = os.environ.get("XDG_BIN_HOME", os.path.expanduser("~/.local/bin"))
+    local_dir = os.path.join(xdg_data, "ducksdrive")
+    local_bin = os.path.join(local_dir, "ducksdrive")
+    user_bin = os.path.join(xdg_bin, "ducksdrive")
+    appimage_path = os.environ.get("APPIMAGE")
+    is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
+    running_dir = os.path.dirname(os.path.abspath(__file__))
+
+    if is_flatpak:
+        flatpak_id = os.environ.get("FLATPAK_ID") or "com.github.patopatetico2.ducksdrive"
+        return f"flatpak run {flatpak_id} --autostart", "flatpak", flatpak_id
+
+    if appimage_path and os.path.isfile(appimage_path):
+        icon_path = os.path.join(local_dir, "icon.svg")
+        if not os.path.exists(icon_path):
+            bundled_icon = os.path.join(getattr(sys, "_MEIPASS", running_dir), "icon.svg")
+            if os.path.exists(bundled_icon):
+                try:
+                    os.makedirs(local_dir, exist_ok=True)
+                    shutil.copy2(bundled_icon, icon_path)
+                except Exception:
+                    icon_path = "ducksdrive"
+            else:
+                icon_path = "ducksdrive"
+        return f"{_format_desktop_arg(appimage_path)} --autostart", appimage_path, icon_path
+
+    # Running from a system package (/usr/share/ducksdrive)
+    if running_dir.startswith("/usr/share/ducksdrive") and _is_executable_file("/usr/bin/ducksdrive"):
+        return "/usr/bin/ducksdrive --autostart", "/usr/bin/ducksdrive", "ducksdrive"
+
+    # Running from a user installation (~/.local/share/ducksdrive)
+    if os.path.realpath(running_dir) == os.path.realpath(local_dir):
+        bin_path = local_bin if _is_executable_file(local_bin) else user_bin
+        if _is_executable_file(bin_path):
+            icon_path = os.path.join(local_dir, "icon.svg")
+            if not os.path.exists(icon_path):
+                icon_path = "ducksdrive"
+            return f"{_format_desktop_arg(bin_path)} --autostart", bin_path, icon_path
+
+    # Prefer an installed executable if present, otherwise invoke the running main.py directly
+    for candidate, icon_candidate in (
+        (user_bin, os.path.join(local_dir, "icon.svg")),
+        ("/usr/bin/ducksdrive", "ducksdrive"),
+        (shutil.which("ducksdrive") or "", "ducksdrive"),
+    ):
+        if _is_executable_file(candidate):
+            icon_path = icon_candidate if (icon_candidate == "ducksdrive" or os.path.exists(icon_candidate)) else "ducksdrive"
+            return f"{_format_desktop_arg(candidate)} --autostart", candidate, icon_path
+
+    main_py = os.path.join(running_dir, "main.py")
+    py_exe = sys.executable or shutil.which("python3") or "/usr/bin/python3"
+    local_icon = os.path.join(running_dir, "icon.svg")
+    icon_path = local_icon if os.path.exists(local_icon) else "ducksdrive"
+    return (
+        f"{_format_desktop_arg(py_exe)} {_format_desktop_arg(main_py)} --autostart",
+        py_exe,
+        icon_path,
+    )
+
+
 def _sync_autostart(enabled: bool) -> None:
-    """Creates or removes the autostart .desktop file."""
-    xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
-    autostart_dir = os.path.join(xdg_config, "autostart")
+    """Creates or removes the XDG autostart .desktop file (host-aware for Flatpak, KDE Plasma 6, GNOME, XFCE)."""
+    is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
+    if is_flatpak:
+        # Inside Flatpak XDG_CONFIG_HOME is sandboxed (~/.var/app/...); write to host ~/.config/autostart
+        autostart_dir = os.path.join(os.path.expanduser("~"), ".config", "autostart")
+    else:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        autostart_dir = os.path.join(xdg_config, "autostart")
     autostart_file = os.path.join(autostart_dir, "ducksdrive.desktop")
 
     if enabled:
         os.makedirs(autostart_dir, exist_ok=True)
-        xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-        local_dir = os.path.join(xdg_data, "ducksdrive")
-        local_bin = os.path.join(local_dir, "ducksdrive")
-        local_venv = os.path.join(local_dir, "venv")
-        user_bin = os.path.expanduser("~/.local/bin/ducksdrive")
-        appimage_path = os.environ.get("APPIMAGE")
-        is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
+        exec_cmd, try_exec, icon_path = _resolve_autostart_command()
 
-        if is_flatpak:
-            flatpak_id = os.environ.get("FLATPAK_ID") or "com.github.patopatetico2.ducksdrive"
-            exec_cmd = f"flatpak run {flatpak_id}"
-            icon_path = flatpak_id
-        elif appimage_path and os.path.exists(appimage_path):
-            exec_cmd = f'"{appimage_path}"'
-            icon_path = os.path.join(local_dir, "icon.svg")
-            if not os.path.exists(icon_path):
-                bundled_icon = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "icon.svg")
-                if os.path.exists(bundled_icon):
-                    try:
-                        os.makedirs(local_dir, exist_ok=True)
-                        shutil.copy2(bundled_icon, icon_path)
-                    except Exception:
-                        icon_path = "ducksdrive"
-                else:
-                    icon_path = "ducksdrive"
-        elif os.path.exists(local_bin) or os.path.exists(local_venv):
-            bin_path = local_bin if os.path.exists(local_bin) else user_bin
-            exec_cmd = f'"{bin_path}"'
-            icon_path = os.path.join(local_dir, "icon.svg")
-            if not os.path.exists(icon_path):
-                icon_path = "ducksdrive"
-        elif os.path.exists("/usr/bin/ducksdrive"):
-            exec_cmd = '"/usr/bin/ducksdrive"'
-            icon_path = "ducksdrive"
-        else:
-            bin_path = shutil.which("ducksdrive") or user_bin
-            exec_cmd = f'"{bin_path}"'
-            icon_path = "ducksdrive"
-
-        content = f"""[Desktop Entry]
-Name=DucksDrive
-Comment=Manage cloud drives with Rclone
-Exec={exec_cmd}
-Icon={icon_path}
-Terminal=false
-Type=Application
-Categories=Network;Utility;
-StartupNotify=true
-X-GNOME-Autostart-Delay=3
-X-KDE-autostart-after=panel
-"""
+        content = (
+            "[Desktop Entry]\n"
+            "Name=DucksDrive\n"
+            "Comment=Manage cloud drives with Rclone\n"
+            f"TryExec={try_exec}\n"
+            f"Exec={exec_cmd}\n"
+            f"Icon={icon_path}\n"
+            "Terminal=false\n"
+            "Type=Application\n"
+            "Categories=Network;Utility;\n"
+            "StartupNotify=false\n"
+            "Hidden=false\n"
+            "X-GNOME-Autostart-enabled=true\n"
+            "X-GNOME-Autostart-Delay=5\n"
+            "X-KDE-autostart-after=panel\n"
+        )
         try:
             if os.path.exists(autostart_file):
                 try:
@@ -495,9 +571,8 @@ X-KDE-autostart-after=panel
                             return
                 except OSError:
                     pass
-            with open(autostart_file, "w", encoding="utf-8") as f:
-                f.write(content)
-            logger.info("Synchronized autostart: Enabled.")
+            _atomic_write_file(autostart_file, content)
+            logger.info("Synchronized autostart: Enabled (%s).", exec_cmd)
         except Exception as e:
             logger.error("Failed to enable autostart: %s", e)
     else:
@@ -520,7 +595,7 @@ def get_remote_config(remote_name: str) -> Dict[str, Any]:
     if not isinstance(remotes_cfg, dict):
         remotes_cfg = {}
     specific = remotes_cfg.get(clean)
-    res = DEFAULT_REMOTE_CONFIG.copy()
+    res = copy.deepcopy(DEFAULT_REMOTE_CONFIG)
     if isinstance(specific, dict):
         res.update(specific)
     if res.get("custom_mount_point") and not res.get("mount_path"):
@@ -540,7 +615,7 @@ def save_remote_config(remote_name: str, remote_cfg: Dict[str, Any]) -> bool:
     cfg = load_config()
     if "remotes_config" not in cfg or not isinstance(cfg["remotes_config"], dict):
         cfg["remotes_config"] = {}
-    merged = DEFAULT_REMOTE_CONFIG.copy()
+    merged = copy.deepcopy(DEFAULT_REMOTE_CONFIG)
     merged.update(remote_cfg)
     if merged.get("mount_path") and not merged.get("custom_mount_point"):
         merged["custom_mount_point"] = merged["mount_path"]
@@ -548,4 +623,16 @@ def save_remote_config(remote_name: str, remote_cfg: Dict[str, Any]) -> bool:
         merged["mount_path"] = merged["custom_mount_point"]
     cfg["remotes_config"][clean] = merged
     return save_config(cfg)
+
+
+def delete_remote_config(remote_name: str) -> None:
+    """Removes per-remote custom configuration from config.json when a cloud remote is deleted."""
+    clean = remote_name.rstrip(":") if remote_name else ""
+    if not clean:
+        return
+    cfg = load_config()
+    remotes_cfg = cfg.get("remotes_config")
+    if isinstance(remotes_cfg, dict) and clean in remotes_cfg:
+        del remotes_cfg[clean]
+        save_config(cfg)
 

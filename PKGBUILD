@@ -1,12 +1,12 @@
 # Maintainer: DucksDrive <https://github.com/Patopatetico2-lab/ducksdrive>
 pkgname=ducksdrive
-pkgver=1.1.1
+pkgver=1.1.2
 pkgrel=1
 pkgdesc="Lightweight Linux system tray client for Rclone FUSE mounts (Google Drive, OneDrive, etc.)"
 arch=('any')
 url="https://github.com/Patopatetico2-lab/ducksdrive"
 license=('MIT')
-depends=('python' 'python-pyside6' 'qt6-svg' 'rclone' 'fuse3')
+depends=('python' 'pyside6' 'qt6-svg' 'rclone' 'fuse3')
 
 package() {
     install -dm755 "$pkgdir/usr/share/$pkgname"
@@ -19,7 +19,7 @@ package() {
     install -dm755 "$pkgdir/usr/bin"
     cat << 'EOF' > "$pkgdir/usr/bin/ducksdrive"
 #!/bin/sh
-exec /usr/bin/python3 /usr/share/ducksdrive/main.py "$@"
+exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); import main; main.main()" "$@"
 EOF
     chmod 755 "$pkgdir/usr/bin/ducksdrive"
 
@@ -33,7 +33,7 @@ Icon=ducksdrive
 Terminal=false
 Type=Application
 Categories=Network;Utility;
-StartupNotify=true
+StartupNotify=false
 StartupWMClass=ducksdrive
 EOF
     chmod 644 "$pkgdir/usr/share/applications/ducksdrive.desktop"

@@ -14,8 +14,8 @@ import logging
 import os
 from typing import Any, List, Optional
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from filemanager_integration import open_local_folder
 from i18n import tr
 from rclone_settings import apply_app_theme, is_dark_theme_active, load_config
 
@@ -38,6 +39,23 @@ logger = logging.getLogger(__name__)
 xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 LOG_DIR = os.path.join(xdg_data, "ducksdrive")
 APP_LOG_FILE = os.path.join(LOG_DIR, "ducksdrive.log")
+MAX_READ_TAIL_BYTES = 512 * 1024  # Read at most the last 512 KB per file to keep UI snappy
+
+
+def _read_tail_lines(path: str, max_bytes: int = MAX_READ_TAIL_BYTES) -> List[str]:
+    """Reads up to the last `max_bytes` of a UTF-8 log file without loading huge files into RAM."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        start = max(0, file_size - max_bytes)
+        f.seek(start)
+        raw = f.read()
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines(keepends=True)
+    if start > 0 and len(lines) > 1:
+        # Drop the partial first line when seeking into the middle of a file
+        lines = lines[1:]
+    return lines
 
 
 class LogViewerDialog(QDialog):
@@ -57,11 +75,14 @@ class LogViewerDialog(QDialog):
 
         self._init_ui()
         self.apply_theme()
-        self._refresh_log_sources()
+        has_initial = bool(initial_file and os.path.exists(initial_file))
+        self._refresh_log_sources(load_default=not has_initial)
 
-        if initial_file and os.path.exists(initial_file):
+        if has_initial and initial_file:
+            self.source_combo.blockSignals(True)
             self.source_combo.insertItem(0, f"Log: {os.path.basename(initial_file)}", initial_file)
             self.source_combo.setCurrentIndex(0)
+            self.source_combo.blockSignals(False)
             self._on_source_changed(0)
 
         # Polling timer to refresh logs in real time (every 1.5 seconds)
@@ -177,7 +198,7 @@ class LogViewerDialog(QDialog):
             }}
         """)
 
-    def _refresh_log_sources(self) -> None:
+    def _refresh_log_sources(self, load_default: bool = True) -> None:
         """Discovers active and recent rclone log files and populates the source combo."""
         self.source_combo.blockSignals(True)
         self.source_combo.clear()
@@ -201,12 +222,13 @@ class LogViewerDialog(QDialog):
 
         self.source_combo.blockSignals(False)
 
-        # Default to first rclone log if available, otherwise app log
-        if len(rclone_logs) > 0:
-            self.source_combo.setCurrentIndex(1)
-        else:
-            self.source_combo.setCurrentIndex(0)
-        self._on_source_changed(self.source_combo.currentIndex())
+        if load_default:
+            # Default to first rclone log if available, otherwise app log
+            if len(rclone_logs) > 0:
+                self.source_combo.setCurrentIndex(1)
+            else:
+                self.source_combo.setCurrentIndex(0)
+            self._on_source_changed(self.source_combo.currentIndex())
 
     def _on_source_changed(self, index: int) -> None:
         """Loads lines from selected file."""
@@ -229,14 +251,13 @@ class LogViewerDialog(QDialog):
                     glob.glob(os.path.join(LOG_DIR, "rclone-*.log")),
                     key=os.path.getmtime,
                 )
-                for lp in rclone_logs:
+                self._last_file_size = sum(os.path.getsize(lp) for lp in rclone_logs if os.path.exists(lp))
+                for lp in rclone_logs[-5:]:
                     if os.path.exists(lp):
-                        with open(lp, "r", encoding="utf-8", errors="replace") as f:
-                            lines.extend(f.readlines())
+                        lines.extend(_read_tail_lines(lp, max_bytes=MAX_READ_TAIL_BYTES // 2))
             elif os.path.exists(target):
                 self._last_file_size = os.path.getsize(target)
-                with open(target, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
+                lines = _read_tail_lines(target)
             else:
                 lines = [tr("Nenhum log encontrado para exibir.")]
         except Exception as exc:
@@ -285,7 +306,7 @@ class LogViewerDialog(QDialog):
                 if "error" not in lower and "fatal" not in lower:
                     continue
             elif level_mode == "warn_err":
-                if "error" not in lower and "warn" not in lower and "failed" not in lower:
+                if "error" not in lower and "warn" not in lower and "notice" not in lower and "failed" not in lower:
                     continue
 
             filtered.append(line)
@@ -321,7 +342,7 @@ class LogViewerDialog(QDialog):
 
     def _open_log_folder(self) -> None:
         os.makedirs(LOG_DIR, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(LOG_DIR))
+        open_local_folder(LOG_DIR)
 
     def closeEvent(self, event: Any) -> None:
         if self._poll_timer.isActive():

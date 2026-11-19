@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PKG_NAME="ducksdrive"
-PKG_VER="1.1.1"
+PKG_VER="1.1.2"
 PKG_REL="1"
 DEB_FILE="${PKG_NAME}_${PKG_VER}-${PKG_REL}_all.deb"
 WORK_DIR="$(mktemp -d)"
@@ -28,9 +28,9 @@ install -Dm644 ./LICENSE "$ROOT_DIR/usr/share/doc/$PKG_NAME/copyright"
 cat << 'EOF' > "$ROOT_DIR/usr/bin/ducksdrive"
 #!/bin/sh
 if [ -x /usr/share/ducksdrive/venv/bin/python3 ]; then
-    exec /usr/share/ducksdrive/venv/bin/python3 /usr/share/ducksdrive/main.py "$@"
+    exec /usr/share/ducksdrive/venv/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); import main; main.main()" "$@"
 fi
-exec /usr/bin/python3 /usr/share/ducksdrive/main.py "$@"
+exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); import main; main.main()" "$@"
 EOF
 chmod 755 "$ROOT_DIR/usr/bin/ducksdrive"
 
@@ -43,7 +43,7 @@ Icon=ducksdrive
 Terminal=false
 Type=Application
 Categories=Network;Utility;
-StartupNotify=true
+StartupNotify=false
 StartupWMClass=ducksdrive
 EOF
 chmod 644 "$ROOT_DIR/usr/share/applications/ducksdrive.desktop"
@@ -85,7 +85,9 @@ chmod 755 "$CTRL_DIR/postinst"
 cat << 'EOF' > "$CTRL_DIR/prerm"
 #!/bin/sh
 set -e
-rm -rf /usr/share/ducksdrive/venv /usr/share/ducksdrive/__pycache__ 2>/dev/null || true
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    rm -rf /usr/share/ducksdrive/venv /usr/share/ducksdrive/__pycache__ 2>/dev/null || true
+fi
 EOF
 chmod 755 "$CTRL_DIR/prerm"
 

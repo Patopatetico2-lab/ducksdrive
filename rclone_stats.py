@@ -19,7 +19,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
@@ -49,7 +49,10 @@ class StatsData:
     active_transfers: List[Dict[str, Any]] = field(default_factory=list)
     recent_transfers: List[Dict[str, Any]] = field(default_factory=list)
     vfs_queue_count: int = 0
+    vfs_uploads_in_progress: int = 0
+    vfs_uploads_queued: int = 0
     vfs_disk_cache_bytes: int = 0
+    is_throttled: bool = False
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -198,7 +201,22 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
     """
     status, data = rc_request(creds, "/core/stats", timeout=timeout)
     if status == 200 and isinstance(data, dict):
-        speed_bytes = float(data.get("speed", 0.0))
+        active_transfers = data.get("transferring") or []
+        global_speed = float(data.get("speed", 0.0))
+        has_per_item_speed = any(
+            isinstance(t, dict) and ("speed" in t or "speedAvg" in t)
+            for t in active_transfers
+        )
+        if active_transfers and has_per_item_speed:
+            speed_bytes = sum(
+                float(t.get("speed") if t.get("speed") is not None else (t.get("speedAvg") or 0.0))
+                for t in active_transfers
+                if isinstance(t, dict)
+            )
+        elif active_transfers:
+            speed_bytes = global_speed
+        else:
+            speed_bytes = 0.0 if "transferring" in data else global_speed
         speed_mb_s = speed_bytes / (1024.0 * 1024.0)
         speed_str = f"{speed_mb_s:.2f} MB/s"
 
@@ -308,12 +326,25 @@ def fetch_vfs_stats(creds: RCCredentials, timeout: float = 2.0) -> Dict[str, Any
     return result
 
 
-def rc_vfs_refresh(creds: RCCredentials, timeout: float = 15.0) -> bool:
+def rc_vfs_refresh(
+    creds: RCCredentials,
+    timeout: float = 15.0,
+    recursive: bool = False,
+    async_mode: bool = False,
+) -> bool:
     """
     Sends a POST request to `/vfs/refresh` via RC to reload the directory cache
-    without unmounting. Blocking call: run outside the GUI thread.
+    without unmounting. Blocking call unless `async_mode=True`: run outside the GUI thread.
     """
-    status, _ = rc_request(creds, "/vfs/refresh", timeout=timeout)
+    payload: Dict[str, Any] = {}
+    if recursive:
+        payload["recursive"] = "true"
+    if async_mode:
+        payload["_async"] = True
+    if payload:
+        status, _ = rc_request(creds, "/vfs/refresh", payload, timeout=timeout)
+    else:
+        status, _ = rc_request(creds, "/vfs/refresh", timeout=timeout)
     return status == 200
 
 
@@ -370,56 +401,61 @@ class RcloneStatsPoller(QThread):
             return False
 
     def run(self) -> None:
-        """Main polling loop running once per second."""
+        """Main polling loop with adaptive intervals to avoid VFS lock contention during browsing."""
         self._running = True
-        logger.info("Started stats polling thread for %s", self.credentials.url)
+        endpoint_label = self.credentials.socket_path or self.credentials.url
+        logger.info("Started stats polling thread for %s", endpoint_label)
 
         was_online = False
         consecutive_failures = 0
         last_valid_stats: Optional[StatsData] = None
         vfs_queue_count = 0
+        vfs_uploads_in_progress = 0
+        vfs_uploads_queued = 0
         vfs_disk_cache_bytes = 0
+        stalled_ticks = 0
         last_queue_check = 0.0
-        last_listed: Optional[int] = None
         last_transfers_count: Optional[int] = None
         last_errors_count: Optional[int] = None
 
         while self._running:
-            stats = fetch_rclone_stats(self.credentials, timeout=4.0)
+            stats = fetch_rclone_stats(self.credentials, timeout=2.5)
+            if not self._running:
+                break
             now = time.monotonic()
+            is_busy = False
 
             if stats.is_online:
                 consecutive_failures = 0
                 was_online = True
 
-                # Track directory lookup/creation rate (`listed` counter)
-                current_listed = int(stats.raw_data.get("listed", 0))
-                listed_delta = max(0, current_listed - last_listed) if last_listed is not None else 0
-                last_listed = current_listed
+                # Poll VFS upload queue every 2s while active/queued, or every 5s while idle.
+                # Do NOT trigger on directory listings (`listed`), which causes VFS lock contention in Dolphin.
+                has_live_work = len(stats.active_transfers) > 0 or vfs_queue_count > 0
+                queue_interval = 2.0 if has_live_work else 5.0
+                should_check_queue = (now - last_queue_check >= queue_interval) or len(stats.active_transfers) > 0
 
-                # Poll VFS upload queue every 2s or when transfers/bursts are active
-                should_check_queue = (
-                    (now - last_queue_check >= 2.0)
-                    or len(stats.active_transfers) > 0
-                    or vfs_queue_count > 0
-                    or listed_delta > 0
-                )
-                if should_check_queue:
+                if should_check_queue and self._running:
                     vfs_st = fetch_vfs_stats(self.credentials, timeout=2.0)
                     raw_vfs = vfs_st.get("raw") if isinstance(vfs_st, dict) else None
                     if isinstance(raw_vfs, dict) and isinstance(raw_vfs.get("diskCache"), dict):
-                        vfs_queue_count = int(vfs_st["uploadsInProgress"]) + int(vfs_st["uploadsQueued"])
+                        vfs_uploads_in_progress = int(vfs_st["uploadsInProgress"])
+                        vfs_uploads_queued = int(vfs_st["uploadsQueued"])
+                        vfs_queue_count = vfs_uploads_in_progress + vfs_uploads_queued
                         vfs_disk_cache_bytes = int(vfs_st["bytesUsed"])
-                    else:
-                        q_len = fetch_vfs_queue(self.credentials, timeout=2.0)
-                        if q_len is not None:
-                            vfs_queue_count = q_len
+                    elif self._running:
+                        # Fallback directly to /vfs/queue without re-querying /vfs/stats a second time
+                        status_q, data_q = rc_request(self.credentials, "/vfs/queue", timeout=2.0)
+                        if status_q == 200 and isinstance(data_q, dict):
+                            vfs_queue_count = len(data_q.get("queue") or [])
+                            vfs_uploads_queued = vfs_queue_count
+                            vfs_uploads_in_progress = 0
                         if vfs_st and "bytesUsed" in vfs_st:
                             vfs_disk_cache_bytes = int(vfs_st["bytesUsed"])
                     last_queue_check = now
 
                     # Track recently completed file transfers only when counters change
-                    if (
+                    if self._running and (
                         last_transfers_count is None
                         or stats.transfers_count != last_transfers_count
                         or stats.errors_count != last_errors_count
@@ -446,8 +482,31 @@ class RcloneStatsPoller(QThread):
                             self._seen_transfers_keys.intersection_update(valid_keys)
 
                 stats.vfs_queue_count = vfs_queue_count
+                stats.vfs_uploads_in_progress = vfs_uploads_in_progress
+                stats.vfs_uploads_queued = vfs_uploads_queued
                 stats.vfs_disk_cache_bytes = vfs_disk_cache_bytes
                 stats.recent_transfers = list(self._recent_transfers)
+
+                # Tag active transfers with direction (upload vs download) and detect API rate-limit stalls
+                is_paused = bool(self.daemon and getattr(self.daemon, "is_user_paused", False))
+                if stats.active_transfers:
+                    if vfs_uploads_in_progress >= len(stats.active_transfers) and vfs_queue_count > 0:
+                        direction = "upload"
+                    elif vfs_uploads_in_progress == 0 and vfs_queue_count == 0:
+                        direction = "download"
+                    else:
+                        direction = "sync"
+                    for item in stats.active_transfers:
+                        if isinstance(item, dict) and "direction" not in item:
+                            item["direction"] = direction
+                    if not is_paused and stats.speed_bytes_per_sec < 1024.0:
+                        stalled_ticks += 1
+                    else:
+                        stalled_ticks = 0
+                else:
+                    stalled_ticks = 0
+                stats.is_throttled = stalled_ticks >= 3
+
                 if len(stats.active_transfers) == 0 and vfs_queue_count > 0:
                     stats.status_text = tr("Sincronizando (%d na fila) • %s • ETA %s") % (
                         vfs_queue_count,
@@ -455,6 +514,7 @@ class RcloneStatsPoller(QThread):
                         stats.eta_str,
                     )
 
+                is_busy = len(stats.active_transfers) > 0 or vfs_queue_count > 0
                 last_valid_stats = stats
                 self.stats_updated.emit(stats)
             else:
@@ -462,16 +522,24 @@ class RcloneStatsPoller(QThread):
                 # If rclone is simply busy with heavy FUSE/VFS locks, do not falsely report "Offline"
                 if self._is_daemon_mount_alive() and consecutive_failures < 10:
                     if last_valid_stats is not None:
-                        last_valid_stats.recent_transfers = list(self._recent_transfers)
-                        self.stats_updated.emit(last_valid_stats)
+                        snapshot = replace(
+                            last_valid_stats,
+                            recent_transfers=list(self._recent_transfers),
+                            speed_bytes_per_sec=0.0 if consecutive_failures >= 2 else last_valid_stats.speed_bytes_per_sec,
+                            speed_mb_s=0.0 if consecutive_failures >= 2 else last_valid_stats.speed_mb_s,
+                            speed_str="0.00 MB/s" if consecutive_failures >= 2 else last_valid_stats.speed_str,
+                            eta_str="--:--:--" if consecutive_failures >= 2 else last_valid_stats.eta_str,
+                        )
+                        self.stats_updated.emit(snapshot)
                 elif consecutive_failures >= 3:
                     if was_online:
                         self.connection_lost.emit()
                         was_online = False
                     self.stats_updated.emit(stats)
 
-            # Sleep in small increments for responsive thread termination
-            steps = int(self.poll_interval / 0.1)
+            # Adaptive sleep in small increments for responsive thread termination
+            sleep_interval = self.poll_interval if is_busy else max(2.0, self.poll_interval)
+            steps = int(sleep_interval / 0.1)
             for _ in range(max(1, steps)):
                 if not self._running:
                     break
@@ -480,7 +548,7 @@ class RcloneStatsPoller(QThread):
         logger.info("Stopped stats polling thread.")
 
     def stop(self, wait: bool = True) -> None:
-        """Stops the polling loop; optionally waits (up to 2s) for thread termination."""
+        """Stops the polling loop; optionally waits (up to 4s) for thread termination."""
         self._running = False
         if wait:
-            self.wait(2000)
+            self.wait(4000)

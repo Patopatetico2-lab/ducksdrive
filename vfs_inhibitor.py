@@ -19,6 +19,7 @@ from PySide6.QtCore import QObject, Signal
 
 from i18n import tr
 from notifications import notify_info, notify_warning
+from rclone_config import get_clean_env
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,15 @@ class VFSInhibitorManager(QObject):
 
     lock_state_changed = Signal(bool, int)  # (is_locked, pending_count)
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: Optional[QObject] = None, notify_on_release: bool = True) -> None:
         super().__init__(parent)
         self._is_locked: bool = False
         self._last_count: int = 0
-        self._process: Optional[subprocess.Popen[str]] = None
+        self._process: Optional[subprocess.Popen[bytes]] = None
         self._inhibitor_bin: Optional[str] = shutil.which("systemd-inhibit")
+        self._inhibitor_failed: bool = False
+        self._notified_locked: bool = False
+        self._notify_on_release: bool = notify_on_release
 
     @property
     def is_locked(self) -> bool:
@@ -61,6 +65,21 @@ class VFSInhibitorManager(QObject):
             self.lock_state_changed.emit(True, self._last_count)
             return True
 
+        # If a previous systemd-inhibit process exited immediately with an error (e.g. sandbox/D-Bus denied),
+        # avoid respawning and spamming notifications every second.
+        if self._process is not None and self._process.poll() is not None:
+            rc = self._process.returncode
+            self._process = None
+            if rc != 0:
+                logger.warning("systemd-inhibit exited with status %d; disabling inhibitor retries for this session.", rc)
+                self._inhibitor_failed = True
+                self._is_locked = False
+                self.lock_state_changed.emit(False, 0)
+                return False
+
+        if self._inhibitor_failed:
+            return False
+
         why_msg = reason or tr("Gravando %d arquivo(s) pendentes no cache VFS para a nuvem") % self._last_count
 
         if self._inhibitor_bin:
@@ -78,11 +97,13 @@ class VFSInhibitorManager(QObject):
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    env=get_clean_env(include_keyring=False),
                 )
                 self._is_locked = True
                 logger.info("Acquired systemd inhibitor lock (PID %d) for %d pending VFS uploads.", self._process.pid, self._last_count)
             except Exception as exc:
                 logger.warning("Failed to launch systemd-inhibit: %s", exc)
+                self._inhibitor_failed = True
                 self._is_locked = False
                 self._process = None
         else:
@@ -92,13 +113,15 @@ class VFSInhibitorManager(QObject):
 
         if self._is_locked:
             self.lock_state_changed.emit(True, self._last_count)
-            try:
-                notify_warning(
-                    tr("Proteção de Desligamento Ativa"),
-                    tr("O desligamento foi adiado para evitar perda de dados (%d arquivo(s) no cache VFS).") % self._last_count,
-                )
-            except Exception as exc:
-                logger.debug("Failed to send notification: %s", exc)
+            if not self._notified_locked:
+                self._notified_locked = True
+                try:
+                    notify_warning(
+                        tr("Proteção de Desligamento Ativa"),
+                        tr("O desligamento foi adiado para evitar perda de dados (%d arquivo(s) no cache VFS).") % self._last_count,
+                    )
+                except Exception as exc:
+                    logger.debug("Failed to send notification: %s", exc)
             return True
 
         return False
@@ -118,16 +141,18 @@ class VFSInhibitorManager(QObject):
             except Exception:
                 try:
                     self._process.kill()
+                    self._process.wait(timeout=1)
                 except Exception:
                     pass
             self._process = None
 
         self._is_locked = False
+        self._notified_locked = False
         prev_count = self._last_count
         self._last_count = 0
         self.lock_state_changed.emit(False, 0)
 
-        if notify and prev_count > 0:
+        if notify and self._notify_on_release and prev_count > 0:
             try:
                 notify_info(
                     tr("Sincronização Concluída"),

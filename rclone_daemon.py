@@ -17,6 +17,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
@@ -24,7 +25,13 @@ from typing import Any, Callable, List, Optional
 from PySide6.QtCore import QObject, Signal, Slot, QTimer, QCoreApplication, QThread
 
 from i18n import tr
-from rclone_config import get_clean_env, get_remote_type_fast, mask_command
+from rclone_config import (
+    get_clean_env,
+    get_remote_type_fast,
+    has_custom_drive_client_id,
+    mask_command,
+    supports_vfs_read_chunk_streams,
+)
 from rclone_settings import (
     _allocated_ports,
     allocate_rc_port,
@@ -176,7 +183,7 @@ def unmount_fuse_path(mount_path: str, lazy: bool = False, fallback_lazy: bool =
 
     logger.info("Executing unmount: %s", " ".join(cmd))
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=get_clean_env())
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=get_clean_env(include_keyring=False))
         if res.returncode == 0:
             logger.info("Successfully unmounted %s", mount_path)
             return True
@@ -194,7 +201,7 @@ def unmount_fuse_path(mount_path: str, lazy: bool = False, fallback_lazy: bool =
                 capture_output=True,
                 text=True,
                 timeout=5,
-                env=get_clean_env(),
+                env=get_clean_env(include_keyring=False),
             )
             return lazy_res.returncode == 0
         except Exception as exc:
@@ -273,11 +280,12 @@ def _teardown_mount(
     process: Optional["subprocess.Popen[str]"],
     mount_point: str,
     creds: Optional[RCCredentials] = None,
+    was_paused: bool = False,
 ) -> bool:
     """
-    Blocking part of stopping a mount: unpause RC if needed, unmount the FUSE path, terminate rclone
-    (15s grace period for the VFS cache metadata flush, then SIGKILL) and run a final lazy unmount
-    if the path is still reported as mounted.
+    Blocking part of stopping a mount: unpause RC if user paused transfers, unmount the FUSE path,
+    terminate rclone (15s grace period for the VFS cache metadata flush, then SIGKILL) and run a
+    final lazy unmount if the path is still reported as mounted.
 
     Takes up to ~25s in the worst case, so it must never run on the GUI thread
     (except during application shutdown). Touches no Qt objects.
@@ -286,7 +294,7 @@ def _teardown_mount(
         bool: True if the first (non-lazy) unmount succeeded.
     """
     # 0. If user had paused transfers, restore bandwidth before flushing and unmounting
-    if creds is not None and process and process.poll() is None:
+    if was_paused and creds is not None and process and process.poll() is None:
         _unpause_rc_before_stop(creds)
 
     # 1. First attempt a clean (non-lazy) unmount via FUSE tool without forcing -uz while rclone is flushing
@@ -330,16 +338,20 @@ class _TeardownWorker(QThread):
         parent: Optional[QObject] = None,
         creds: Optional[RCCredentials] = None,
         paused_creds: Optional[RCCredentials] = None,
+        was_paused: bool = False,
     ) -> None:
         super().__init__(parent)
         self._process = process
         self._mount_point = mount_point
         self._creds = creds or paused_creds
+        self._was_paused = was_paused
         self.unmounted = False
 
     def run(self) -> None:
         try:
-            self.unmounted = _teardown_mount(self._process, self._mount_point, self._creds)
+            self.unmounted = _teardown_mount(
+                self._process, self._mount_point, self._creds, was_paused=self._was_paused
+            )
         except Exception as exc:
             logger.error("Unexpected error while tearing down mount: %s", exc)
             self.unmounted = False
@@ -366,7 +378,8 @@ class RcloneDaemon(QObject):
         self.current_remote: Optional[str] = remote_name
         clean_name = remote_name.rstrip(":") if remote_name else ""
         self._configured_remote: Optional[str] = clean_name or None
-        if mount_point == DEFAULT_MOUNT_POINT and clean_name:
+        self._explicit_mount_point: bool = mount_point != DEFAULT_MOUNT_POINT
+        if not self._explicit_mount_point and clean_name:
             rc_cfg = get_remote_config(clean_name)
             custom_mp = rc_cfg.get("custom_mount_point") or rc_cfg.get("mount_path")
             if custom_mp:
@@ -381,6 +394,8 @@ class RcloneDaemon(QObject):
         else:
             self.rc_port = rc_port
             _allocated_ports.add(self.rc_port)
+        allocated_port = self.rc_port
+        self.destroyed.connect(lambda _obj=None, p=allocated_port: release_rc_port(p))
         self.rc_credentials: Optional[RCCredentials] = None
         self.process: Optional[subprocess.Popen[str]] = None
         self.current_read_only: bool = False
@@ -520,28 +535,35 @@ class RcloneDaemon(QObject):
         clean_remote_name = remote_name.rstrip(":")
         from rclone_settings import get_remote_config, load_config
         remote_cfg = get_remote_config(clean_remote_name)
-        custom_mp = str(remote_cfg.get("custom_mount_point") or "").strip()
+        custom_mp = str(remote_cfg.get("custom_mount_point") or remote_cfg.get("mount_path") or "").strip()
         if custom_mp:
             self.mount_point = os.path.abspath(os.path.expanduser(custom_mp))
-        else:
+        elif not self._explicit_mount_point:
             self.mount_point = os.path.abspath(os.path.expanduser(f"~/CloudDrives/{clean_remote_name}"))
 
         if remote_cfg.get("read_only"):
             read_only = True
 
         # Ensure directory is unmounted before mounting (off the GUI thread via _TeardownWorker)
-        if is_path_mounted(self.mount_point) and not self._pre_unmount_attempted:
-            logger.info("Mount point is currently busy, attempting async pre-mount unmount...")
-            self._pre_unmount_attempted = True
-            self._pending_start = (remote_name, extra_args, read_only, startup_timeout, retry_on_timeout)
-            if self._run_pending_start not in self._stop_callbacks:
-                self._stop_callbacks.append(self._run_pending_start)
-            _, mp, paused_creds = self._begin_stop()
-            worker = _TeardownWorker(None, mp, self, paused_creds)
-            self._stop_worker = worker
-            worker.finished.connect(self._on_stop_worker_finished)
-            worker.start()
-            return True
+        if is_path_mounted(self.mount_point):
+            if not self._pre_unmount_attempted:
+                logger.info("Mount point is currently busy, attempting async pre-mount unmount...")
+                self._pre_unmount_attempted = True
+                self._pending_start = (remote_name, extra_args, read_only, startup_timeout, retry_on_timeout)
+                if self._run_pending_start not in self._stop_callbacks:
+                    self._stop_callbacks.append(self._run_pending_start)
+                _, mp, paused_creds = self._begin_stop()
+                worker = _TeardownWorker(None, mp, self, paused_creds, was_paused=False)
+                self._stop_worker = worker
+                worker.finished.connect(self._on_stop_worker_finished)
+                worker.start()
+                return True
+            self._pre_unmount_attempted = False
+            err = tr("O ponto de montagem '%s' ainda está ocupado e não pôde ser desmontado.") % self.mount_point
+            logger.error(err)
+            self.mount_error.emit(err)
+            self._set_state("error")
+            return False
         self._pre_unmount_attempted = False
 
         # Prepare target mount folder
@@ -559,7 +581,7 @@ class RcloneDaemon(QObject):
         use_unix_socket = bool(cfg.get("rc_use_unix_socket", True))
 
         # Generate fresh in-memory RC credentials (dedicated Unix socket or localhost port)
-        if self.rc_port not in _allocated_ports:
+        if not use_unix_socket and self.rc_port not in _allocated_ports:
             self.rc_port = allocate_rc_port(self.rc_host, self.rc_port)
         self.rc_credentials = generate_rc_credentials(
             self.rc_host,
@@ -582,15 +604,51 @@ class RcloneDaemon(QObject):
         formatted_remote = remote_name if remote_name.endswith(":") else f"{remote_name}:"
         bwlimit = str(remote_cfg.get("bwlimit") or cfg.get("bwlimit", "off"))
         cache_size = str(remote_cfg.get("vfs_cache_max_size") or cfg.get("vfs_cache_max_size", "2G"))
+        cache_max_age = str(cfg.get("vfs_cache_max_age") or "24h")
+        profile = str(remote_cfg.get("performance_profile") or cfg.get("performance_profile") or "balanced").lower()
         try:
             transfers_int = max(1, int(cfg.get("transfers", 4)))
         except (ValueError, TypeError):
             transfers_int = 4
+
+        if profile == "streaming":
+            buffer_size = "32M"
+            read_chunk_size = "16M"
+            read_chunk_limit = "512M"
+            read_ahead = "64M"
+            default_streams = 4
+        elif profile == "safe_upload":
+            buffer_size = "16M"
+            read_chunk_size = "8M"
+            read_chunk_limit = "256M"
+            read_ahead = "16M"
+            default_streams = 2
+            transfers_int = min(transfers_int, 4)
+            if bwlimit.lower() == "off":
+                bwlimit = "4M:off"
+        else:
+            buffer_size = "16M"
+            read_chunk_size = "8M"
+            read_chunk_limit = "256M"
+            read_ahead = "16M"
+            default_streams = 4
+
+        try:
+            cfg_streams = int(cfg.get("vfs_read_chunk_streams", default_streams))
+        except (ValueError, TypeError):
+            cfg_streams = default_streams
+        chunk_streams = min(cfg_streams, 2) if profile == "safe_upload" else max(0, cfg_streams)
+
         transfers = str(transfers_int)
         checkers = str(max(8, transfers_int * 2))
-        vfs_cache_mode = str(cfg.get("vfs_cache_mode", "full"))
+        vfs_cache_mode = str(cfg.get("vfs_cache_mode", "full")).lower()
 
-        # Build mandatory rclone mount arguments with user settings and FUSE/VFS optimizations
+        remote_type = get_remote_type_fast(clean_remote_name)
+        polling_backends = {"drive", "onedrive", "dropbox", "box", "pcloud"}
+        dir_cache_time = "24h" if remote_type in polling_backends else "15m"
+
+        # Build rclone mount arguments tuned for snappy file-manager (Dolphin/Nautilus) browsing
+        # and parallel multi-stream chunk downloads for large files.
         cmd = [
             rclone_bin,
             "mount",
@@ -598,44 +656,62 @@ class RcloneDaemon(QObject):
             self.mount_point,
             "--vfs-cache-mode",
             vfs_cache_mode,
-            "--vfs-cache-max-size",
-            cache_size,
-            "--vfs-cache-max-age",
-            "24h",
-            "--vfs-write-back",
-            "5s",
-            "--vfs-read-ahead",
-            "128M",
             "--buffer-size",
-            "32M",
-            "--vfs-fast-fingerprint",
+            buffer_size,
             "--vfs-read-chunk-size",
-            "16M",
+            read_chunk_size,
             "--vfs-read-chunk-size-limit",
-            "512M",
+            read_chunk_limit,
             "--dir-cache-time",
-            "30m",
+            dir_cache_time,
             "--poll-interval",
             "15s",
             "--attr-timeout",
             "10s",
-            "--write-back-cache",
             "--checkers",
             checkers,
         ]
-        if vfs_cache_mode in ("full", "writes"):
-            cmd.extend(["--vfs-cache-min-free-space", "1G"])
-
-        remote_type = get_remote_type_fast(clean_remote_name)
-        if remote_type == "drive":
+        if chunk_streams > 0 and supports_vfs_read_chunk_streams(rclone_bin):
+            cmd.extend(["--vfs-read-chunk-streams", str(chunk_streams)])
+        if vfs_cache_mode != "off":
             cmd.extend([
-                "--drive-pacer-min-sleep",
-                "10ms",
-                "--drive-pacer-burst",
-                "200",
-                "--drive-chunk-size",
-                "64M",
+                "--vfs-cache-max-size",
+                cache_size,
+                "--vfs-cache-max-age",
+                cache_max_age,
+                "--vfs-write-back",
+                "5s",
+                "--vfs-fast-fingerprint",
             ])
+        if vfs_cache_mode in ("full", "writes"):
+            cmd.extend([
+                "--vfs-cache-min-free-space",
+                "1G",
+                "--write-back-cache",
+            ])
+        if vfs_cache_mode == "full":
+            cmd.extend(["--vfs-read-ahead", read_ahead])
+
+        if remote_type == "drive":
+            if has_custom_drive_client_id(clean_remote_name):
+                cmd.extend([
+                    "--drive-pacer-min-sleep",
+                    "10ms",
+                    "--drive-pacer-burst",
+                    "200",
+                    "--drive-chunk-size",
+                    "64M",
+                ])
+            else:
+                # Gentler pacer for rclone's shared Google Drive client_id to avoid 403 rate-limit stalls in Dolphin
+                cmd.extend([
+                    "--drive-pacer-min-sleep",
+                    "50ms",
+                    "--drive-pacer-burst",
+                    "100",
+                    "--drive-chunk-size",
+                    "32M",
+                ])
         elif remote_type == "onedrive":
             cmd.extend(["--onedrive-chunk-size", "60M"])
         elif remote_type == "s3":
@@ -648,7 +724,7 @@ class RcloneDaemon(QObject):
         elif remote_type == "dropbox":
             cmd.extend(["--dropbox-chunk-size", "48M"])
         try:
-            if os.path.isdir(self.mount_point) and os.listdir(self.mount_point):
+            if not is_path_mounted(self.mount_point) and os.path.isdir(self.mount_point) and os.listdir(self.mount_point):
                 logger.warning("Mount directory '%s' is not empty; passing --allow-non-empty.", self.mount_point)
                 cmd.append("--allow-non-empty")
         except OSError:
@@ -670,11 +746,6 @@ class RcloneDaemon(QObject):
 
         if read_only:
             cmd.append("--read-only")
-
-        if cfg.get("use_system_keyring"):
-            from keyring_manager import get_password_command, is_keyring_available
-            if is_keyring_available():
-                cmd.extend(["--password-command", get_password_command()])
 
         # Add per-remote custom flags (e.g. --drive-shared-with-me)
         raw_flags = str(remote_cfg.get("custom_flags") or "").strip()
@@ -701,6 +772,8 @@ class RcloneDaemon(QObject):
         except Exception as exc:
             err = tr("Falha ao abrir o arquivo de log do Rclone '%s': %s") % (log_path, exc)
             logger.error(err)
+            self.rc_credentials = None
+            release_rc_port(self.rc_port)
             self.mount_error.emit(err)
             self._set_state("error")
             return False
@@ -719,10 +792,12 @@ class RcloneDaemon(QObject):
         except Exception as exc:
             err = tr("Falha ao iniciar o processo de montagem do Rclone: %s") % exc
             logger.error(err)
-            self.mount_error.emit(err)
             if self._log_file:
                 self._log_file.close()
                 self._log_file = None
+            self.rc_credentials = None
+            release_rc_port(self.rc_port)
+            self.mount_error.emit(err)
             self._set_state("error")
             return False
 
@@ -749,21 +824,39 @@ class RcloneDaemon(QObject):
                 if self._log_file:
                     try:
                         self._log_file.flush()
-                        with open(log_path, "r", encoding="utf-8") as lf:
+                        with open(log_path, "r", encoding="utf-8", errors="replace") as lf:
                             log_content = lf.read()
                     except Exception:
                         pass
 
-                # Check if process exited due to temporary network/DNS unreadiness at boot
-                is_net_err = any(kw in log_content.lower() for kw in (
-                    "no such host", "network is unreachable", "connection refused",
-                    "dial tcp", "temporary failure in name resolution", "context deadline exceeded"
+                # Check if process exited due to temporary network/DNS/keyring unreadiness at boot
+                lower_log = log_content.lower()
+                is_net_err = any(kw in lower_log for kw in (
+                    "no such host",
+                    "network is unreachable",
+                    "network is down",
+                    "no route to host",
+                    "connection refused",
+                    "dial tcp",
+                    "temporary failure in name resolution",
+                    "context deadline exceeded",
+                    "i/o timeout",
+                    "tls handshake timeout",
+                    "server misbehaving",
+                    "lookup ",
+                    "couldn't fetch token",
+                    "oauth2: cannot fetch token",
+                    "failed to get password",
+                    "secret-tool",
                 ))
                 if retry_on_timeout > 0 and is_net_err:
+                    retry_delay_ms = min(12000, 4000 + max(0, (5 - retry_on_timeout)) * 2000)
                     logger.warning(
-                        "Rclone mount exited due to network unreadiness at startup. Retrying in 4s (%d retries left)...",
+                        "Rclone mount exited due to boot/network unreadiness. Retrying in %.0fs (%d retries left)...",
+                        retry_delay_ms / 1000.0,
                         retry_on_timeout,
                     )
+
                     def _retry_on_net() -> None:
                         self.start(
                             remote_name,
@@ -772,11 +865,16 @@ class RcloneDaemon(QObject):
                             startup_timeout=startup_timeout,
                             retry_on_timeout=retry_on_timeout - 1,
                         )
+
                     def _on_stopped_net() -> None:
                         if self._retry_pending:
-                            self._schedule_retry(4000, _retry_on_net)
+                            self._schedule_retry(retry_delay_ms, _retry_on_net)
+
                     self.stop_async(on_done=_on_stopped_net)
-                    self._retry_pending = True
+                    if self.state != "stopped":
+                        self._retry_pending = True
+                    else:
+                        self._schedule_retry(retry_delay_ms, _retry_on_net)
                     return
 
                 err = tr("A montagem do Rclone encerrou durante a inicialização:\n%s") % log_content.strip()
@@ -787,17 +885,21 @@ class RcloneDaemon(QObject):
             if is_path_mounted(self.mount_point):
                 _dispose_startup_timer()
                 self._set_state("mounted")
+                self._warm_mount_cache()
                 return
 
             if time.time() - self._startup_start_time > startup_timeout:
                 _dispose_startup_timer()
                 if retry_on_timeout > 0:
+                    retry_delay_ms = min(10000, 3000 + max(0, (5 - retry_on_timeout)) * 1500)
                     logger.warning(
-                        "Rclone mount timed out after %.0fs for path '%s'. Network might be slow/connecting; retrying in 3s (%d retries left)...",
+                        "Rclone mount timed out after %.0fs for path '%s'. Network might be slow/connecting; retrying in %.0fs (%d retries left)...",
                         startup_timeout,
                         self.mount_point,
+                        retry_delay_ms / 1000.0,
                         retry_on_timeout,
                     )
+
                     def _retry_start() -> None:
                         self.start(
                             remote_name,
@@ -806,11 +908,16 @@ class RcloneDaemon(QObject):
                             startup_timeout=startup_timeout,
                             retry_on_timeout=retry_on_timeout - 1,
                         )
+
                     def _on_stopped_timeout() -> None:
                         if self._retry_pending:
-                            self._schedule_retry(3000, _retry_start)
+                            self._schedule_retry(retry_delay_ms, _retry_start)
+
                     self.stop_async(on_done=_on_stopped_timeout)
-                    self._retry_pending = True
+                    if self.state != "stopped":
+                        self._retry_pending = True
+                    else:
+                        self._schedule_retry(retry_delay_ms, _retry_start)
                     return
 
                 err = tr("A montagem do Rclone excedeu o tempo limite de %ds para o caminho '%s'.") % (
@@ -824,6 +931,30 @@ class RcloneDaemon(QObject):
         startup_timer.timeout.connect(check_startup)
         startup_timer.start()
         return True
+
+    def _warm_mount_cache(self) -> None:
+        """
+        Pre-warms the root directory VFS listing and statvfs (free space) cache in a detached
+        daemon thread right after mounting so Dolphin / file managers open instantaneously.
+        """
+        creds = self.rc_credentials
+        mount_point = self.mount_point
+        if not creds or not mount_point:
+            return
+
+        def _warmup() -> None:
+            try:
+                from rclone_stats import rc_vfs_refresh
+                rc_vfs_refresh(creds, timeout=5.0, recursive=False, async_mode=True)
+            except Exception as exc:
+                logger.debug("Mount VFS warmup skipped: %s", exc)
+            try:
+                if is_path_mounted(mount_point):
+                    os.statvfs(mount_point)
+            except Exception as exc:
+                logger.debug("Mount statvfs warmup skipped: %s", exc)
+
+        threading.Thread(target=_warmup, name="ducksdrive-mount-warmup", daemon=True).start()
 
     def _run_pending_start(self) -> None:
         """Starts the remote queued by start() once the previous mount has been torn down."""
@@ -919,8 +1050,9 @@ class RcloneDaemon(QObject):
         if self.state == "unmounting":
             return  # a shutdown is already running; on_done fires when it ends
 
+        was_paused = self.is_user_paused
         process, mount_point, paused_creds = self._begin_stop()
-        worker = _TeardownWorker(process, mount_point, self, paused_creds)
+        worker = _TeardownWorker(process, mount_point, self, paused_creds, was_paused=was_paused)
         self._stop_worker = worker
         worker.finished.connect(self._on_stop_worker_finished)
         worker.start()
@@ -950,17 +1082,26 @@ class RcloneDaemon(QObject):
                 self._on_stop_worker_finished()
             return self._last_stop_result
 
+        was_paused = self.is_user_paused
         process, mount_point, paused_creds = self._begin_stop()
-        unmounted = _teardown_mount(process, mount_point, paused_creds)
+        unmounted = _teardown_mount(process, mount_point, paused_creds, was_paused=was_paused)
         return self._finish_stop(unmounted)
 
-    def is_running(self) -> bool:
-        """Checks if the mount process is actively running and path is mounted."""
+    def is_process_alive(self) -> bool:
+        """Checks if the underlying rclone subprocess is currently running (including starting/unmounting)."""
         return self.process is not None and self.process.poll() is None
 
-    def refresh_vfs(self, timeout: float = 15.0) -> bool:
-        """Sends POST /vfs/refresh to active daemon via RC API. Blocking call."""
+    def is_running(self) -> bool:
+        """Checks if the mount process is actively running and ready (excludes starting/unmounting transitions)."""
+        return (
+            self.state not in ("starting", "unmounting")
+            and self.process is not None
+            and self.process.poll() is None
+        )
+
+    def refresh_vfs(self, timeout: float = 15.0, recursive: bool = False, async_mode: bool = False) -> bool:
+        """Sends POST /vfs/refresh to active daemon via RC API. Blocking call unless async_mode=True."""
         if not self.is_running() or not self.rc_credentials:
             return False
         from rclone_stats import rc_vfs_refresh
-        return rc_vfs_refresh(self.rc_credentials, timeout=timeout)
+        return rc_vfs_refresh(self.rc_credentials, timeout=timeout, recursive=recursive, async_mode=async_mode)

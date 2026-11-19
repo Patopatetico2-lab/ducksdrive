@@ -75,7 +75,7 @@ def get_rclone_version() -> Optional[tuple[int, int, int]]:
             text=True,
             check=True,
             timeout=5,
-            env=get_clean_env()
+            env=get_clean_env(include_keyring=False)
         )
         match = re.search(r"rclone v?(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9.-]+)?", result.stdout)
         if match:
@@ -90,14 +90,21 @@ class RcloneAppController(QObject):
     Controller to link background multi-cloud logic (Daemons/Stats) with the UI (Tray or Window Mode).
     """
 
-    def __init__(self, app: QApplication, tray_available: bool = True) -> None:
+    def __init__(
+        self,
+        app: QApplication,
+        tray_available: bool = True,
+        autostart_mode: bool = False,
+    ) -> None:
         super().__init__()
         self.app = app
         self.tray_available = tray_available
+        self.autostart_mode = autostart_mode
         self.daemons: Dict[str, RcloneDaemon] = {}
         self.stats_pollers: Dict[str, RcloneStatsPoller] = {}
         self._old_pollers: List[RcloneStatsPoller] = []
         self._update_worker: Optional[UpdateCheckWorker] = None
+        self._pending_signal: Optional[int] = None
 
         # Serial background runner for file-manager sidebar I/O
         self.runner = TaskRunner(self)
@@ -116,14 +123,14 @@ class RcloneAppController(QObject):
         self.tray.request_exit.connect(self.shutdown)
         self.app.aboutToQuit.connect(self._cleanup_threads)
 
-        # Setup OS signal handling for clean FUSE unmount
+        # Setup OS signal handling for clean FUSE unmount (async-signal-safe flag)
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        # Periodically check for OS signals in the Qt loop
-        self._signal_timer = QTimer()
-        self._signal_timer.timeout.connect(lambda: None)  # Dummy to allow signal processing
-        self._signal_timer.start(500)
+        # Periodically poll pending OS signals safely on the Qt main thread
+        self._signal_timer = QTimer(self)
+        self._signal_timer.timeout.connect(self._check_pending_signal)
+        self._signal_timer.start(250)
 
     @property
     def daemon(self) -> RcloneDaemon:
@@ -171,11 +178,22 @@ class RcloneAppController(QObject):
             retry_on_timeout=retry_on_timeout,
         )
 
+    def remove_daemon(self, remote_name: str) -> None:
+        """Stops and removes a deleted remote's daemon and poller from controller and UI."""
+        clean = remote_name.rstrip(":")
+        self._stop_poller_for(clean, wait=False)
+        daemon = self.daemons.pop(clean, None)
+        if daemon is not None:
+            if hasattr(daemon, "health_timer") and daemon.health_timer:
+                daemon.health_timer.stop()
+            daemon.deleteLater()
+        self.tray.remove_daemon(clean)
+
     def unmount_remote(self, remote_name: str, on_done: Optional[Callable[[], None]] = None) -> None:
         """Safely stops and unmounts the specified remote."""
         clean = remote_name.rstrip(":")
         daemon = self.daemons.get(clean)
-        if daemon and daemon.is_running():
+        if daemon and (daemon.is_running() or daemon.is_process_alive() or daemon.state in ("starting", "unmounting")):
             self._stop_poller_for(clean)
             daemon.stop_async(on_done=on_done)
         elif on_done:
@@ -183,7 +201,10 @@ class RcloneAppController(QObject):
 
     def unmount_all(self, on_done: Optional[Callable[[], None]] = None) -> None:
         """Stops and unmounts all currently running cloud drives."""
-        active = [d for d in self.daemons.values() if d.is_running()]
+        active = [
+            d for d in self.daemons.values()
+            if d.is_running() or d.is_process_alive() or d.state in ("starting", "unmounting")
+        ]
         if not active:
             if on_done:
                 on_done()
@@ -252,12 +273,21 @@ class RcloneAppController(QObject):
         else:
             last_remote = str(load_config().get("last_remote") or "").rstrip(":")
             target_remote = last_remote if last_remote in remotes else remotes[0]
-            logger.info("Auto-mounting remote: %s (with network retry)", target_remote)
-            self.mount_remote(target_remote, startup_timeout=30.0, retry_on_timeout=2)
+            retries = 5 if self.autostart_mode else 2
+            logger.info("Auto-mounting remote: %s (with %d network retries)", target_remote, retries)
+            self.mount_remote(target_remote, startup_timeout=30.0, retry_on_timeout=retries)
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
-        logger.info("Signal %d received, shutting down...", sig)
-        QTimer.singleShot(0, self.shutdown)
+        """Async-signal-safe handler: records signal number to be processed on the Qt main loop."""
+        self._pending_signal = sig
+
+    @Slot()
+    def _check_pending_signal(self) -> None:
+        if self._pending_signal is not None:
+            sig = self._pending_signal
+            self._pending_signal = None
+            logger.info("Signal %d received, shutting down...", sig)
+            self.shutdown()
 
     @Slot(str)
     def _handle_state_change(self, state: str) -> None:
@@ -326,12 +356,13 @@ class RcloneAppController(QObject):
         for clean in list(self.stats_pollers.keys()):
             self._stop_poller_for(clean, wait=True)
         for poller in self._old_pollers:
-            poller.wait(2000)
+            poller.wait(4000)
         if self._update_worker is not None and self._update_worker.isRunning():
-            self._update_worker.wait(1000)
+            self._update_worker.requestInterruption()
+            self._update_worker.wait(2000)
         self.tray.status_popup.shutdown_workers()
         self.tray.shutdown_workers()
-        self.runner.wait_all()
+        self.runner.wait_all(5000, run_queued=True)
 
     def shutdown(self) -> None:
         """Graceful shutdown: unmount all mounts and exit."""
@@ -341,8 +372,8 @@ class RcloneAppController(QObject):
         logger.info("Shutting down application...")
         for clean in list(self.stats_pollers.keys()):
             self._stop_poller_for(clean, wait=True)
-        for d in self.daemons.values():
-            if d.is_running():
+        for d in list(self.daemons.values()):
+            if d.is_running() or d.is_process_alive() or d.state in ("starting", "unmounting"):
                 d.stop()
         self._cleanup_threads()
         self.app.quit()
@@ -350,8 +381,9 @@ class RcloneAppController(QObject):
 
 def main() -> None:
     """Main entrypoint function."""
-    sys.argv[0] = "ducksdrive"
-    app = QApplication(sys.argv)
+    is_autostart = "--autostart" in sys.argv[1:]
+    qt_argv = ["ducksdrive"] + [arg for arg in sys.argv[1:] if arg != "--autostart"]
+    app = QApplication(qt_argv)
     app.setApplicationName("DucksDrive")
     app.setApplicationDisplayName("DucksDrive")
     app.setDesktopFileName(os.environ.get("FLATPAK_ID") or "ducksdrive")
@@ -361,13 +393,12 @@ def main() -> None:
     SYSTEM_DEFAULT_PALETTE = QApplication.instance().palette()
     set_system_default_palette(SYSTEM_DEFAULT_PALETTE)
 
-    # Initialize language, theme, and synchronize autostart once
+    # Initialize language and theme
     cfg = load_config()
     set_language(cfg.get("language", "pt_BR"))
     apply_app_theme(str(cfg.get("theme") or "auto"))
-    _sync_autostart(bool(cfg.get("autostart", True)))
 
-    # 1. Enforce Single Instance via QLockFile
+    # 1. Enforce Single Instance via QLockFile (before mutating autostart or spawning workers)
     lock_dir = CONFIG_DIR
     os.makedirs(lock_dir, exist_ok=True)
     lock_file_path = os.path.join(lock_dir, "app.lock")
@@ -375,6 +406,9 @@ def main() -> None:
     lock_file = QLockFile(lock_file_path)
     lock_file.setStaleLockTime(30000)
     if not lock_file.tryLock(100):
+        if is_autostart:
+            logger.info("Another instance is already running during autostart; exiting quietly.")
+            sys.exit(0)
         QMessageBox.critical(
             None,
             tr("Já em Execução"),
@@ -382,11 +416,28 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # 2. System Tray Availability Check (Fast check with fallback to Window Mode for GNOME/Wayland)
+    # Synchronize autostart desktop file once single-instance lock is held
+    _sync_autostart(bool(cfg.get("autostart", True)))
+
+    # 2. System Tray Availability Check
+    # On --autostart (especially KDE Plasma 6 via systemd-xdg-autostart-generator), plasmashell's
+    # StatusNotifierWatcher can take several seconds to register after login, so wait patiently.
+    desktop_env = (
+        os.environ.get("XDG_CURRENT_DESKTOP", "") + ":" + os.environ.get("DESKTOP_SESSION", "")
+    ).lower()
+    is_tray_desktop = any(de in desktop_env for de in ("kde", "plasma", "xfce", "mate", "cinnamon", "lxqt", "budgie", "deepin"))
+    if is_autostart:
+        max_wait_sec = 15.0 if (is_tray_desktop or not desktop_env) else 5.0
+    else:
+        max_wait_sec = 2.0 if is_tray_desktop else 1.0
+
     tray_available = False
-    for _ in range(5):
+    tray_deadline = time.monotonic() + max_wait_sec
+    while True:
         if QSystemTrayIcon.isSystemTrayAvailable():
             tray_available = True
+            break
+        if time.monotonic() >= tray_deadline:
             break
         time.sleep(0.2)
         app.processEvents()
@@ -408,7 +459,7 @@ def main() -> None:
                             tr("Detectado Rclone v%s.\nA versão v%s ou superior é recomendada.") % (v_str, req_str))
 
     # 4. Initialize Controller
-    controller = RcloneAppController(app, tray_available=tray_available)
+    controller = RcloneAppController(app, tray_available=tray_available, autostart_mode=is_autostart)
     controller.run()
 
     # 5. Execute Loop

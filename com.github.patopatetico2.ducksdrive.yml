@@ -15,10 +15,13 @@ finish-args:
   # Acesso ao FUSE e ao sistema de ficheiros do anfitrião (~/CloudDrives, configs e favoritos)
   - --device=all
   - --filesystem=host
-  # Ponte D-Bus para executar o fusermount3 (setuid root do host) e ícones da bandeja
+  # Ponte D-Bus para executar o fusermount3 (setuid root do host), bandeja, notificações, inibidor e chaveiro
   - --talk-name=org.freedesktop.Flatpak
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.portal.Background
+  - --system-talk-name=org.freedesktop.login1
 
 modules:
   # 1. Motor Rclone oficial (binário estático v1.73.5)
@@ -91,7 +94,7 @@ modules:
         install -dm755 /app/bin
         cat << 'EOF' > /app/bin/ducksdrive
         #!/bin/sh
-        exec python3 /app/share/ducksdrive/main.py "$@"
+        exec python3 -c "import sys; sys.path.insert(0, '/app/share/ducksdrive'); import main; main.main()" "$@"
         EOF
         chmod 755 /app/bin/ducksdrive
       - |
@@ -107,7 +110,7 @@ modules:
         Terminal=false
         Type=Application
         Categories=Network;Utility;FileTools;
-        StartupNotify=true
+        StartupNotify=false
         StartupWMClass=ducksdrive
         EOF
     sources:

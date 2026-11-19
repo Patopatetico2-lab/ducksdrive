@@ -90,15 +90,25 @@ for mp in custom_paths:
                 break
 
 custom_uris = [f"file://{urllib.parse.quote(mp)}" for mp in custom_paths]
+cloud_drives_uri = f"file://{urllib.parse.quote(os.path.abspath(os.path.expanduser('~/CloudDrives')))}"
+legacy_gdrive_uri = f"file://{urllib.parse.quote(os.path.abspath(os.path.expanduser('~/GoogleDrive')))}"
+
+def _atomic_write(path, text):
+    target = os.path.realpath(path)
+    tmp = target + ".ducksdrive.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, target)
 
 for p in [os.path.join(xdg_data, "user-places.xbel"), os.path.join(xdg_config, "user-places.xbel")]:
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f: s = f.read()
-        s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
-        s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', s, flags=re.DOTALL)
+        new_s = re.sub(r'<bookmark[^>]*href="file://[^"]*CloudDrives[^"]*".*?</bookmark>\s*', '', s, flags=re.DOTALL)
+        new_s = re.sub(r'<separator>(?:(?!</separator>).)*?CloudDrives.*?</separator>\s*', '', new_s, flags=re.DOTALL)
         for uri in custom_uris:
-            s = re.sub(rf'<bookmark[^>]*href="{re.escape(uri)}"[^>]*>.*?</bookmark>\s*', '', s, flags=re.DOTALL)
-        with open(p, "w", encoding="utf-8") as f: f.write(s)
+            new_s = re.sub(rf'<bookmark[^>]*href="{re.escape(uri)}"[^>]*>.*?</bookmark>\s*', '', new_s, flags=re.DOTALL)
+        if new_s != s:
+            _atomic_write(p, new_s)
     bak = p + ".bak"
     if os.path.exists(bak):
         os.remove(bak)
@@ -107,13 +117,20 @@ gtk_bookmarks = os.path.join(xdg_config, "gtk-3.0", "bookmarks")
 if os.path.exists(gtk_bookmarks):
     with open(gtk_bookmarks, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    with open(gtk_bookmarks, "w", encoding="utf-8") as f:
-        for line in lines:
-            unquoted = urllib.parse.unquote(line)
-            stripped = line.strip()
-            is_custom = any(stripped == uri or stripped.startswith(uri + " ") for uri in custom_uris)
-            if not is_custom and "CloudDrives" not in line and "GoogleDrive" not in line and "CloudDrives" not in unquoted and "GoogleDrive" not in unquoted:
-                f.write(line)
+    kept = []
+    for line in lines:
+        stripped = line.strip()
+        uri_part = stripped.split(" ", 1)[0] if stripped else ""
+        is_custom = any(uri_part == uri for uri in custom_uris)
+        is_default_drive = (
+            uri_part == cloud_drives_uri
+            or uri_part.startswith(cloud_drives_uri + "/")
+            or uri_part == legacy_gdrive_uri
+        )
+        if not is_custom and not is_default_drive:
+            kept.append(line)
+    if len(kept) != len(lines):
+        _atomic_write(gtk_bookmarks, "".join(kept))
 PYEOF
 
 echo "Removing application files and configuration..."

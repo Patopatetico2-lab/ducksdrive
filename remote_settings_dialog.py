@@ -11,8 +11,12 @@ dedicated mount points, default read-only mode, and bandwidth/cache overrides).
 
 import logging
 import os
+import re
+import shlex
 from typing import Optional
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,7 +35,11 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import tr
-from rclone_config import get_remote_type_fast
+from rclone_config import (
+    get_drive_client_credentials,
+    get_remote_type_fast,
+    update_drive_client_credentials,
+)
 from rclone_settings import (
     apply_app_theme,
     get_remote_config,
@@ -56,10 +64,13 @@ class RemoteSettingsDialog(QDialog):
         self.remote_name = remote_name.rstrip(":")
         self.remote_type = get_remote_type_fast(self.remote_name) or ""
         self.remote_cfg = get_remote_config(self.remote_name)
+        self._initial_drive_creds = (
+            get_drive_client_credentials(self.remote_name) if self.remote_type == "drive" else ("", "")
+        )
         self.saved = False
 
         self.setWindowTitle(tr("Configurações da Nuvem: %s") % self.remote_name)
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(540)
 
         self._init_ui()
         self._load_values()
@@ -143,14 +154,61 @@ class RemoteSettingsDialog(QDialog):
 
         main_layout.addWidget(flags_group)
 
+        # Group 2b: Google Drive Custom OAuth Client ID (Anti Rate-Limit)
+        if self.remote_type == "drive":
+            oauth_group = QGroupBox(tr("Credenciais OAuth Próprias do Google Drive (Anti Rate-Limit)"))
+            oauth_layout = QVBoxLayout(oauth_group)
+            oauth_layout.setSpacing(8)
+
+            self.drive_oauth_status_label = QLabel()
+            self.drive_oauth_status_label.setWordWrap(True)
+            oauth_layout.addWidget(self.drive_oauth_status_label)
+
+            oauth_form = QFormLayout()
+            oauth_form.setSpacing(8)
+            self.client_id_edit = QLineEdit()
+            self.client_id_edit.setPlaceholderText("ex: 123456789-abc.apps.googleusercontent.com")
+            self.client_secret_edit = QLineEdit()
+            self.client_secret_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self.client_secret_edit.setPlaceholderText("ex: GOCSPX-...")
+            oauth_form.addRow(tr("Google Client ID:"), self.client_id_edit)
+            oauth_form.addRow(tr("Google Client Secret:"), self.client_secret_edit)
+            oauth_layout.addLayout(oauth_form)
+
+            guide_row = QHBoxLayout()
+            guide_row.addStretch()
+            self.btn_client_id_guide = QPushButton(tr("Como criar meu Client ID..."))
+            self.btn_client_id_guide.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl("https://rclone.org/drive/#making-your-own-client-id"))
+            )
+            guide_row.addWidget(self.btn_client_id_guide)
+            oauth_layout.addLayout(guide_row)
+            main_layout.addWidget(oauth_group)
+        else:
+            self.drive_oauth_status_label = None
+            self.client_id_edit = None
+            self.client_secret_edit = None
+            self.btn_client_id_guide = None
+
         # Group 3: Performance Overrides (Optional)
         perf_group = QGroupBox(tr("Substituições de Desempenho (Opcional)"))
         perf_layout = QFormLayout(perf_group)
         perf_layout.setSpacing(10)
 
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItem(tr("Herdar configuração global"), "")
+        self.profile_combo.addItem(tr("Equilibrado (Dolphin Rápido + Multi-Stream)"), "balanced")
+        self.profile_combo.addItem(tr("Downloads Grandes e Streaming (Buffer 32M / Read-Ahead 64M)"), "streaming")
+        self.profile_combo.addItem(tr("Upload Seguro (Evita Saturar a Rede / Bufferbloat)"), "safe_upload")
+        perf_layout.addRow(tr("Perfil de Desempenho:"), self.profile_combo)
+
         self.bwlimit_combo = QComboBox()
         self.bwlimit_combo.addItem(tr("Herdar configuração global"), "")
         self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
+        self.bwlimit_combo.addItem(tr("Upload 2 MB/s • Download Ilimitado"), "2M:off")
+        self.bwlimit_combo.addItem(tr("Upload 4 MB/s • Download Ilimitado (Anti-Lag)"), "4M:off")
+        self.bwlimit_combo.addItem(tr("Upload 10 MB/s • Download Ilimitado"), "10M:off")
+        self.bwlimit_combo.addItem(tr("Upload 25 MB/s • Download Ilimitado"), "25M:off")
         self.bwlimit_combo.addItem(tr("1 MB/s (Econômico)"), "1M")
         self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
         self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
@@ -193,7 +251,22 @@ class RemoteSettingsDialog(QDialog):
         flags = str(self.remote_cfg.get("custom_flags") or "")
         self.flags_edit.setText(flags)
         if self.shared_with_me_check is not None:
-            self.shared_with_me_check.setChecked("--drive-shared-with-me" in flags)
+            try:
+                tokens = shlex.split(flags)
+            except ValueError:
+                tokens = flags.split()
+            self.shared_with_me_check.setChecked("--drive-shared-with-me" in tokens)
+
+        if self.client_id_edit is not None and self.client_secret_edit is not None:
+            cid, csec = self._initial_drive_creds
+            self.client_id_edit.setText(cid)
+            self.client_secret_edit.setText(csec)
+            self._refresh_drive_oauth_status_badge(bool(cid))
+
+        prof = str(self.remote_cfg.get("performance_profile") or "")
+        p_idx = self.profile_combo.findData(prof)
+        if p_idx >= 0:
+            self.profile_combo.setCurrentIndex(p_idx)
 
         bw = str(self.remote_cfg.get("bwlimit") or "")
         idx = self.bwlimit_combo.findData(bw)
@@ -204,23 +277,57 @@ class RemoteSettingsDialog(QDialog):
             self.bwlimit_combo.setCurrentIndex(self.bwlimit_combo.count() - 1)
 
         cache_str = str(self.remote_cfg.get("vfs_cache_max_size") or "").strip().upper()
-        if cache_str.endswith("G") and cache_str[:-1].isdigit():
-            self.cache_spin.setValue(int(cache_str[:-1]))
-        elif cache_str.isdigit():
-            self.cache_spin.setValue(int(cache_str))
+        cache_gb = 0
+        if cache_str:
+            m = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGT])?I?B?$", cache_str)
+            if m:
+                val = float(m.group(1))
+                unit = m.group(2)
+                if unit == "K":
+                    cache_gb = max(1, int(round(val / (1024.0 * 1024.0))))
+                elif unit == "M":
+                    cache_gb = max(1, int(round(val / 1024.0)))
+                elif unit == "T":
+                    cache_gb = int(round(val * 1024.0))
+                else:
+                    cache_gb = int(round(val))
+        self.cache_spin.setValue(max(0, min(cache_gb, 500)))
+
+    def _refresh_drive_oauth_status_badge(self, has_custom: bool) -> None:
+        if self.drive_oauth_status_label is None:
+            return
+        if has_custom:
+            self.drive_oauth_status_label.setText(
+                tr("✓ Client ID próprio configurado (Pacer rápido ativo: 10ms / Chunks 64M).")
+            )
+            self.drive_oauth_status_label.setStyleSheet(
+                "font-size: 8.5pt; font-weight: bold; color: #27ae60;"
+            )
         else:
-            self.cache_spin.setValue(0)
+            self.drive_oauth_status_label.setText(
+                tr(
+                    "⚠️ Usando Client ID compartilhado do Rclone (sujeito a pausas de 30-50s por rate-limit da API e descontinuação em 2026). Configure seu próprio Client ID abaixo para máxima velocidade."
+                )
+            )
+            self.drive_oauth_status_label.setStyleSheet(
+                "font-size: 8.5pt; font-weight: bold; color: #e67e22;"
+            )
 
     def _toggle_shared_with_me(self, checked: bool) -> None:
         current_flags = self.flags_edit.text()
         flag = "--drive-shared-with-me"
-        parts = current_flags.split()
+        try:
+            parts = shlex.split(current_flags)
+            use_shlex_join = True
+        except ValueError:
+            parts = current_flags.split()
+            use_shlex_join = False
         if checked:
             if flag not in parts:
                 parts.append(flag)
         else:
             parts = [p for p in parts if p != flag]
-        self.flags_edit.setText(" ".join(parts))
+        self.flags_edit.setText(shlex.join(parts) if use_shlex_join else " ".join(parts))
 
     def _on_browse_mount_point(self) -> None:
         initial = self.mount_path_edit.text().strip() or os.path.expanduser(f"~/CloudDrives/{self.remote_name}")
@@ -232,12 +339,63 @@ class RemoteSettingsDialog(QDialog):
         custom_mp = self.mount_path_edit.text().strip()
         if custom_mp:
             custom_mp = os.path.abspath(os.path.expanduser(custom_mp))
+            home_dir = os.path.abspath(os.path.expanduser("~"))
+            if custom_mp in ("/", home_dir):
+                QMessageBox.warning(
+                    self,
+                    tr("Ponto de Montagem Inválido"),
+                    tr("Não é seguro montar uma nuvem diretamente sobre '%s'. Escolha uma subpasta vazia dedicada.") % custom_mp,
+                )
+                return
+            from rclone_daemon import is_path_mounted
+            if os.path.isdir(custom_mp) and not is_path_mounted(custom_mp):
+                try:
+                    if os.listdir(custom_mp):
+                        res = QMessageBox.warning(
+                            self,
+                            tr("Pasta Não Vazia"),
+                            tr("A pasta '%s' já contém arquivos.\nMontar a nuvem sobre ela ocultará esses arquivos locais enquanto o drive estiver montado.\n\nDeseja continuar mesmo assim?") % custom_mp,
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No,
+                        )
+                        if res != QMessageBox.StandardButton.Yes:
+                            return
+                except OSError:
+                    pass
 
         read_only = self.ro_checkbox.isChecked()
         flags = self.flags_edit.text().strip()
+        if flags:
+            try:
+                shlex.split(flags)
+            except ValueError as exc:
+                QMessageBox.warning(
+                    self,
+                    tr("Erro de Input"),
+                    tr("As flags personalizadas contêm aspas inválidas ou sintaxe incorreta:\n%s") % str(exc),
+                )
+                return
         bw = str(self.bwlimit_combo.currentData() or "")
+        prof = str(self.profile_combo.currentData() or "")
         cache_gb = self.cache_spin.value()
         cache_str = f"{cache_gb}G" if cache_gb > 0 else ""
+
+        if self.client_id_edit is not None and self.client_secret_edit is not None:
+            new_cid = self.client_id_edit.text().strip()
+            new_csec = self.client_secret_edit.text().strip()
+            if (new_cid, new_csec) != self._initial_drive_creds:
+                if bool(new_cid) != bool(new_csec):
+                    QMessageBox.warning(
+                        self,
+                        tr("Credenciais Incompletas"),
+                        tr("Informe tanto o Google Client ID quanto o Client Secret (ou deixe ambos em branco)."),
+                    )
+                    return
+                ok_upd, msg_upd = update_drive_client_credentials(self.remote_name, new_cid, new_csec)
+                if not ok_upd:
+                    QMessageBox.warning(self, tr("Erro ao Atualizar Client ID"), msg_upd)
+                    return
+                self._initial_drive_creds = (new_cid, new_csec)
 
         updated_cfg = {
             "custom_mount_point": custom_mp,
@@ -245,6 +403,7 @@ class RemoteSettingsDialog(QDialog):
             "custom_flags": flags,
             "bwlimit": bw,
             "vfs_cache_max_size": cache_str,
+            "performance_profile": prof,
         }
 
         if save_remote_config(self.remote_name, updated_cfg):

@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 GITHUB_REPO = "Patopatetico2-lab/ducksdrive"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_WEB_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -77,13 +77,18 @@ def _write_cache(latest_version: str, release_url: str, release_notes: str) -> N
         logger.debug("Failed to write update cache: %s", e)
 
 
-def check_for_updates(force: bool = False, timeout: float = 6.0) -> Tuple[bool, str, str, str]:
+def check_for_updates(
+    force: bool = False,
+    timeout: float = 6.0,
+    raise_on_error: bool = False,
+) -> Tuple[bool, str, str, str]:
     """
     Checks GitHub Releases for a newer version of DucksDrive.
 
     Args:
         force: If True, bypasses the 24-hour cache and queries GitHub API directly.
         timeout: Network timeout in seconds.
+        raise_on_error: If True, re-raises network/HTTP errors instead of returning False.
 
     Returns:
         Tuple[bool, str, str, str]: (is_update_available, latest_version, release_url, release_notes)
@@ -121,10 +126,16 @@ def check_for_updates(force: bool = False, timeout: float = 6.0) -> Tuple[bool, 
                     return is_newer, tag_name, html_url, notes
     except urllib.error.HTTPError as http_err:
         logger.debug("HTTP error checking for updates: %s", http_err)
+        if raise_on_error:
+            raise
     except urllib.error.URLError as url_err:
         logger.debug("Network error checking for updates: %s", url_err)
+        if raise_on_error:
+            raise
     except Exception as exc:
         logger.debug("Unexpected error checking for updates: %s", exc)
+        if raise_on_error:
+            raise
 
     return False, APP_VERSION, RELEASES_WEB_URL, ""
 
@@ -143,7 +154,10 @@ class UpdateCheckWorker(QThread):
 
     def run(self) -> None:
         try:
-            has_update, latest_ver, url, notes = check_for_updates(force=self.force)
+            if self.force:
+                has_update, latest_ver, url, notes = check_for_updates(force=True, raise_on_error=True)
+            else:
+                has_update, latest_ver, url, notes = check_for_updates(force=False)
             self.check_finished.emit(has_update, latest_ver, url, notes)
             if has_update:
                 self.update_available.emit(latest_ver, url)
