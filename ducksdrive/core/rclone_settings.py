@@ -1,5 +1,5 @@
 """
-rclone_settings.py - Configuration manager for DucksDrive.
+ducksdrive/core/rclone_settings.py - Configuration manager for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -471,6 +471,8 @@ def _resolve_autostart_command() -> tuple[str, str, str]:
     Prioritizes the active runtime environment (Flatpak, AppImage, system package, user install,
     or source checkout) so autostart never points to a missing or stale launcher.
     """
+    from ducksdrive.resources import get_icon_path, get_install_root, get_package_dir
+
     xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     xdg_bin = os.environ.get("XDG_BIN_HOME", os.path.expanduser("~/.local/bin"))
     local_dir = os.path.join(xdg_data, "ducksdrive")
@@ -478,7 +480,8 @@ def _resolve_autostart_command() -> tuple[str, str, str]:
     user_bin = os.path.join(xdg_bin, "ducksdrive")
     appimage_path = os.environ.get("APPIMAGE")
     is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
-    running_dir = os.path.dirname(os.path.abspath(__file__))
+    pkg_dir = get_package_dir()
+    install_root = get_install_root()
 
     if is_flatpak:
         flatpak_id = os.environ.get("FLATPAK_ID") or "com.github.patopatetico2.ducksdrive"
@@ -487,8 +490,8 @@ def _resolve_autostart_command() -> tuple[str, str, str]:
     if appimage_path and os.path.isfile(appimage_path):
         icon_path = os.path.join(local_dir, "icon.svg")
         if not os.path.exists(icon_path):
-            bundled_icon = os.path.join(getattr(sys, "_MEIPASS", running_dir), "icon.svg")
-            if os.path.exists(bundled_icon):
+            bundled_icon = get_icon_path()
+            if bundled_icon and os.path.exists(bundled_icon):
                 try:
                     os.makedirs(local_dir, exist_ok=True)
                     shutil.copy2(bundled_icon, icon_path)
@@ -499,11 +502,11 @@ def _resolve_autostart_command() -> tuple[str, str, str]:
         return f"{_format_desktop_arg(appimage_path)} --autostart", appimage_path, icon_path
 
     # Running from a system package (/usr/share/ducksdrive)
-    if running_dir.startswith("/usr/share/ducksdrive") and _is_executable_file("/usr/bin/ducksdrive"):
+    if os.path.realpath(install_root).startswith("/usr/share/ducksdrive") and _is_executable_file("/usr/bin/ducksdrive"):
         return "/usr/bin/ducksdrive --autostart", "/usr/bin/ducksdrive", "ducksdrive"
 
     # Running from a user installation (~/.local/share/ducksdrive)
-    if os.path.realpath(running_dir) == os.path.realpath(local_dir):
+    if os.path.realpath(install_root) == os.path.realpath(local_dir):
         bin_path = local_bin if _is_executable_file(local_bin) else user_bin
         if _is_executable_file(bin_path):
             icon_path = os.path.join(local_dir, "icon.svg")
@@ -511,7 +514,7 @@ def _resolve_autostart_command() -> tuple[str, str, str]:
                 icon_path = "ducksdrive"
             return f"{_format_desktop_arg(bin_path)} --autostart", bin_path, icon_path
 
-    # Prefer an installed executable if present, otherwise invoke the running main.py directly
+    # Prefer an installed executable if present, otherwise invoke the package entrypoint directly
     for candidate, icon_candidate in (
         (user_bin, os.path.join(local_dir, "icon.svg")),
         ("/usr/bin/ducksdrive", "ducksdrive"),
@@ -521,12 +524,11 @@ def _resolve_autostart_command() -> tuple[str, str, str]:
             icon_path = icon_candidate if (icon_candidate == "ducksdrive" or os.path.exists(icon_candidate)) else "ducksdrive"
             return f"{_format_desktop_arg(candidate)} --autostart", candidate, icon_path
 
-    main_py = os.path.join(running_dir, "main.py")
+    entry_py = os.path.join(pkg_dir, "__main__.py")
     py_exe = sys.executable or shutil.which("python3") or "/usr/bin/python3"
-    local_icon = os.path.join(running_dir, "icon.svg")
-    icon_path = local_icon if os.path.exists(local_icon) else "ducksdrive"
+    icon_path = get_icon_path() or "ducksdrive"
     return (
-        f"{_format_desktop_arg(py_exe)} {_format_desktop_arg(main_py)} --autostart",
+        f"{_format_desktop_arg(py_exe)} {_format_desktop_arg(entry_py)} --autostart",
         py_exe,
         icon_path,
     )

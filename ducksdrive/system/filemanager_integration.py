@@ -1,5 +1,5 @@
 """
-filemanager_integration.py - Desktop integration for file manager sidebars in DucksDrive.
+ducksdrive/system/filemanager_integration.py - Desktop integration for file manager sidebars in DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -280,7 +280,7 @@ def open_local_folder(path: str) -> bool:
     Opens `path` in the system file manager (Dolphin, Nautilus, Thunar, etc.) without
     blocking the GUI thread on FUSE `stat()` and with a clean environment (safe in AppImage/venv).
     """
-    from rclone_config import get_clean_env
+    from ducksdrive.core.rclone_config import get_clean_env
 
     is_flatpak = os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
     if not is_flatpak:

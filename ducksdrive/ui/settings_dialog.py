@@ -1,5 +1,5 @@
 """
-settings_dialog.py - Configuration Dialog for DucksDrive.
+ducksdrive/ui/settings_dialog.py - Configuration Dialog for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -33,8 +33,8 @@ from PySide6.QtWidgets import (
     QWidget
 )
 
-from rclone_config import TaskRunner
-from rclone_settings import (
+from ducksdrive.core.rclone_config import TaskRunner
+from ducksdrive.core.rclone_settings import (
     CONFIG_DIR,
     apply_app_theme,
     clear_vfs_cache_files,
@@ -43,8 +43,8 @@ from rclone_settings import (
     load_config,
     save_config,
 )
-from rclone_stats import fetch_rclone_stats, fetch_vfs_queue, format_bytes
-from i18n import set_language, tr
+from ducksdrive.core.rclone_stats import fetch_rclone_stats, fetch_vfs_queue, format_bytes
+from ducksdrive.i18n import set_language, tr
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class SettingsDialog(QDialog):
         header_row.addWidget(self.title_label)
         header_row.addStretch()
 
-        from updater import APP_VERSION
+        from ducksdrive.system.updater import APP_VERSION
         self.version_badge = QLabel(f"v{APP_VERSION}")
         header_row.addWidget(self.version_badge)
         main_layout.addLayout(header_row)
@@ -378,7 +378,7 @@ class SettingsDialog(QDialog):
         if t_idx >= 0:
             self.theme_combo.setCurrentIndex(t_idx)
 
-        from keyring_manager import is_keyring_available
+        from ducksdrive.system.keyring_manager import is_keyring_available
         keyring_avail = is_keyring_available()
         self.keyring_checkbox.setChecked(bool(self.config.get("use_system_keyring", False)) and keyring_avail)
         if not keyring_avail:
@@ -493,7 +493,7 @@ class SettingsDialog(QDialog):
 
     def _on_check_updates(self) -> None:
         """Runs update check in background worker without freezing dialog."""
-        from updater import APP_VERSION, UpdateCheckWorker
+        from ducksdrive.system.updater import APP_VERSION, UpdateCheckWorker
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
@@ -543,7 +543,7 @@ class SettingsDialog(QDialog):
 
     def _on_view_logs(self) -> None:
         """Opens diagnostic log viewer dialog non-blockingly."""
-        from log_viewer import LogViewerDialog
+        from ducksdrive.ui.log_viewer import LogViewerDialog
 
         if self._log_viewer_dialog is not None and self._log_viewer_dialog.isVisible():
             self._log_viewer_dialog.raise_()
@@ -557,7 +557,7 @@ class SettingsDialog(QDialog):
 
     def _on_manage_keyring(self) -> None:
         """Prompts user to store, update, or clear the rclone configuration password without freezing the GUI."""
-        from keyring_manager import (
+        from ducksdrive.system.keyring_manager import (
             clear_rclone_password,
             get_rclone_password,
             is_keyring_available,
@@ -896,9 +896,9 @@ class SettingsDialog(QDialog):
 
         import subprocess
         import urllib.parse
-        from filemanager_integration import _atomic_write_text, clean_integration
-        from rclone_daemon import unmount_fuse_path, is_path_mounted
-        from rclone_config import get_rclone_conf_path
+        from ducksdrive.system.filemanager_integration import _atomic_write_text, clean_integration
+        from ducksdrive.core.rclone_daemon import unmount_fuse_path, is_path_mounted
+        from ducksdrive.core.rclone_config import get_rclone_conf_path
 
         # 1. Cleanly stop all running daemons first so rclone exits and releases mount points and log files
         for d in self._get_known_daemons():

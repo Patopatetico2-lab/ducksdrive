@@ -1,5 +1,5 @@
 """
-main.py - Entrypoint for DucksDrive.
+ducksdrive/main.py - Entrypoint for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -26,9 +26,9 @@ from typing import Any, Callable, Dict, List, Optional
 from PySide6.QtCore import QObject, Slot, QTimer, QLockFile
 from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QSystemTrayIcon
 
-from rclone_config import TaskRunner, get_clean_env
-from rclone_daemon import RcloneDaemon
-from rclone_settings import (
+from ducksdrive.core.rclone_config import TaskRunner, get_clean_env
+from ducksdrive.core.rclone_daemon import RcloneDaemon
+from ducksdrive.core.rclone_settings import (
     CONFIG_DIR,
     _sync_autostart,
     apply_app_theme,
@@ -37,12 +37,12 @@ from rclone_settings import (
     save_last_remote,
     set_system_default_palette,
 )
-from i18n import set_language, tr
-from rclone_stats import RcloneStatsPoller
-from filemanager_integration import integrate_mount, clean_integration
-from gui_tray import RcloneTrayIcon, get_app_icon
-from notifications import notify_connection_lost
-from updater import UpdateCheckWorker
+from ducksdrive.i18n import set_language, tr
+from ducksdrive.core.rclone_stats import RcloneStatsPoller
+from ducksdrive.system.filemanager_integration import integrate_mount, clean_integration
+from ducksdrive.ui.gui_tray import RcloneTrayIcon, get_app_icon
+from ducksdrive.system.notifications import notify_connection_lost
+from ducksdrive.system.updater import UpdateCheckWorker
 
 # Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
 xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))

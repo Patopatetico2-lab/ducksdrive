@@ -1,5 +1,5 @@
 """
-updater.py - Update checker and version manager for DucksDrive.
+ducksdrive/system/updater.py - Update checker and version manager for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -17,9 +17,9 @@ from typing import Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-logger = logging.getLogger(__name__)
+from ducksdrive import __version__ as APP_VERSION
 
-APP_VERSION = "1.1.2"
+logger = logging.getLogger(__name__)
 GITHUB_REPO = "Patopatetico2-lab/ducksdrive"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_WEB_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"

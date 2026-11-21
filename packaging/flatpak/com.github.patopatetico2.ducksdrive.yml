@@ -86,15 +86,17 @@ modules:
     buildsystem: simple
     build-commands:
       - install -dm755 /app/share/ducksdrive
-      - install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py vfs_inhibitor.py keyring_manager.py -t /app/share/ducksdrive/
-      - install -Dm644 icon.svg /app/share/ducksdrive/icon.svg
-      - install -Dm644 icon.svg /app/share/icons/hicolor/scalable/apps/com.github.patopatetico2.ducksdrive.svg
-      - install -Dm644 com.github.patopatetico2.ducksdrive.metainfo.xml /app/share/metainfo/com.github.patopatetico2.ducksdrive.metainfo.xml
+      - cp -r ducksdrive /app/share/ducksdrive/
+      - find /app/share/ducksdrive/ducksdrive -type d -name "__pycache__" -exec rm -rf {} +
+      - find /app/share/ducksdrive/ducksdrive -type f -name "*.pyc" -delete
+      - install -Dm644 ducksdrive/assets/icon.svg /app/share/ducksdrive/icon.svg
+      - install -Dm644 ducksdrive/assets/icon.svg /app/share/icons/hicolor/scalable/apps/com.github.patopatetico2.ducksdrive.svg
+      - install -Dm644 packaging/flatpak/com.github.patopatetico2.ducksdrive.metainfo.xml /app/share/metainfo/com.github.patopatetico2.ducksdrive.metainfo.xml
       - |
         install -dm755 /app/bin
         cat << 'EOF' > /app/bin/ducksdrive
         #!/bin/sh
-        exec python3 -c "import sys; sys.path.insert(0, '/app/share/ducksdrive'); import main; main.main()" "$@"
+        exec python3 -c "import sys; sys.path.insert(0, '/app/share/ducksdrive'); from ducksdrive.main import main; main()" "$@"
         EOF
         chmod 755 /app/bin/ducksdrive
       - |
@@ -115,4 +117,4 @@ modules:
         EOF
     sources:
       - type: dir
-        path: .
+        path: ../..

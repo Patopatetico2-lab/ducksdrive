@@ -1,5 +1,5 @@
 """
-status_popup.py - Native-like floating status panel for DucksDrive.
+ducksdrive/ui/status_popup.py - Native-like floating status panel for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -12,13 +12,13 @@ progress bars, active file info, a rolling speed history chart, and quick action
 import logging
 import os
 import subprocess
-import sys
 import time
 import weakref
 from collections import deque
 from typing import Any, Optional
 
-from i18n import tr
+from ducksdrive.i18n import tr
+from ducksdrive.resources import get_icon_path
 from PySide6.QtCore import Qt, QTimer, QThread, QEvent, QPoint, Signal, Slot
 from PySide6.QtGui import (
     QColor,
@@ -52,11 +52,11 @@ from PySide6.QtWidgets import (
     QScrollArea
 )
 
-from filemanager_integration import open_local_folder
-from rclone_config import TaskRunner, get_clean_env, get_rclone_path
-from rclone_daemon import RcloneDaemon, is_path_mounted
-from rclone_settings import is_dark_theme_active
-from rclone_stats import (
+from ducksdrive.system.filemanager_integration import open_local_folder
+from ducksdrive.core.rclone_config import TaskRunner, get_clean_env, get_rclone_path
+from ducksdrive.core.rclone_daemon import RcloneDaemon, is_path_mounted
+from ducksdrive.core.rclone_settings import is_dark_theme_active
+from ducksdrive.core.rclone_stats import (
     StatsData,
     format_bytes,
     rc_request,
@@ -585,9 +585,8 @@ class TurboTransferDialog(QDialog):
 
 def _get_window_icon() -> QIcon:
     """Returns the application icon without importing gui_tray to avoid circular imports."""
-    current_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    icon_path = os.path.join(current_dir, "icon.svg")
-    if os.path.exists(icon_path):
+    icon_path = get_icon_path()
+    if icon_path and os.path.exists(icon_path):
         icon = QIcon(icon_path)
         if not icon.isNull():
             return icon
@@ -1291,7 +1290,7 @@ class StatusPopup(QWidget):
 
     def sync_bwlimit_combo(self) -> None:
         """Synchronizes combo_bwlimit with the effective runtime or configured bandwidth limit."""
-        from rclone_settings import get_remote_config, load_config
+        from ducksdrive.core.rclone_settings import get_remote_config, load_config
 
         clean_sel = (self.current_remote_name or "").rstrip(":")
         runtime_bw = self._runtime_bwlimit.get(clean_sel)
@@ -1568,8 +1567,8 @@ class StatusPopup(QWidget):
         """Connects or reconnects the selected or last cloud remote directly from the status panel."""
         if self.daemon.state in ("starting", "unmounting"):
             return
-        from rclone_config import list_remote_names
-        from rclone_settings import load_config
+        from ducksdrive.core.rclone_config import list_remote_names
+        from ducksdrive.core.rclone_settings import load_config
 
         self._pause_busy = True
         self.btn_pause.setEnabled(False)
@@ -1612,7 +1611,7 @@ class StatusPopup(QWidget):
         target_pause = not self.is_paused
         creds = target_daemon.rc_credentials
         clean_r = (self.current_remote_name or target_daemon.current_remote or "").rstrip(":")
-        from rclone_settings import get_remote_config, load_config
+        from ducksdrive.core.rclone_settings import get_remote_config, load_config
         runtime_bw = self._runtime_bwlimit.get(clean_r)
         if runtime_bw:
             original_limit = runtime_bw
@@ -1645,7 +1644,7 @@ class StatusPopup(QWidget):
         clean_remote = (self.daemon.current_remote or "").rstrip(":")
         if clean_remote:
             _quota_cache[clean_remote] = (total, used)
-        from rclone_stats import format_bytes
+        from ducksdrive.core.rclone_stats import format_bytes
 
         if total > 0:
             self.quota_bar.show()

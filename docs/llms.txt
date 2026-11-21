@@ -38,7 +38,7 @@ chmod +x install.sh
 ```
 
 ### Option 2: Portable AppImage (includes bundled rclone binary)
-Download `DucksDrive-x86_64.AppImage` from https://github.com/Patopatetico2-lab/ducksdrive/releases or build locally with `./build_appimage.sh`.
+Download `DucksDrive-x86_64.AppImage` from https://github.com/Patopatetico2-lab/ducksdrive/releases or build locally with `./packaging/build_appimage.sh`.
 
 ---
 

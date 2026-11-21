@@ -1,5 +1,5 @@
 """
-gui_tray.py - PySide6 System Tray Interface and Dialogs for DucksDrive.
+ducksdrive/ui/gui_tray.py - PySide6 System Tray Interface and Dialogs for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -12,11 +12,11 @@ context menus, status notifications, and dialogs for remote management.
 import logging
 import os
 import re
-import sys
 import time
 from typing import Any, Callable, Optional
 
-from i18n import tr
+from ducksdrive.i18n import tr
+from ducksdrive.resources import get_icon_path
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
@@ -42,8 +42,8 @@ from PySide6.QtWidgets import (
     QComboBox
 )
 
-from filemanager_integration import open_local_folder
-from rclone_config import (
+from ducksdrive.system.filemanager_integration import open_local_folder
+from ducksdrive.core.rclone_config import (
     BackgroundTask,
     SUPPORTED_REMOTE_TYPES,
     TaskRunner,
@@ -53,21 +53,21 @@ from rclone_config import (
     check_remote_connection,
     reconnect_remote,
 )
-from rclone_daemon import RcloneDaemon, is_path_mounted
-from rclone_settings import (
+from ducksdrive.core.rclone_daemon import RcloneDaemon, is_path_mounted
+from ducksdrive.core.rclone_settings import (
     apply_app_theme,
     delete_remote_config,
     get_remote_config,
     load_config,
     save_last_remote,
 )
-from rclone_stats import StatsData, fetch_vfs_queue, rc_vfs_refresh, set_rc_bwlimit
-from status_popup import StatusPopup
-from settings_dialog import SettingsDialog
-from log_viewer import LogViewerDialog
-from remote_settings_dialog import RemoteSettingsDialog
-from notifications import notify_sync_complete, notify_mount_success, send_desktop_notification
-from vfs_inhibitor import VFSInhibitorManager
+from ducksdrive.core.rclone_stats import StatsData, fetch_vfs_queue, rc_vfs_refresh, set_rc_bwlimit
+from ducksdrive.ui.status_popup import StatusPopup
+from ducksdrive.ui.settings_dialog import SettingsDialog
+from ducksdrive.ui.log_viewer import LogViewerDialog
+from ducksdrive.ui.remote_settings_dialog import RemoteSettingsDialog
+from ducksdrive.system.notifications import notify_sync_complete, notify_mount_success, send_desktop_notification
+from ducksdrive.system.vfs_inhibitor import VFSInhibitorManager
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +77,10 @@ APP_NAME = "DucksDrive"
 def get_app_icon() -> QIcon:
     """
     Returns the application icon by loading the physical icon.svg file
-    using an absolute path based on the script location.
+    via centralized resource resolution.
     """
-    current_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    icon_path = os.path.join(current_dir, "icon.svg")
-    if os.path.exists(icon_path):
+    icon_path = get_icon_path()
+    if icon_path and os.path.exists(icon_path):
         icon = QIcon(icon_path)
         if not icon.isNull():
             return icon

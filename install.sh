@@ -9,8 +9,8 @@ DESKTOP_FILE="$XDG_DATA_HOME/applications/$APP_NAME.desktop"
 AUTOSTART_FILE="$XDG_CONFIG_HOME/autostart/$APP_NAME.desktop"
 
 echo "=== Installing $APP_NAME ==="
-if [ ! -f "main.py" ]; then
-    echo "Error: 'main.py' not found."
+if [ ! -f "ducksdrive/main.py" ]; then
+    echo "Error: 'ducksdrive/main.py' not found."
     exit 1
 fi
 
@@ -44,8 +44,12 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py vfs_inhibitor.py keyring_manager.py "$INSTALL_DIR/"
-[ -f icon.svg ] && cp icon.svg "$INSTALL_DIR/"
+rm -f "$INSTALL_DIR"/{main,gui_tray,status_popup,settings_dialog,rclone_daemon,rclone_stats,rclone_config,rclone_settings,filemanager_integration,i18n,log_viewer,remote_settings_dialog,notifications,updater,vfs_inhibitor,keyring_manager}.py
+rm -rf "$INSTALL_DIR/ducksdrive"
+cp -r ducksdrive "$INSTALL_DIR/ducksdrive"
+find "$INSTALL_DIR/ducksdrive" -type d -name "__pycache__" -exec rm -rf {} +
+find "$INSTALL_DIR/ducksdrive" -type f -name "*.pyc" -delete
+[ -f ducksdrive/assets/icon.svg ] && cp ducksdrive/assets/icon.svg "$INSTALL_DIR/icon.svg"
 
 if /usr/bin/python3 -c "import PySide6.QtWidgets, PySide6.QtSvg" >/dev/null 2>&1; then
     echo "Using system PySide6 (native Qt6/KDE/GNOME theme integration)."
@@ -62,9 +66,9 @@ mkdir -p "$BIN_DIR"
 cat <<EOF> "$BIN_DIR/$APP_NAME"
 #!/bin/bash
 if [ -x "$INSTALL_DIR/venv/bin/python3" ] && "$INSTALL_DIR/venv/bin/python3" -c "import PySide6" >/dev/null 2>&1; then
-    exec "$INSTALL_DIR/venv/bin/python3" -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import main; main.main()" "\$@"
+    exec "$INSTALL_DIR/venv/bin/python3" -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); from ducksdrive.main import main; main()" "\$@"
 fi
-exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import main; main.main()" "\$@"
+exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); from ducksdrive.main import main; main()" "\$@"
 EOF
 chmod +x "$BIN_DIR/$APP_NAME"
 

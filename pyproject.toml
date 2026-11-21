@@ -36,27 +36,13 @@ dev = [
 ]
 
 [project.scripts]
-ducksdrive = "main:main"
+ducksdrive = "ducksdrive.main:main"
 
-[tool.setuptools]
-py-modules = [
-    "filemanager_integration",
-    "gui_tray",
-    "i18n",
-    "keyring_manager",
-    "log_viewer",
-    "main",
-    "notifications",
-    "rclone_config",
-    "rclone_daemon",
-    "rclone_settings",
-    "rclone_stats",
-    "remote_settings_dialog",
-    "settings_dialog",
-    "status_popup",
-    "updater",
-    "vfs_inhibitor",
-]
+[tool.setuptools.packages.find]
+include = ["ducksdrive*"]
+
+[tool.setuptools.package-data]
+ducksdrive = ["assets/*.svg"]
 
 [tool.ruff]
 line-length = 120

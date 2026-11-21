@@ -1,5 +1,5 @@
 """
-log_viewer.py - Real-Time Diagnostic Log Viewer for DucksDrive.
+ducksdrive/ui/log_viewer.py - Real-Time Diagnostic Log Viewer for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -30,9 +30,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from filemanager_integration import open_local_folder
-from i18n import tr
-from rclone_settings import apply_app_theme, is_dark_theme_active, load_config
+from ducksdrive.system.filemanager_integration import open_local_folder
+from ducksdrive.i18n import tr
+from ducksdrive.core.rclone_settings import apply_app_theme, is_dark_theme_active, load_config
 
 logger = logging.getLogger(__name__)
 

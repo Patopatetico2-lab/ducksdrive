@@ -4,6 +4,7 @@
 
 | Versão / Version | Suportada / Supported |
 |---|---|
+| 1.1.x | :white_check_mark: |
 | 1.0.x | :white_check_mark: |
 | < 1.0.0 | :x: |
 
@@ -16,7 +17,7 @@ O **DucksDrive** foi projetado seguindo o princípio do menor privilégio e priv
 1. **Credenciais da API RC em Memória:**
    - Durante a montagem, o aplicativo gera credenciais HTTP Basic Auth aleatórias e criptograficamente seguras (`secrets.token_urlsafe(24)`).
    - Essas credenciais residem exclusivamente na memória do processo e nunca são gravadas no disco.
-   - A interface de controle remoto (RC) vincula-se apenas a `127.0.0.1`.
+   - A interface de controle remoto (RC) utiliza por padrão Unix Domain Sockets privados em `$XDG_RUNTIME_DIR`, com fallback restrito a `127.0.0.1` quando necessário.
 
 2. **Privacidade e Tokens de Autenticação:**
    - O DucksDrive não possui servidores externos, telemetria de terceiros ou rastreadores.

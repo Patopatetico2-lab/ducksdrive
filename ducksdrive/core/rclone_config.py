@@ -1,5 +1,5 @@
 """
-rclone_config.py - Module for managing Rclone remote configurations in DucksDrive.
+ducksdrive/core/rclone_config.py - Module for managing Rclone remote configurations in DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -22,7 +22,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from i18n import tr
+from ducksdrive.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +192,8 @@ def get_clean_env(include_keyring: bool = True) -> Dict[str, str]:
         env.pop(var, None)
     if include_keyring:
         try:
-            from keyring_manager import get_password_command, is_keyring_available
-            from rclone_settings import load_config
+            from ducksdrive.system.keyring_manager import get_password_command, is_keyring_available
+            from ducksdrive.core.rclone_settings import load_config
 
             if load_config().get("use_system_keyring") and is_keyring_available():
                 env["RCLONE_PASSWORD_COMMAND"] = get_password_command()

@@ -8,7 +8,7 @@
   <a href="https://patopatetico2-lab.github.io/ducksdrive/"><img src="https://img.shields.io/badge/Site%20Oficial-patopatetico2--lab.github.io%2Fducksdrive-0078d4?style=flat&logo=googlechrome&logoColor=white" alt="Site Oficial" /></a>
   <a href="https://github.com/Patopatetico2-lab/ducksdrive/releases"><img src="https://img.shields.io/github/v/release/Patopatetico2-lab/ducksdrive?color=2ea44f&label=Releases&logo=github" alt="GitHub Releases" /></a>
   <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
-  <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/tests-65%20passed-brightgreen?logo=pytest&logoColor=white" alt="Tests Status" /></a>
+  <a href="https://github.com/Patopatetico2-lab/ducksdrive/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/tests-67%20passed-brightgreen?logo=pytest&logoColor=white" alt="Tests Status" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Code style: ruff" /></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=flat&logo=python&logoColor=white" alt="Python 3.10+" /></a>
   <a href="https://pypi.org/project/PySide6/"><img src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41cd52?style=flat&logo=qt&logoColor=white" alt="PySide6 / Qt6" /></a>
@@ -149,24 +149,27 @@ Ficam em `~/.config/ducksdrive/config.json` e dá para mexer pela tela de config
 
 ## Arquitetura e Módulos do Projeto
 
-O DucksDrive é modular e orquestrado em Python puro com PySide6 (Qt6), dividindo as responsabilidades de forma desacoplada:
+O DucksDrive é organizado no pacote Python [`ducksdrive/`](ducksdrive) (PySide6 / Qt6), dividindo responsabilidades entre núcleo (`core`), sistema (`system`) e interface (`ui`):
 
 | Módulo / Arquivo | Responsabilidade Técnica |
 |---|---|
-| [`main.py`](main.py) | **Ponto de Entrada e Ciclo de Vida**: trava de instância única com `QLockFile`, checagem de ambiente desktop e bandeja do sistema com fallback para Modo Janela no GNOME, verificação de versão mínima do Rclone (`>= 1.63.0`) e captura de sinais (`SIGINT`/`SIGTERM`). |
-| [`rclone_daemon.py`](rclone_daemon.py) | **Daemon de Montagem FUSE e Ciclo de Vida do Drive Virtual**: gerencia subprocessos concorrentes de montagem via `rclone mount`, aloca portas RC dinâmicas sem colisões, gera credenciais aleatórias em memória, orquestra flags VFS e executa desmontagem segura com fallback dinâmico para `fusermount3` ou `fusermount`. |
-| [`gui_tray.py`](gui_tray.py) | **Interface da Bandeja (System Tray)**: ícone da área de notificação (`QSystemTrayIcon`), menus contextuais dinâmicos, suporte a Multi-Mount, checagem de uploads pendentes em todos os daemons e diálogos de autenticação OAuth no navegador. |
-| [`status_popup.py`](status_popup.py) | **Painel Flutuante de Telemetria**: janela frameless (`Qt.Tool`) compatível com Wayland e X11, seletor de nuvem ativa, medidor de quota de armazenamento, progresso individual de arquivos, botão pausar/retomar em 1 clique e gráfico histórico de velocidade desenhado com `QPainter`. |
-| [`log_viewer.py`](log_viewer.py) | **Visualizador de Logs Integrado**: janela diagnóstica em tempo real para `ducksdrive.log` e logs individuais de cada remoto, com filtros por severidade (`ALL`, `WARN+ERR`, `ERROR`), busca textual ao vivo e botão de cópia rápida para a área de transferência. |
-| [`remote_settings_dialog.py`](remote_settings_dialog.py) | **Configurações por Remoto**: diálogo para personalização individual por drive (ponto de montagem personalizado, modo somente leitura padrão, limites de banda e flags extras como `--drive-shared-with-me`). |
-| [`settings_dialog.py`](settings_dialog.py) | **Janela de Configurações Globais**: controle visual de limites de banda (`--bwlimit`), parâmetros de cache VFS em SSD, seleção de idioma em tempo de execução, botão de checagem de atualizações e rotina de desinstalação segura. |
-| [`notifications.py`](notifications.py) | **Notificações Nativas do Desktop**: despacho assíncrono via D-Bus (`org.freedesktop.Notifications`) e `notify-send` com fallback para `QSystemTrayIcon` para avisos de conclusão de uploads, conexões e erros. |
-| [`updater.py`](updater.py) | **Verificador de Atualizações**: checagem assíncrona não-bloqueante de novas versões via API do GitHub Releases com cache em disco de 24 horas e parsing semver. |
-| [`rclone_stats.py`](rclone_stats.py) | **Coleta de Estatísticas RC**: polling periódico dos endpoints `/core/stats` e `/core/transferred` da API RC, calculando taxas de transferência (MB/s), ETA e histórico recente de uploads. |
-| [`rclone_config.py`](rclone_config.py) | **Gerenciador de Configuração do Rclone**: leitura direta do arquivo `rclone.conf`, criação assíncrona de remotos em background, teste de conectividade (`rclone about`) e reconexão automática de tokens OAuth expirados. |
-| [`rclone_settings.py`](rclone_settings.py) | **Persistência de Preferências**: carregamento e gravação em `~/.config/ducksdrive/config.json`, detecção de paleta e modo escuro/claro do sistema (KDE Plasma 6 e GNOME), persistência de `remotes_config` e ciclo de portas RC. |
-| [`filemanager_integration.py`](filemanager_integration.py) | **Integração com Gerenciadores de Arquivos**: injeção atômica de atalhos na barra lateral do Dolphin (KDE `user-places.xbel` com backup de segurança `.bak`) e gerenciadores GTK (GNOME Nautilus, XFCE Thunar, Nemo). |
-| [`i18n.py`](i18n.py) | **Internacionalização**: dicionário e função `tr()` para alternância instantânea entre Português (Brasil) e Inglês (EUA). |
+| [`ducksdrive/main.py`](ducksdrive/main.py) | **Ponto de Entrada e Ciclo de Vida**: trava de instância única com `QLockFile`, checagem de ambiente desktop e bandeja do sistema com fallback para Modo Janela no GNOME, verificação de versão mínima do Rclone (`>= 1.63.0`) e captura de sinais (`SIGINT`/`SIGTERM`). |
+| [`ducksdrive/core/rclone_daemon.py`](ducksdrive/core/rclone_daemon.py) | **Daemon de Montagem FUSE e Ciclo de Vida do Drive Virtual**: gerencia subprocessos concorrentes de montagem via `rclone mount`, aloca portas RC dinâmicas sem colisões, gera credenciais aleatórias em memória, orquestra flags VFS e executa desmontagem segura com fallback dinâmico para `fusermount3` ou `fusermount`. |
+| [`ducksdrive/ui/gui_tray.py`](ducksdrive/ui/gui_tray.py) | **Interface da Bandeja (System Tray)**: ícone da área de notificação (`QSystemTrayIcon`), menus contextuais dinâmicos, suporte a Multi-Mount, checagem de uploads pendentes em todos os daemons e diálogos de autenticação OAuth no navegador. |
+| [`ducksdrive/ui/status_popup.py`](ducksdrive/ui/status_popup.py) | **Painel Flutuante de Telemetria**: janela frameless (`Qt.Tool`) compatível com Wayland e X11, seletor de nuvem ativa, medidor de quota de armazenamento, progresso individual de arquivos, botão pausar/retomar em 1 clique e gráfico histórico de velocidade desenhado com `QPainter`. |
+| [`ducksdrive/ui/log_viewer.py`](ducksdrive/ui/log_viewer.py) | **Visualizador de Logs Integrado**: janela diagnóstica em tempo real para `ducksdrive.log` e logs individuais de cada remoto, com filtros por severidade (`ALL`, `WARN+ERR`, `ERROR`), busca textual ao vivo e botão de cópia rápida para a área de transferência. |
+| [`ducksdrive/ui/remote_settings_dialog.py`](ducksdrive/ui/remote_settings_dialog.py) | **Configurações por Remoto**: diálogo para personalização individual por drive (ponto de montagem personalizado, modo somente leitura padrão, limites de banda e flags extras como `--drive-shared-with-me`). |
+| [`ducksdrive/ui/settings_dialog.py`](ducksdrive/ui/settings_dialog.py) | **Janela de Configurações Globais**: controle visual de limites de banda (`--bwlimit`), parâmetros de cache VFS em SSD, seleção de idioma em tempo de execução, botão de checagem de atualizações e rotina de desinstalação segura. |
+| [`ducksdrive/system/notifications.py`](ducksdrive/system/notifications.py) | **Notificações Nativas do Desktop**: despacho assíncrono via D-Bus (`org.freedesktop.Notifications`) e `notify-send` com fallback para `QSystemTrayIcon` para avisos de conclusão de uploads, conexões e erros. |
+| [`ducksdrive/system/updater.py`](ducksdrive/system/updater.py) | **Verificador de Atualizações**: checagem assíncrona não-bloqueante de novas versões via API do GitHub Releases com cache em disco de 24 horas e parsing semver. |
+| [`ducksdrive/core/rclone_stats.py`](ducksdrive/core/rclone_stats.py) | **Coleta de Estatísticas RC**: polling periódico dos endpoints `/core/stats` e `/core/transferred` da API RC, calculando taxas de transferência (MB/s), ETA e histórico recente de uploads. |
+| [`ducksdrive/core/rclone_config.py`](ducksdrive/core/rclone_config.py) | **Gerenciador de Configuração do Rclone**: leitura direta do arquivo `rclone.conf`, criação assíncrona de remotos em background, teste de conectividade (`rclone about`) e reconexão automática de tokens OAuth expirados. |
+| [`ducksdrive/core/rclone_settings.py`](ducksdrive/core/rclone_settings.py) | **Persistência de Preferências**: carregamento e gravação em `~/.config/ducksdrive/config.json`, detecção de paleta e modo escuro/claro do sistema (KDE Plasma 6 e GNOME), persistência de `remotes_config` e ciclo de portas RC. |
+| [`ducksdrive/system/filemanager_integration.py`](ducksdrive/system/filemanager_integration.py) | **Integração com Gerenciadores de Arquivos**: injeção atômica de atalhos na barra lateral do Dolphin (KDE `user-places.xbel` com backup de segurança `.bak`) e gerenciadores GTK (GNOME Nautilus, XFCE Thunar, Nemo). |
+| [`ducksdrive/system/keyring_manager.py`](ducksdrive/system/keyring_manager.py) | **Integração com Chaveiro do Sistema**: armazenamento e recuperação segura da senha de criptografia do `rclone.conf` via Secret Service / `secret-tool`. |
+| [`ducksdrive/system/vfs_inhibitor.py`](ducksdrive/system/vfs_inhibitor.py) | **Inibidor de Desligamento VFS**: bloqueio temporário via `systemd-inhibit` enquanto há uploads pendentes na fila de gravação VFS. |
+| [`ducksdrive/i18n.py`](ducksdrive/i18n.py) | **Internacionalização**: dicionário e função `tr()` para alternância instantânea entre Português (Brasil) e Inglês (EUA). |
+| [`ducksdrive/resources.py`](ducksdrive/resources.py) | **Resolução de Recursos**: localização centralizada de pacotes e ícones (`ducksdrive/assets/icon.svg`) em desenvolvimento, AppImage, Flatpak e pacotes do sistema. |
 
 ## Requisitos
 
@@ -215,7 +218,7 @@ curl -Lo DucksDrive-x86_64.AppImage https://github.com/Patopatetico2-lab/ducksdr
 chmod +x DucksDrive-x86_64.AppImage
 ./DucksDrive-x86_64.AppImage
 ```
-Ou gere um localmente rodando `./build_appimage.sh`.
+Ou gere um localmente rodando `./packaging/build_appimage.sh`.
 
 ## Desinstalação
 
@@ -268,20 +271,23 @@ Designed as a modern, lightweight alternative to **Insync**, **RaiDrive**, **Rcl
 - **VFS Cache & Data Safety**: Bandwidth limiting (`--bwlimit`, applied live via RC API), SSD VFS cache control with cleaner button, and a safety check offering to **wait for uploads to finish** before unmounting or exiting.
 
 ### Architecture & Project Structure
-- [`main.py`](main.py): Application entrypoint, single-instance lock (`QLockFile`), tray detection & GNOME window mode fallback, signal handling (`SIGINT`/`SIGTERM`).
-- [`rclone_daemon.py`](rclone_daemon.py): Multi-daemon FUSE manager, dynamic RC port allocation, in-memory basic auth, VFS cache flags, and clean unmount.
-- [`gui_tray.py`](gui_tray.py): System tray icon (`QSystemTrayIcon`), dynamic menus, multi-mount orchestration, and OAuth browser flow.
-- [`status_popup.py`](status_popup.py): Frameless telemetry panel with active remote switcher, live speeds, quota bar, and rolling transfer chart (`QPainter`).
-- [`log_viewer.py`](log_viewer.py): Real-time diagnostic log viewer with log level filtering, instant text search, and clipboard export.
-- [`remote_settings_dialog.py`](remote_settings_dialog.py): Per-remote preferences dialog (custom mount paths, read-only defaults, extra flags).
-- [`settings_dialog.py`](settings_dialog.py): Global preferences dialog for bandwidth limits, VFS SSD cache, themes, language, and update checks.
-- [`notifications.py`](notifications.py): Asynchronous desktop notifications (D-Bus `org.freedesktop.Notifications`, `notify-send`, and tray fallback).
-- [`updater.py`](updater.py): Asynchronous GitHub release update checker with 24-hour cache and semver comparisons.
-- [`rclone_stats.py`](rclone_stats.py): RC API polling (`/core/stats`, `/core/transferred`), transfer telemetry parser, and ETA calculator.
-- [`rclone_config.py`](rclone_config.py): Remote listing, `rclone.conf` parser, connection tests, and OAuth reconnect.
-- [`rclone_settings.py`](rclone_settings.py): JSON preference manager, system dark/light mode detection, and RC port lifecycle.
-- [`filemanager_integration.py`](filemanager_integration.py): Sidebar bookmarks for KDE Dolphin and GTK file managers.
-- [`i18n.py`](i18n.py): Lightweight internationalization engine (PT-BR / EN-US).
+- [`ducksdrive/main.py`](ducksdrive/main.py): Application entrypoint, single-instance lock (`QLockFile`), tray detection & GNOME window mode fallback, signal handling (`SIGINT`/`SIGTERM`).
+- [`ducksdrive/core/rclone_daemon.py`](ducksdrive/core/rclone_daemon.py): Multi-daemon FUSE manager, dynamic RC port allocation, in-memory basic auth, VFS cache flags, and clean unmount.
+- [`ducksdrive/ui/gui_tray.py`](ducksdrive/ui/gui_tray.py): System tray icon (`QSystemTrayIcon`), dynamic menus, multi-mount orchestration, and OAuth browser flow.
+- [`ducksdrive/ui/status_popup.py`](ducksdrive/ui/status_popup.py): Frameless telemetry panel with active remote switcher, live speeds, quota bar, and rolling transfer chart (`QPainter`).
+- [`ducksdrive/ui/log_viewer.py`](ducksdrive/ui/log_viewer.py): Real-time diagnostic log viewer with log level filtering, instant text search, and clipboard export.
+- [`ducksdrive/ui/remote_settings_dialog.py`](ducksdrive/ui/remote_settings_dialog.py): Per-remote preferences dialog (custom mount paths, read-only defaults, extra flags).
+- [`ducksdrive/ui/settings_dialog.py`](ducksdrive/ui/settings_dialog.py): Global preferences dialog for bandwidth limits, VFS SSD cache, themes, language, and update checks.
+- [`ducksdrive/system/notifications.py`](ducksdrive/system/notifications.py): Asynchronous desktop notifications (D-Bus `org.freedesktop.Notifications`, `notify-send`, and tray fallback).
+- [`ducksdrive/system/updater.py`](ducksdrive/system/updater.py): Asynchronous GitHub release update checker with 24-hour cache and semver comparisons.
+- [`ducksdrive/core/rclone_stats.py`](ducksdrive/core/rclone_stats.py): RC API polling (`/core/stats`, `/core/transferred`), transfer telemetry parser, and ETA calculator.
+- [`ducksdrive/core/rclone_config.py`](ducksdrive/core/rclone_config.py): Remote listing, `rclone.conf` parser, connection tests, and OAuth reconnect.
+- [`ducksdrive/core/rclone_settings.py`](ducksdrive/core/rclone_settings.py): JSON preference manager, system dark/light mode detection, and RC port lifecycle.
+- [`ducksdrive/system/filemanager_integration.py`](ducksdrive/system/filemanager_integration.py): Sidebar bookmarks for KDE Dolphin and GTK file managers.
+- [`ducksdrive/system/keyring_manager.py`](ducksdrive/system/keyring_manager.py): Desktop Secret Service / `secret-tool` integration for encrypted `rclone.conf` passphrases.
+- [`ducksdrive/system/vfs_inhibitor.py`](ducksdrive/system/vfs_inhibitor.py): `systemd-inhibit` shutdown/sleep guard while VFS write-back uploads are pending.
+- [`ducksdrive/i18n.py`](ducksdrive/i18n.py): Lightweight internationalization engine (PT-BR / EN-US).
+- [`ducksdrive/resources.py`](ducksdrive/resources.py): Centralized asset and package path resolution across checkout, AppImage, Flatpak, and system installs.
 
 ### Requirements & Installation
 Requires Linux with FUSE3 and rclone 1.63+. Native packages need Python 3.10+ and PySide6 6.6+.

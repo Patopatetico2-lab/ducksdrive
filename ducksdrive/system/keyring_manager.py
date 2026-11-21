@@ -1,5 +1,5 @@
 """
-keyring_manager.py - Linux Secret Service / Keyring integration for DucksDrive.
+ducksdrive/system/keyring_manager.py - Linux Secret Service / Keyring integration for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -16,7 +16,7 @@ import shutil
 import subprocess
 from typing import Optional
 
-from rclone_config import _get_default_rclone_conf_path, get_clean_env
+from ducksdrive.core.rclone_config import _get_default_rclone_conf_path, get_clean_env
 
 logger = logging.getLogger(__name__)
 

@@ -5,6 +5,7 @@ PKG_NAME="ducksdrive"
 PKG_VER="1.1.2"
 PKG_REL="1"
 DEB_FILE="${PKG_NAME}_${PKG_VER}-${PKG_REL}_all.deb"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -20,17 +21,19 @@ mkdir -p "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "$ROOT_DIR/usr/share/doc/$PKG_NAME"
 mkdir -p "$CTRL_DIR"
 
-install -Dm644 main.py gui_tray.py status_popup.py settings_dialog.py rclone_daemon.py rclone_stats.py rclone_config.py rclone_settings.py filemanager_integration.py i18n.py log_viewer.py remote_settings_dialog.py notifications.py updater.py vfs_inhibitor.py keyring_manager.py -t "$ROOT_DIR/usr/share/$PKG_NAME/"
-install -Dm644 ./icon.svg "$ROOT_DIR/usr/share/$PKG_NAME/icon.svg"
-install -Dm644 ./icon.svg "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps/$PKG_NAME.svg"
-install -Dm644 ./LICENSE "$ROOT_DIR/usr/share/doc/$PKG_NAME/copyright"
+cp -r "$REPO_ROOT/ducksdrive" "$ROOT_DIR/usr/share/$PKG_NAME/"
+find "$ROOT_DIR/usr/share/$PKG_NAME/ducksdrive" -type d -name "__pycache__" -exec rm -rf {} +
+find "$ROOT_DIR/usr/share/$PKG_NAME/ducksdrive" -type f -name "*.pyc" -delete
+install -Dm644 "$REPO_ROOT/ducksdrive/assets/icon.svg" "$ROOT_DIR/usr/share/$PKG_NAME/icon.svg"
+install -Dm644 "$REPO_ROOT/ducksdrive/assets/icon.svg" "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps/$PKG_NAME.svg"
+install -Dm644 "$REPO_ROOT/LICENSE" "$ROOT_DIR/usr/share/doc/$PKG_NAME/copyright"
 
 cat << 'EOF' > "$ROOT_DIR/usr/bin/ducksdrive"
 #!/bin/sh
 if [ -x /usr/share/ducksdrive/venv/bin/python3 ]; then
-    exec /usr/share/ducksdrive/venv/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); import main; main.main()" "$@"
+    exec /usr/share/ducksdrive/venv/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); from ducksdrive.main import main; main()" "$@"
 fi
-exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); import main; main.main()" "$@"
+exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '/usr/share/ducksdrive'); from ducksdrive.main import main; main()" "$@"
 EOF
 chmod 755 "$ROOT_DIR/usr/bin/ducksdrive"
 
@@ -86,7 +89,8 @@ cat << 'EOF' > "$CTRL_DIR/prerm"
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-    rm -rf /usr/share/ducksdrive/venv /usr/share/ducksdrive/__pycache__ 2>/dev/null || true
+    find /usr/share/ducksdrive -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    rm -rf /usr/share/ducksdrive/venv 2>/dev/null || true
 fi
 EOF
 chmod 755 "$CTRL_DIR/prerm"

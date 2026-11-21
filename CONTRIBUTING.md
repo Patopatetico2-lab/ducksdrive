@@ -65,12 +65,12 @@ pip install -r requirements-dev.txt
 ```
 
 > [!NOTE]
-> O arquivo `requirements-dev.txt` inclui as dependências de produção do `requirements.txt` (`PySide6`, `requests`) e adiciona as ferramentas de desenvolvimento (`pytest`, `ruff`).
+> O arquivo `requirements-dev.txt` inclui as dependências de produção do `requirements.txt` (`PySide6`) e adiciona as ferramentas de desenvolvimento (`pytest`, `pytest-qt`, `ruff`, `mypy`).
 
 #### 1.3 Executando o DucksDrive Localmente
 Com o ambiente virtual ativado:
 ```bash
-python3 main.py
+python3 -m ducksdrive
 ```
 
 Para acompanhar os logs gerados em tempo real durante o desenvolvimento:
@@ -112,7 +112,7 @@ ruff check --fix .
 ```
 
 #### 2.3 Escrevendo Novos Testes
-- Todos os testes residem no diretório `tests/` (arquivo principal `tests/test_ducksdrive.py`).
+- Todos os testes residem no diretório `tests/`, organizados por camada (`tests/test_core.py`, `tests/test_system.py` e `tests/test_ui.py`), compartilhando a fixture em `tests/conftest.py`.
 - Ao adicionar novas funcionalidades ou corrigir bugs, inclua testes cobrindo o caminho feliz, casos de borda e tratamento de falhas.
 - Isole chamadas de rede e comandos externos de sistema utilizando `unittest.mock` (`patch`, `MagicMock`).
 - Para testar componentes visuais e sinais Qt, utilize a fixture de sessão `qapp`.
@@ -121,28 +121,31 @@ ruff check --fix .
 
 ### 3. Diretrizes de Código e Arquitetura
 
-O DucksDrive adota uma arquitetura modular, dividindo responsabilidades de forma desacoplada:
+O DucksDrive adota uma arquitetura modular no pacote `ducksdrive/`, dividindo responsabilidades entre núcleo (`core`), sistema (`system`) e interface (`ui`):
 
 | Módulo | Papel no Sistema |
 |---|---|
-| `main.py` | Ponto de entrada, trava de instância única (`QLockFile`), checagem de bandeja e fallback de modo janela, orquestração geral. |
-| `gui_tray.py` | Interface da bandeja do sistema (`QSystemTrayIcon`), menus contextuais, gestão do ciclo de vida das nuvens montadas. |
-| `status_popup.py` | Painel flutuante de telemetria (Wayland/X11), seletor de nuvem concorrente, quotas, progresso individual e gráfico `QPainter`. |
-| `rclone_daemon.py` | Gerenciamento de processos `rclone mount`, alocação de portas RC dinâmicas, credenciais em memória e desmontagem FUSE segura. |
-| `remote_settings_dialog.py` | Diálogo de configurações específicas por nuvem (ponto de montagem customizado, modo somente leitura, flags extras). |
-| `settings_dialog.py` | Diálogo de configurações globais do aplicativo (banda, cache VFS, tema, autostart, idioma). |
-| `log_viewer.py` | Visualizador de logs diagnósticos em tempo real com filtros por severidade, busca textual e cópia rápida. |
-| `notifications.py` | Sistema assíncrono de notificações de desktop (D-Bus `org.freedesktop.Notifications`, `notify-send` e fallback de bandeja). |
-| `updater.py` | Verificador de atualizações assíncrono via GitHub Releases com cache de 24 horas e parsing semver. |
-| `rclone_stats.py` | Polling dos endpoints RC (`/core/stats`, `/core/transferred`) e cálculo de velocidade/ETA. |
-| `rclone_config.py` | Leitura e manipulação do `rclone.conf`, testes de conectividade e fluxo de reautorização OAuth. |
-| `rclone_settings.py` | Persistência de configurações em JSON (`~/.config/ducksdrive/config.json`) e ciclo de portas RC. |
-| `filemanager_integration.py` | Criação e remoção atômica de atalhos no Dolphin (KDE), Nautilus, Thunar e Nemo. |
-| `i18n.py` | Sistema de internacionalização (PT-BR e EN-US). |
+| `ducksdrive/main.py` | Ponto de entrada, trava de instância única (`QLockFile`), checagem de bandeja e fallback de modo janela, orquestração geral. |
+| `ducksdrive/core/rclone_daemon.py` | Gerenciamento de processos `rclone mount`, alocação de portas RC dinâmicas, credenciais em memória e desmontagem FUSE segura. |
+| `ducksdrive/ui/gui_tray.py` | Interface da bandeja do sistema (`QSystemTrayIcon`), menus contextuais, gestão do ciclo de vida das nuvens montadas. |
+| `ducksdrive/ui/status_popup.py` | Painel flutuante de telemetria (Wayland/X11), seletor de nuvem concorrente, quotas, progresso individual e gráfico `QPainter`. |
+| `ducksdrive/ui/remote_settings_dialog.py` | Diálogo de configurações específicas por nuvem (ponto de montagem customizado, modo somente leitura, flags extras). |
+| `ducksdrive/ui/settings_dialog.py` | Diálogo de configurações globais do aplicativo (banda, cache VFS, tema, autostart, idioma). |
+| `ducksdrive/ui/log_viewer.py` | Visualizador de logs diagnósticos em tempo real com filtros por severidade, busca textual e cópia rápida. |
+| `ducksdrive/system/notifications.py` | Sistema assíncrono de notificações de desktop (D-Bus `org.freedesktop.Notifications`, `notify-send` e fallback de bandeja). |
+| `ducksdrive/system/updater.py` | Verificador de atualizações assíncrono via GitHub Releases com cache de 24 horas e parsing semver. |
+| `ducksdrive/core/rclone_stats.py` | Polling dos endpoints RC (`/core/stats`, `/core/transferred`) e cálculo de velocidade/ETA. |
+| `ducksdrive/core/rclone_config.py` | Leitura e manipulação do `rclone.conf`, testes de conectividade e fluxo de reautorização OAuth. |
+| `ducksdrive/core/rclone_settings.py` | Persistência de configurações em JSON (`~/.config/ducksdrive/config.json`) e ciclo de portas RC. |
+| `ducksdrive/system/filemanager_integration.py` | Criação e remoção atômica de atalhos no Dolphin (KDE), Nautilus, Thunar e Nemo. |
+| `ducksdrive/system/keyring_manager.py` | Integração com o chaveiro do sistema (Secret Service / `secret-tool`) para senhas criptografadas do `rclone.conf`. |
+| `ducksdrive/system/vfs_inhibitor.py` | Bloqueio de desligamento/suspensão via `systemd-inhibit` enquanto há uploads pendentes na fila VFS. |
+| `ducksdrive/i18n.py` | Sistema de internacionalização (PT-BR e EN-US). |
+| `ducksdrive/resources.py` | Resolução centralizada de caminhos do pacote e ativos (`ducksdrive/assets/icon.svg`). |
 
 #### Regras de Implementação
 1. **Thread Safety e Não-Bloqueio da Interface:** Nunca execute chamadas bloqueantes (I/O intensivo, downloads, requisições de rede ou subprocessos síncronos) na thread principal da GUI. Use `QThread`, workers assíncronos ou `QTimer`.
-2. **Internacionalização Obrigatória (i18n):** Qualquer string exibida ao usuário deve ser envolvida na função `tr("chave", "Texto padrão em português")`. Certifique-se de registrar a tradução em inglês no dicionário `TRANSLATIONS_EN` em `i18n.py`.
+2. **Internacionalização Obrigatória (i18n):** Qualquer string exibida ao usuário deve ser envolvida na função `tr("chave", "Texto padrão em português")`. Certifique-se de registrar a tradução em inglês no dicionário `TRANSLATIONS_EN` em `ducksdrive/i18n.py`.
 3. **Segurança de Credenciais:** As credenciais da API RC (`rclone rcd`) devem ser geradas aleatoriamente em memória (`secrets.token_urlsafe`) e nunca gravadas no disco.
 4. **Prevenção de Perda de Dados no Cache VFS:** Antes de desmontar remotos ou fechar o app, sempre inspecione a fila de uploads pendentes (`fetch_vfs_queue`). Se houver transferências pendentes, o usuário deve ser alertado.
 
@@ -248,12 +251,12 @@ pip install -r requirements-dev.txt
 ```
 
 > [!NOTE]
-> `requirements-dev.txt` installs runtime requirements from `requirements.txt` (`PySide6`, `requests`) alongside testing and linting tools (`pytest`, `ruff`).
+> `requirements-dev.txt` installs runtime requirements from `requirements.txt` (`PySide6`) alongside testing and linting tools (`pytest`, `pytest-qt`, `ruff`, `mypy`).
 
 #### 1.3 Running DucksDrive in Development Mode
 With the virtual environment activated:
 ```bash
-python3 main.py
+python3 -m ducksdrive
 ```
 
 To tail real-time debug and application logs:
@@ -295,7 +298,7 @@ ruff check --fix .
 ```
 
 #### 2.3 Adding New Tests
-- Test cases live under `tests/test_ducksdrive.py`.
+- Test cases live under `tests/`, split by layer (`tests/test_core.py`, `tests/test_system.py`, `tests/test_ui.py`) with shared fixtures in `tests/conftest.py`.
 - New features or bug fixes must include unit or integration tests covering normal flows and edge cases.
 - Use `unittest.mock` (`patch`, `MagicMock`) for external network calls and Rclone child processes.
 - Use the `qapp` session fixture for any tests that interact with Qt widgets, event loops, or signals.
@@ -304,28 +307,31 @@ ruff check --fix .
 
 ### 3. Architecture & Code Conventions
 
-DucksDrive is modular and cleanly decoupled:
+DucksDrive is organized inside the `ducksdrive/` package, cleanly separating `core`, `system`, and `ui` responsibilities:
 
 | Module | Core Responsibility |
 |---|---|
-| `main.py` | Entrypoint, single-instance lock (`QLockFile`), tray detection & window mode fallback, app lifecycle. |
-| `gui_tray.py` | System tray icon (`QSystemTrayIcon`), context menus, multi-daemon lifecycle management. |
-| `status_popup.py` | Floating telemetry dashboard (Wayland/X11), active remote selector, quota bar, rolling speed chart (`QPainter`). |
-| `rclone_daemon.py` | `rclone mount` process manager, dynamic RC port allocation, in-memory basic auth, clean FUSE unmount. |
-| `remote_settings_dialog.py` | Per-remote preferences dialog (custom mount paths, read-only defaults, extra flags). |
-| `settings_dialog.py` | Global application preferences (bandwidth limit, VFS cache settings, theme, autostart, language). |
-| `log_viewer.py` | Integrated real-time diagnostic log viewer with log level filtering, instant text search, and clipboard export. |
-| `notifications.py` | Asynchronous desktop notifications (D-Bus `org.freedesktop.Notifications`, `notify-send`, and tray fallback). |
-| `updater.py` | Asynchronous GitHub release update checker with 24-hour cache and semver comparisons. |
-| `rclone_stats.py` | RC API polling (`/core/stats`, `/core/transferred`) and speed/ETA telemetry calculation. |
-| `rclone_config.py` | Direct parser of `rclone.conf`, remote health checks, and OAuth reconnect flows. |
-| `rclone_settings.py` | JSON configuration storage (`~/.config/ducksdrive/config.json`) and RC port lifecycle. |
-| `filemanager_integration.py` | Atomic sidebar bookmark creation for KDE Dolphin, Nautilus, Thunar, and Nemo. |
-| `i18n.py` | Lightweight internationalization engine supporting PT-BR and EN-US. |
+| `ducksdrive/main.py` | Entrypoint, single-instance lock (`QLockFile`), tray detection & window mode fallback, app lifecycle. |
+| `ducksdrive/core/rclone_daemon.py` | `rclone mount` process manager, dynamic RC port allocation, in-memory basic auth, clean FUSE unmount. |
+| `ducksdrive/ui/gui_tray.py` | System tray icon (`QSystemTrayIcon`), context menus, multi-daemon lifecycle management. |
+| `ducksdrive/ui/status_popup.py` | Floating telemetry dashboard (Wayland/X11), active remote selector, quota bar, rolling speed chart (`QPainter`). |
+| `ducksdrive/ui/remote_settings_dialog.py` | Per-remote preferences dialog (custom mount paths, read-only defaults, extra flags). |
+| `ducksdrive/ui/settings_dialog.py` | Global application preferences (bandwidth limit, VFS cache settings, theme, autostart, language). |
+| `ducksdrive/ui/log_viewer.py` | Integrated real-time diagnostic log viewer with log level filtering, instant text search, and clipboard export. |
+| `ducksdrive/system/notifications.py` | Asynchronous desktop notifications (D-Bus `org.freedesktop.Notifications`, `notify-send`, and tray fallback). |
+| `ducksdrive/system/updater.py` | Asynchronous GitHub release update checker with 24-hour cache and semver comparisons. |
+| `ducksdrive/core/rclone_stats.py` | RC API polling (`/core/stats`, `/core/transferred`) and speed/ETA telemetry calculation. |
+| `ducksdrive/core/rclone_config.py` | Direct parser of `rclone.conf`, remote health checks, and OAuth reconnect flows. |
+| `ducksdrive/core/rclone_settings.py` | JSON configuration storage (`~/.config/ducksdrive/config.json`) and RC port lifecycle. |
+| `ducksdrive/system/filemanager_integration.py` | Atomic sidebar bookmark creation for KDE Dolphin, Nautilus, Thunar, and Nemo. |
+| `ducksdrive/system/keyring_manager.py` | Desktop Secret Service / `secret-tool` integration for encrypted `rclone.conf` passphrases. |
+| `ducksdrive/system/vfs_inhibitor.py` | `systemd-inhibit` shutdown/sleep guard while VFS write-back uploads are pending. |
+| `ducksdrive/i18n.py` | Lightweight internationalization engine supporting PT-BR and EN-US. |
+| `ducksdrive/resources.py` | Centralized package path and asset resolution (`ducksdrive/assets/icon.svg`). |
 
 #### Key Engineering Guidelines
 1. **Never Block the GUI Thread:** Do not perform network calls, long filesystem scans, or synchronous subprocess execution on the main Qt thread. Use `QThread`, worker objects, or `QTimer`.
-2. **Mandatory Internationalization (i18n):** All visible UI strings must use `tr("key", "Default PT text")` and have an English counterpart registered in `TRANSLATIONS_EN` in `i18n.py`.
+2. **Mandatory Internationalization (i18n):** All visible UI strings must use `tr("key", "Default PT text")` and have an English counterpart registered in `TRANSLATIONS_EN` in `ducksdrive/i18n.py`.
 3. **In-Memory RC Credentials:** API credentials (`rclone rcd`) must always be generated randomly in memory (`secrets.token_urlsafe`) and never written to disk.
 4. **Prevent VFS Upload Loss:** When unmounting or quitting, inspect the VFS upload queue (`fetch_vfs_queue`). Always prompt and offer to wait for pending uploads before shutting down daemons.
 

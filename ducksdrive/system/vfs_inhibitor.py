@@ -1,5 +1,5 @@
 """
-vfs_inhibitor.py - System shutdown & sleep inhibitor for active VFS write-back queues in DucksDrive.
+ducksdrive/system/vfs_inhibitor.py - System shutdown & sleep inhibitor for active VFS write-back queues in DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -17,9 +17,9 @@ from typing import List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from i18n import tr
-from notifications import notify_info, notify_warning
-from rclone_config import get_clean_env
+from ducksdrive.i18n import tr
+from ducksdrive.system.notifications import notify_info, notify_warning
+from ducksdrive.core.rclone_config import get_clean_env
 
 logger = logging.getLogger(__name__)
 

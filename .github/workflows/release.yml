@@ -33,7 +33,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." --hidden-import PySide6.QtSvg --noconfirm main.py
+          pyinstaller --name ducksdrive --windowed --icon=ducksdrive/assets/icon.svg --add-data "ducksdrive/assets/icon.svg:ducksdrive/assets" --paths . --hidden-import PySide6.QtSvg --noconfirm ducksdrive/__main__.py
 
       - name: Create AppDir Structure
         run: |
@@ -51,8 +51,8 @@ jobs:
           chmod +x AppDir/usr/bin/rclone
 
           # Copy icon
-          cp icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/ducksdrive.svg
-          cp icon.svg AppDir/ducksdrive.svg
+          cp ducksdrive/assets/icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/ducksdrive.svg
+          cp ducksdrive/assets/icon.svg AppDir/ducksdrive.svg
 
           # Create desktop file
           cat << 'DESKTOP' > AppDir/usr/share/applications/ducksdrive.desktop
@@ -104,7 +104,7 @@ jobs:
 
       - name: Build .deb Package
         run: |
-          bash build_deb.sh
+          bash packaging/build_deb.sh
 
       - name: Upload Debian Artifact
         uses: actions/upload-artifact@v4
@@ -153,7 +153,7 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: ducksdrive.flatpak
-          manifest-path: com.github.patopatetico2.ducksdrive.yml
+          manifest-path: packaging/flatpak/com.github.patopatetico2.ducksdrive.yml
           run-tests: false
           upload-artifact: false
 

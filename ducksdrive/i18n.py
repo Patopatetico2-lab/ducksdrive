@@ -1,5 +1,5 @@
 """
-i18n.py - Internationalization and translations module for DucksDrive.
+ducksdrive/i18n.py - Internationalization and translations module for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/

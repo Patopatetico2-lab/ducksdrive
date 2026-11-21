@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=== Building DucksDrive AppImage ==="
 
 # Check dependencies
@@ -27,7 +30,7 @@ fi
 
 # Run PyInstaller
 echo "Running PyInstaller..."
-"$PYTHON_BIN" -m PyInstaller --name ducksdrive --windowed --icon=icon.svg --add-data "icon.svg:." --hidden-import PySide6.QtSvg --noconfirm main.py
+"$PYTHON_BIN" -m PyInstaller --name ducksdrive --windowed --icon=ducksdrive/assets/icon.svg --add-data "ducksdrive/assets/icon.svg:ducksdrive/assets" --paths . --hidden-import PySide6.QtSvg --noconfirm ducksdrive/__main__.py
 
 # Create AppDir
 echo "Creating AppDir structure..."
@@ -46,8 +49,8 @@ rm rclone-v1.73.5-linux-amd64.zip
 chmod +x AppDir/usr/bin/rclone
 
 # Copy icon
-cp icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/ducksdrive.svg
-cp icon.svg AppDir/ducksdrive.svg
+cp ducksdrive/assets/icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/ducksdrive.svg
+cp ducksdrive/assets/icon.svg AppDir/ducksdrive.svg
 
 # Create desktop file
 cat << 'DESKTOP' > AppDir/usr/share/applications/ducksdrive.desktop

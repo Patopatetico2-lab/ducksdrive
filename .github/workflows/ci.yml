@@ -37,3 +37,11 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           pytest -v
+
+      - name: Verify scripts and packaging
+        run: |
+          bash -n install.sh uninstall.sh packaging/build_deb.sh packaging/build_appimage.sh
+          python -c "import ducksdrive, ducksdrive.resources; p = ducksdrive.resources.get_icon_path(); assert p and p.endswith('icon.svg'), p"
+          bash packaging/build_deb.sh
+          dpkg-deb -c ducksdrive_*_all.deb | grep -q "/usr/share/ducksdrive/ducksdrive/main.py"
+          rm -f ducksdrive_*_all.deb

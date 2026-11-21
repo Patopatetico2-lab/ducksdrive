@@ -1,5 +1,5 @@
 """
-remote_settings_dialog.py - Per-Remote Configuration Dialog for DucksDrive.
+ducksdrive/ui/remote_settings_dialog.py - Per-Remote Configuration Dialog for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -34,13 +34,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from i18n import tr
-from rclone_config import (
+from ducksdrive.i18n import tr
+from ducksdrive.core.rclone_config import (
     get_drive_client_credentials,
     get_remote_type_fast,
     update_drive_client_credentials,
 )
-from rclone_settings import (
+from ducksdrive.core.rclone_settings import (
     apply_app_theme,
     get_remote_config,
     load_config,
@@ -347,7 +347,7 @@ class RemoteSettingsDialog(QDialog):
                     tr("Não é seguro montar uma nuvem diretamente sobre '%s'. Escolha uma subpasta vazia dedicada.") % custom_mp,
                 )
                 return
-            from rclone_daemon import is_path_mounted
+            from ducksdrive.core.rclone_daemon import is_path_mounted
             if os.path.isdir(custom_mp) and not is_path_mounted(custom_mp):
                 try:
                     if os.listdir(custom_mp):

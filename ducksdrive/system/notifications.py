@@ -1,5 +1,5 @@
 """
-notifications.py - Native desktop notification manager for DucksDrive.
+ducksdrive/system/notifications.py - Native desktop notification manager for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -11,15 +11,14 @@ or the notify-send CLI with graceful fallback to QSystemTrayIcon.showMessage().
 
 import json
 import logging
-import os
 import shutil
 import subprocess
-import sys
 import threading
 from typing import Any, List, Optional
 
-from i18n import tr
-from rclone_config import get_clean_env
+from ducksdrive.i18n import tr
+from ducksdrive.core.rclone_config import get_clean_env
+from ducksdrive.resources import get_icon_path
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +49,7 @@ def _spawn_reaped(cmd: List[str]) -> bool:
 
 def _find_notification_icon() -> str:
     """Finds the absolute path to the DucksDrive icon or returns the standard themed name."""
-    candidates = [
-        os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "icon.svg"),
-        os.path.expanduser("~/.local/share/ducksdrive/icon.svg"),
-        "/usr/share/ducksdrive/icon.svg",
-        "/usr/share/icons/hicolor/scalable/apps/ducksdrive.svg",
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-    return "ducksdrive"
+    return get_icon_path() or "ducksdrive"
 
 
 def send_desktop_notification(

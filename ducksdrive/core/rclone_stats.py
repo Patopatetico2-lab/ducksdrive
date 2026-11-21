@@ -1,5 +1,5 @@
 """
-rclone_stats.py - Rclone Remote Control (RC) telemetry and statistics consumer for DucksDrive.
+ducksdrive/core/rclone_stats.py - Rclone Remote Control (RC) telemetry and statistics consumer for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -24,8 +24,8 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
-from i18n import tr
-from rclone_daemon import RCCredentials, is_path_mounted
+from ducksdrive.i18n import tr
+from ducksdrive.core.rclone_daemon import RCCredentials, is_path_mounted
 
 logger = logging.getLogger(__name__)
 

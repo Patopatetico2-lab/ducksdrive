@@ -1,5 +1,5 @@
 """
-rclone_daemon.py - Virtual drive lifecycle and FUSE mount daemon for DucksDrive.
+ducksdrive/core/rclone_daemon.py - Virtual drive lifecycle and FUSE mount daemon for DucksDrive.
 
 Part of DucksDrive: Modern Rclone GUI & Cloud Drive Client for Linux.
 Official Website: https://patopatetico2-lab.github.io/ducksdrive/
@@ -24,15 +24,15 @@ from typing import Any, Callable, List, Optional
 
 from PySide6.QtCore import QObject, Signal, Slot, QTimer, QCoreApplication, QThread
 
-from i18n import tr
-from rclone_config import (
+from ducksdrive.i18n import tr
+from ducksdrive.core.rclone_config import (
     get_clean_env,
     get_remote_type_fast,
     has_custom_drive_client_id,
     mask_command,
     supports_vfs_read_chunk_streams,
 )
-from rclone_settings import (
+from ducksdrive.core.rclone_settings import (
     _allocated_ports,
     allocate_rc_port,
     get_remote_config,
@@ -270,7 +270,7 @@ def _unpause_rc_before_stop(creds: Optional[RCCredentials]) -> None:
     if creds is None:
         return
     try:
-        from rclone_stats import rc_request
+        from ducksdrive.core.rclone_stats import rc_request
         rc_request(creds, "/core/bwlimit", {"rate": "off"}, timeout=1.5)
     except Exception:
         pass
@@ -533,7 +533,7 @@ class RcloneDaemon(QObject):
 
         # Set dynamic mount point based on remote: custom mount point or ~/CloudDrives/{clean_remote_name}
         clean_remote_name = remote_name.rstrip(":")
-        from rclone_settings import get_remote_config, load_config
+        from ducksdrive.core.rclone_settings import get_remote_config, load_config
         remote_cfg = get_remote_config(clean_remote_name)
         custom_mp = str(remote_cfg.get("custom_mount_point") or remote_cfg.get("mount_path") or "").strip()
         if custom_mp:
@@ -944,7 +944,7 @@ class RcloneDaemon(QObject):
 
         def _warmup() -> None:
             try:
-                from rclone_stats import rc_vfs_refresh
+                from ducksdrive.core.rclone_stats import rc_vfs_refresh
                 rc_vfs_refresh(creds, timeout=5.0, recursive=False, async_mode=True)
             except Exception as exc:
                 logger.debug("Mount VFS warmup skipped: %s", exc)
@@ -1103,5 +1103,5 @@ class RcloneDaemon(QObject):
         """Sends POST /vfs/refresh to active daemon via RC API. Blocking call unless async_mode=True."""
         if not self.is_running() or not self.rc_credentials:
             return False
-        from rclone_stats import rc_vfs_refresh
+        from ducksdrive.core.rclone_stats import rc_vfs_refresh
         return rc_vfs_refresh(self.rc_credentials, timeout=timeout, recursive=recursive, async_mode=async_mode)
