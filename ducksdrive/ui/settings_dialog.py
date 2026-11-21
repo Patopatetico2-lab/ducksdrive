@@ -29,13 +29,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
-    QWidget
+    QWidget,
 )
 
 from ducksdrive.core.rclone_config import TaskRunner
 from ducksdrive.core.rclone_settings import (
+    BANDWIDTH_LIMIT_PRESETS,
     CONFIG_DIR,
+    PERFORMANCE_PROFILE_PRESETS,
     apply_app_theme,
     clear_vfs_cache_files,
     get_vfs_cache_usage_bytes,
@@ -134,7 +137,14 @@ class SettingsDialog(QDialog):
         header_row.addWidget(self.version_badge)
         main_layout.addLayout(header_row)
 
-        # 1. Grupo Geral e Aparência
+        self.tabs = QTabWidget()
+
+        # Tab 1: Geral
+        tab_general = QWidget()
+        tab_general_layout = QVBoxLayout(tab_general)
+        tab_general_layout.setContentsMargins(10, 12, 10, 10)
+        tab_general_layout.setSpacing(12)
+
         general_group = QGroupBox(tr("Geral e Aparência"))
         general_outer = QVBoxLayout(general_group)
         general_outer.setContentsMargins(12, 12, 12, 12)
@@ -161,35 +171,31 @@ class SettingsDialog(QDialog):
         lang_layout.addRow(self._aligned_label(tr("Tema do Painel:")), self.theme_combo)
         general_outer.addLayout(lang_layout)
 
-        self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema operativo"))
+        self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema"))
         general_outer.addWidget(self.autostart_checkbox)
-        main_layout.addWidget(general_group)
+        tab_general_layout.addWidget(general_group)
+        tab_general_layout.addStretch()
+        self.tabs.addTab(tab_general, tr("Geral"))
 
-        # 2. Grupo Rede & Desempenho
+        # Tab 2: Desempenho e Cache
+        tab_perf = QWidget()
+        tab_perf_layout = QVBoxLayout(tab_perf)
+        tab_perf_layout.setContentsMargins(10, 12, 10, 10)
+        tab_perf_layout.setSpacing(12)
+
         net_group = QGroupBox(tr("Rede e Transferência"))
         net_layout = self._create_aligned_form(net_group)
 
         self.profile_combo = QComboBox()
         self.profile_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.profile_combo.addItem(tr("Equilibrado (Dolphin Rápido + Multi-Stream)"), "balanced")
-        self.profile_combo.addItem(tr("Downloads Grandes e Streaming (Buffer 32M / Read-Ahead 64M)"), "streaming")
-        self.profile_combo.addItem(tr("Upload Seguro (Evita Saturar a Rede / Bufferbloat)"), "safe_upload")
+        for label, value in PERFORMANCE_PROFILE_PRESETS:
+            self.profile_combo.addItem(tr(label), value)
         net_layout.addRow(self._aligned_label(tr("Perfil de Desempenho:")), self.profile_combo)
 
         self.bwlimit_combo = QComboBox()
         self.bwlimit_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
-        self.bwlimit_combo.addItem(tr("Upload 2 MB/s • Download Ilimitado"), "2M:off")
-        self.bwlimit_combo.addItem(tr("Upload 4 MB/s • Download Ilimitado (Anti-Lag)"), "4M:off")
-        self.bwlimit_combo.addItem(tr("Upload 10 MB/s • Download Ilimitado"), "10M:off")
-        self.bwlimit_combo.addItem(tr("Upload 25 MB/s • Download Ilimitado"), "25M:off")
-        self.bwlimit_combo.addItem(tr("1 MB/s (Econômico)"), "1M")
-        self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
-        self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
-        self.bwlimit_combo.addItem(tr("10 MB/s (Rápido)"), "10M")
-        self.bwlimit_combo.addItem(tr("25 MB/s (Muito Rápido)"), "25M")
-        self.bwlimit_combo.addItem(tr("50 MB/s (Máximo)"), "50M")
-        self.bwlimit_combo.addItem(tr("100 MB/s (Ultra Rápido)"), "100M")
+        for label, value in BANDWIDTH_LIMIT_PRESETS:
+            self.bwlimit_combo.addItem(tr(label), value)
         net_layout.addRow(self._aligned_label(tr("Limite de Banda:")), self.bwlimit_combo)
 
         self.transfers_spin = QSpinBox()
@@ -200,9 +206,8 @@ class SettingsDialog(QDialog):
             tr("Recomendado: 4 a 6 para Google Drive/OneDrive (valores muito altos podem causar rate-limit da API em pastas com milhares de arquivos).")
         )
         net_layout.addRow(self._aligned_label(tr("Transferências Paralelas:")), self.transfers_spin)
-        main_layout.addWidget(net_group)
+        tab_perf_layout.addWidget(net_group)
 
-        # 3. Grupo Armazenamento & Cache
         cache_group = QGroupBox(tr("Armazenamento e Cache SSD"))
         cache_layout = self._create_aligned_form(cache_group)
 
@@ -244,13 +249,20 @@ class SettingsDialog(QDialog):
         cache_usage_row.addStretch()
         cache_usage_row.addWidget(self.btn_clear_cache)
         cache_layout.addRow(self._aligned_label(tr("Uso Atual do Cache no SSD:")), cache_usage_row)
-        main_layout.addWidget(cache_group)
+        tab_perf_layout.addWidget(cache_group)
+        tab_perf_layout.addStretch()
+        self.tabs.addTab(tab_perf, tr("Desempenho e Cache"))
 
-        # 4. Grupo Segurança e Manutenção
-        maint_group = QGroupBox(tr("Segurança e Manutenção"))
-        maint_layout = QVBoxLayout(maint_group)
-        maint_layout.setContentsMargins(12, 12, 12, 12)
-        maint_layout.setSpacing(10)
+        # Tab 3: Segurança e Manutenção
+        tab_maint = QWidget()
+        tab_maint_layout = QVBoxLayout(tab_maint)
+        tab_maint_layout.setContentsMargins(10, 12, 10, 10)
+        tab_maint_layout.setSpacing(12)
+
+        keyring_group = QGroupBox(tr("Chaveiro do Sistema"))
+        keyring_layout = QVBoxLayout(keyring_group)
+        keyring_layout.setContentsMargins(12, 12, 12, 12)
+        keyring_layout.setSpacing(10)
 
         keyring_row = QHBoxLayout()
         keyring_row.setSpacing(8)
@@ -262,7 +274,13 @@ class SettingsDialog(QDialog):
         self.btn_manage_keyring.clicked.connect(self._on_manage_keyring)
         keyring_row.addWidget(self.keyring_checkbox, 1)
         keyring_row.addWidget(self.btn_manage_keyring)
-        maint_layout.addLayout(keyring_row)
+        keyring_layout.addLayout(keyring_row)
+        tab_maint_layout.addWidget(keyring_group)
+
+        maint_group = QGroupBox(tr("Diagnóstico e Sistema"))
+        maint_layout = QVBoxLayout(maint_group)
+        maint_layout.setContentsMargins(12, 12, 12, 12)
+        maint_layout.setSpacing(10)
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(8)
@@ -286,7 +304,11 @@ class SettingsDialog(QDialog):
         tools_row.addWidget(self.btn_uninstall, 1)
 
         maint_layout.addLayout(tools_row)
-        main_layout.addWidget(maint_group)
+        tab_maint_layout.addWidget(maint_group)
+        tab_maint_layout.addStretch()
+        self.tabs.addTab(tab_maint, tr("Segurança e Manutenção"))
+
+        main_layout.addWidget(self.tabs)
 
         # 5. Footer Dialog Actions (Cancel / Save only)
         btn_layout = QHBoxLayout()
@@ -301,7 +323,7 @@ class SettingsDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton(tr("Guardar Configurações"))
+        self.btn_save = QPushButton(tr("Salvar Configurações"))
         self.btn_save.setFixedHeight(32)
         self.btn_save.setMinimumWidth(160)
         self.btn_save.setDefault(True)
@@ -485,6 +507,36 @@ class SettingsDialog(QDialog):
 
         usage_col = "#5dade2" if is_dark else "#2980b9"
         self.cache_usage_label.setStyleSheet(f"font-weight: bold; color: {usage_col};")
+
+        tab_bg = "#202429" if is_dark else "#ffffff"
+        tab_bd = "#363c46" if is_dark else "#d6dce3"
+        tab_idle = "#282c33" if is_dark else "#f0f3f7"
+        tab_fg = "#aeb6bf" if is_dark else "#566573"
+        tab_sel_fg = "#ffffff" if is_dark else "#2c3e50"
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 1px solid {tab_bd};
+                border-radius: 6px;
+                background-color: {tab_bg};
+                top: -1px;
+            }}
+            QTabBar::tab {{
+                background-color: {tab_idle};
+                color: {tab_fg};
+                border: 1px solid {tab_bd};
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 6px 14px;
+                margin-right: 3px;
+                font-weight: bold;
+                font-size: 9pt;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {tab_bg};
+                color: {tab_sel_fg};
+            }}
+        """)
 
     def reject(self) -> None:
         """Restores the previously saved theme if the user cancels the dialog."""
@@ -838,18 +890,18 @@ class SettingsDialog(QDialog):
             if mount_opts_changed:
                 QMessageBox.information(
                     self,
-                    tr("Configuração Guardada"),
+                    tr("Configurações Salvas"),
                     tr("Preferências atualizadas com sucesso.\nAs alterações de cache/transferências serão aplicadas na próxima conexão.")
                 )
             else:
                 QMessageBox.information(
                     self,
-                    tr("Configuração Guardada"),
+                    tr("Configurações Salvas"),
                     tr("Preferências atualizadas e aplicadas imediatamente.")
                 )
             self.accept()
         else:
-            QMessageBox.critical(self, tr("Erro"), tr("Falha ao gravar o ficheiro de configuração."))
+            QMessageBox.critical(self, tr("Erro"), tr("Falha ao gravar o arquivo de configuração."))
 
     def _on_uninstall(self) -> None:
         """Asks for confirmation, stops active mounts, removes all app/rclone configs, caches, shortcuts, and quits."""
@@ -887,7 +939,7 @@ class SettingsDialog(QDialog):
         res = QMessageBox.question(
             self,
             tr("Desinstalar DucksDrive"),
-            tr("Tem a certeza de que deseja remover todas as configurações, montagens, atalhos e ficheiros da aplicação do DucksDrive?\n\nA aplicação será encerrada e desinstalada."),
+            tr("Tem certeza de que deseja remover todas as configurações, montagens, atalhos e arquivos do DucksDrive?\n\nO aplicativo será encerrado e desinstalado."),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -1070,7 +1122,7 @@ class SettingsDialog(QDialog):
             if appimage_path and os.path.exists(appimage_path):
                 os.remove(appimage_path)
         except Exception as e:
-            QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover alguns ficheiros:") + f"\n{e}")
+            QMessageBox.critical(self, tr("Erro"), tr("Falha ao remover alguns arquivos:") + f"\n{e}")
             return
 
         is_system_pkg = (

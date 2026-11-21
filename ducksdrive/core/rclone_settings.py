@@ -100,6 +100,42 @@ DEFAULT_REMOTE_CONFIG: Dict[str, Any] = {
     "performance_profile": "",
 }
 
+PERFORMANCE_PROFILE_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Equilibrado (Dolphin Rápido + Multi-Stream)", "balanced"),
+    ("Downloads Grandes e Streaming (Buffer 32M / Read-Ahead 64M)", "streaming"),
+    ("Upload Seguro (Evita Saturar a Rede / Bufferbloat)", "safe_upload"),
+)
+
+BANDWIDTH_LIMIT_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Ilimitado (Sem teto de banda)", "off"),
+    ("Upload 2 MB/s • Download Ilimitado", "2M:off"),
+    ("Upload 4 MB/s • Download Ilimitado (Anti-Lag)", "4M:off"),
+    ("Upload 10 MB/s • Download Ilimitado", "10M:off"),
+    ("Upload 25 MB/s • Download Ilimitado", "25M:off"),
+    ("1 MB/s (Econômico)", "1M"),
+    ("2 MB/s (Modesto)", "2M"),
+    ("5 MB/s (Equilibrado)", "5M"),
+    ("10 MB/s (Rápido)", "10M"),
+    ("25 MB/s (Muito Rápido)", "25M"),
+    ("50 MB/s (Máximo)", "50M"),
+    ("100 MB/s (Ultra Rápido)", "100M"),
+)
+
+QUICK_BANDWIDTH_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Ilimitado", "off"),
+    ("↑ 2 MB/s • ↓ Ilimitado", "2M:off"),
+    ("↑ 4 MB/s • ↓ Ilimitado", "4M:off"),
+    ("↑ 10 MB/s • ↓ Ilimitado", "10M:off"),
+    ("↑ 25 MB/s • ↓ Ilimitado", "25M:off"),
+    ("1 MB/s", "1M"),
+    ("2 MB/s", "2M"),
+    ("5 MB/s", "5M"),
+    ("10 MB/s", "10M"),
+    ("25 MB/s", "25M"),
+    ("50 MB/s", "50M"),
+    ("100 MB/s", "100M"),
+)
+
 
 _CONFIG_CACHE: Dict[str, Any] | None = None
 _CONFIG_MTIME: float | None = None

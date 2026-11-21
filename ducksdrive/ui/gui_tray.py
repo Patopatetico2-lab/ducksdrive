@@ -11,7 +11,6 @@ context menus, status notifications, and dialogs for remote management.
 
 import logging
 import os
-import re
 import time
 from typing import Any, Callable, Optional
 
@@ -30,22 +29,16 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QDialog,
-    QFormLayout,
-    QLineEdit,
     QMenu,
     QMessageBox,
     QProgressDialog,
-    QPushButton,
     QSystemTrayIcon,
-    QVBoxLayout,
     QWidget,
-    QComboBox
 )
 
 from ducksdrive.system.filemanager_integration import open_local_folder
 from ducksdrive.core.rclone_config import (
     BackgroundTask,
-    SUPPORTED_REMOTE_TYPES,
     TaskRunner,
     list_remote_names,
     RemoteCreationThread,
@@ -62,6 +55,7 @@ from ducksdrive.core.rclone_settings import (
     save_last_remote,
 )
 from ducksdrive.core.rclone_stats import StatsData, fetch_vfs_queue, rc_vfs_refresh, set_rc_bwlimit
+from ducksdrive.ui.new_remote_dialog import NewRemoteDialog
 from ducksdrive.ui.status_popup import StatusPopup
 from ducksdrive.ui.settings_dialog import SettingsDialog
 from ducksdrive.ui.log_viewer import LogViewerDialog
@@ -137,231 +131,6 @@ def get_tray_icon(state: str = "idle") -> QIcon:
     return icon
 
 
-class NewRemoteDialog(QDialog):
-    """Dialog to gather details for creating a new rclone remote with conditional parameters for non-OAuth providers."""
-    def __init__(self, parent: Optional[QWidget] = None, existing_names: Optional[list[str]] = None) -> None:
-        super().__init__(parent)
-        # Names already configured, listed by the caller in the background (no subprocess here)
-        self._existing_names = list(existing_names or [])
-        self.setWindowTitle(tr("Configurar Nova Nuvem"))
-        self.setMinimumWidth(400)
-
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText(tr("ex: meu_drive"))
-
-        self.type_combo = QComboBox()
-        for provider in SUPPORTED_REMOTE_TYPES:
-            self.type_combo.addItem(provider["label"], provider["type"])
-        self.type_combo.currentIndexChanged.connect(self._on_provider_changed)
-
-        form.addRow(tr("Nome da Nuvem:"), self.name_input)
-        form.addRow(tr("Provedor:"), self.type_combo)
-
-        # Conditional input container widget
-        self.conditional_container = QWidget()
-        self.conditional_layout = QFormLayout(self.conditional_container)
-        self.conditional_layout.setContentsMargins(0, 0, 0, 0)
-
-        # WebDAV URL field
-        self.webdav_url_input = QLineEdit()
-        self.webdav_url_input.setPlaceholderText("https://nextcloud.example.com/remote.php/dav/files/user/")
-        self.conditional_layout.addRow(tr("URL WebDAV:"), self.webdav_url_input)
-
-        # S3 Fields
-        self.s3_key_input = QLineEdit()
-        self.s3_key_input.setPlaceholderText("Access Key ID")
-        self.s3_secret_input = QLineEdit()
-        self.s3_secret_input.setPlaceholderText("Secret Access Key")
-        self.s3_secret_input.setEchoMode(QLineEdit.Password)
-        self.s3_region_input = QLineEdit()
-        self.s3_region_input.setPlaceholderText(tr("Vazio = us-east-1 / auto; ou ex: sa-east-1"))
-        self.s3_endpoint_input = QLineEdit()
-        self.s3_endpoint_input.setPlaceholderText(tr("Vazio = Amazon S3; ou endpoint MinIO/Wasabi/etc."))
-        self.conditional_layout.addRow(tr("S3 Access Key:"), self.s3_key_input)
-        self.conditional_layout.addRow(tr("S3 Secret Key:"), self.s3_secret_input)
-        self.conditional_layout.addRow(tr("S3 Region:"), self.s3_region_input)
-        self.conditional_layout.addRow(tr("S3 Endpoint:"), self.s3_endpoint_input)
-
-        # Mega Fields
-        self.mega_user_input = QLineEdit()
-        self.mega_user_input.setPlaceholderText("email@example.com")
-        self.mega_pass_input = QLineEdit()
-        self.mega_pass_input.setPlaceholderText(tr("Password"))
-        self.mega_pass_input.setEchoMode(QLineEdit.Password)
-        self.conditional_layout.addRow(tr("Mega Email:"), self.mega_user_input)
-        self.conditional_layout.addRow(tr("Mega Password:"), self.mega_pass_input)
-
-        # FTP / SFTP Fields
-        self.ftp_host_input = QLineEdit()
-        self.ftp_host_input.setPlaceholderText(tr("ftp.example.com ou ip"))
-        self.ftp_user_input = QLineEdit()
-        self.ftp_user_input.setPlaceholderText(tr("Username"))
-        self.ftp_pass_input = QLineEdit()
-        self.ftp_pass_input.setPlaceholderText(tr("Password"))
-        self.ftp_pass_input.setEchoMode(QLineEdit.Password)
-        self.conditional_layout.addRow(tr("Host:"), self.ftp_host_input)
-        self.conditional_layout.addRow(tr("User:"), self.ftp_user_input)
-        self.conditional_layout.addRow(tr("Password:"), self.ftp_pass_input)
-
-        form.addRow(self.conditional_container)
-        layout.addLayout(form)
-
-        self.btn_create = QPushButton(tr("Iniciar Autorização no Browser"))
-        self.btn_create.setStyleSheet(
-            "background-color: #3498db; color: white; border: none; padding: 8px 14px; border-radius: 4px; font-weight: bold;"
-        )
-        self.btn_create.clicked.connect(self.accept)
-        layout.addWidget(self.btn_create)
-
-        self._on_provider_changed(0)
-        self.apply_theme(str(load_config().get("theme") or "auto"))
-
-    def apply_theme(self, theme_pref: Optional[str] = None) -> None:
-        """Applies the active theme palette to the NewRemoteDialog."""
-        active_pref = theme_pref or str(load_config().get("theme") or "auto")
-        palette = apply_app_theme(active_pref)
-        if palette is not None:
-            self.setPalette(palette)
-            self.style().unpolish(self)
-            self.style().polish(self)
-            self.update()
-
-    def _on_provider_changed(self, index: int) -> None:
-        rtype = self.type_combo.currentData()
-        # Hide all conditional rows initially
-        self.conditional_layout.setRowVisible(self.webdav_url_input, False)
-        self.conditional_layout.setRowVisible(self.s3_key_input, False)
-        self.conditional_layout.setRowVisible(self.s3_secret_input, False)
-        self.conditional_layout.setRowVisible(self.s3_region_input, False)
-        self.conditional_layout.setRowVisible(self.s3_endpoint_input, False)
-        self.conditional_layout.setRowVisible(self.mega_user_input, False)
-        self.conditional_layout.setRowVisible(self.mega_pass_input, False)
-        self.conditional_layout.setRowVisible(self.ftp_host_input, False)
-        self.conditional_layout.setRowVisible(self.ftp_user_input, False)
-        self.conditional_layout.setRowVisible(self.ftp_pass_input, False)
-
-        if rtype == "webdav":
-            self.ftp_pass_input.setPlaceholderText(tr("Password"))
-            self.conditional_layout.setRowVisible(self.webdav_url_input, True)
-            self.conditional_layout.setRowVisible(self.ftp_user_input, True)
-            self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
-            self.btn_create.setText(tr("Criar Nuvem WebDAV"))
-        elif rtype == "s3":
-            self.conditional_layout.setRowVisible(self.s3_key_input, True)
-            self.conditional_layout.setRowVisible(self.s3_secret_input, True)
-            self.conditional_layout.setRowVisible(self.s3_region_input, True)
-            self.conditional_layout.setRowVisible(self.s3_endpoint_input, True)
-            self.btn_create.setText(tr("Criar Nuvem S3"))
-        elif rtype == "mega":
-            self.conditional_layout.setRowVisible(self.mega_user_input, True)
-            self.conditional_layout.setRowVisible(self.mega_pass_input, True)
-            self.btn_create.setText(tr("Criar Nuvem Mega"))
-        elif rtype in ("ftp", "sftp"):
-            self.ftp_pass_input.setPlaceholderText(
-                tr("Opcional se usar chave SSH / ssh-agent") if rtype == "sftp" else tr("Password")
-            )
-            self.conditional_layout.setRowVisible(self.ftp_host_input, True)
-            self.conditional_layout.setRowVisible(self.ftp_user_input, True)
-            self.conditional_layout.setRowVisible(self.ftp_pass_input, True)
-            self.btn_create.setText(tr("Criar Nuvem %s") % rtype.upper())
-        else:
-            self.btn_create.setText(tr("Iniciar Autorização no Browser"))
-        self.adjustSize()
-
-    def accept(self) -> None:
-        name = self.name_input.text().strip().rstrip(":")
-        if not name:
-            QMessageBox.warning(self, tr("Erro de Input"), tr("O nome da nuvem não pode estar vazio."))
-            return
-
-        if not re.match(r"^[A-Za-z0-9_-]+$", name):
-            QMessageBox.warning(
-                self,
-                tr("Erro de Input"),
-                tr("O nome da nuvem só pode conter letras, números, '-' e '_'.")
-            )
-            return
-
-        if name in self._existing_names:
-            QMessageBox.warning(self, tr("Erro de Duplicado"), tr("Já existe uma nuvem com o nome '%s'.") % name)
-            return
-
-        rtype = self.type_combo.currentData()
-        if rtype == "webdav":
-            if not (self.webdav_url_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text().strip("\r\n")):
-                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
-                return
-        elif rtype == "s3":
-            if not (self.s3_key_input.text().strip() and self.s3_secret_input.text().strip("\r\n")):
-                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
-                return
-        elif rtype == "mega":
-            if not (self.mega_user_input.text().strip() and self.mega_pass_input.text().strip("\r\n")):
-                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
-                return
-        elif rtype == "ftp":
-            if not (self.ftp_host_input.text().strip() and self.ftp_user_input.text().strip() and self.ftp_pass_input.text().strip("\r\n")):
-                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
-                return
-        elif rtype == "sftp":
-            if not (self.ftp_host_input.text().strip() and self.ftp_user_input.text().strip()):
-                QMessageBox.warning(self, tr("Erro de Input"), tr("Por favor, preencha todos os campos obrigatórios do provedor selecionado."))
-                return
-
-        super().accept()
-
-    def get_data(self) -> tuple[str, str, dict[str, str]]:
-        rtype = self.type_combo.currentData()
-        extra_params = {}
-        if rtype == "webdav":
-            url = self.webdav_url_input.text().strip()
-            user = self.ftp_user_input.text().strip()
-            password = self.ftp_pass_input.text().strip("\r\n")
-            extra_params["vendor"] = "other"
-            if url:
-                extra_params["url"] = url
-            if user:
-                extra_params["user"] = user
-            if password:
-                extra_params["pass"] = password
-        elif rtype == "s3":
-            key = self.s3_key_input.text().strip()
-            secret = self.s3_secret_input.text().strip("\r\n")
-            region = self.s3_region_input.text().strip()
-            endpoint = self.s3_endpoint_input.text().strip()
-            # A custom endpoint needs provider "Other"; without one, plain Amazon S3
-            extra_params["provider"] = "Other" if endpoint else "AWS"
-            if key:
-                extra_params["access_key_id"] = key
-            if secret:
-                extra_params["secret_access_key"] = secret
-            if region:
-                extra_params["region"] = region
-            if endpoint:
-                extra_params["endpoint"] = endpoint
-        elif rtype == "mega":
-            user = self.mega_user_input.text().strip()
-            password = self.mega_pass_input.text().strip("\r\n")
-            if user:
-                extra_params["user"] = user
-            if password:
-                extra_params["pass"] = password
-        elif rtype in ("ftp", "sftp"):
-            host = self.ftp_host_input.text().strip()
-            user = self.ftp_user_input.text().strip()
-            password = self.ftp_pass_input.text().strip("\r\n")
-            if host:
-                extra_params["host"] = host
-            if user:
-                extra_params["user"] = user
-            if password:
-                extra_params["pass"] = password
-        return self.name_input.text().strip().rstrip(":"), rtype, extra_params
-
-
 class RcloneTrayIcon(QSystemTrayIcon):
     """Main System Tray application logic."""
 
@@ -403,6 +172,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._last_notified_state: dict[str, str] = {}
         self._sync_start_transfers: dict[str, int] = {}
         self._last_menu_sig: Any = None
+        self._menu_sigs: dict[int, Any] = {}
 
         # Background runner for rclone subprocess calls (never block the GUI thread)
         self.runner = TaskRunner(self)
@@ -471,8 +241,45 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_exit.triggered.connect(self._confirm_quit)
         self._menu.addAction(self.action_exit)
 
+        # Dedicated contextual menu for StatusPopup (avoids duplicating Panel / Open Folder / Refresh actions)
+        self._popup_menu = QMenu()
+        self._popup_menu.aboutToShow.connect(self._sync_popup_menu_state)
+
+        self.popup_action_update = QAction(tr("★ Nova versão disponível!"), self)
+        self.popup_action_update.setVisible(False)
+        self.popup_action_update.triggered.connect(self._open_update_url)
+        self._popup_menu.addAction(self.popup_action_update)
+
+        self.popup_menu_remotes = self._popup_menu.addMenu(tr("Gerenciar Nuvens"))
+        self.popup_menu_remotes.aboutToShow.connect(self._on_popup_remotes_menu_about_to_show)
+        self._populate_remotes_submenu(self.popup_menu_remotes)
+
+        self.popup_action_cloud_settings = QAction(tr("Configurações da Nuvem Atual..."), self)
+        self.popup_action_cloud_settings.triggered.connect(self._open_popup_selected_remote_settings)
+        self._popup_menu.addAction(self.popup_action_cloud_settings)
+
+        self.popup_action_disconnect_current = QAction(tr("Desconectar Nuvem Atual"), self)
+        self.popup_action_disconnect_current.triggered.connect(self._unmount_popup_selected_remote)
+        self._popup_menu.addAction(self.popup_action_disconnect_current)
+
+        self._popup_menu.addSeparator()
+
+        self.popup_action_new_remote = QAction(tr("Adicionar Nova Nuvem..."), self)
+        self.popup_action_new_remote.triggered.connect(self._show_new_remote_dialog)
+        self._popup_menu.addAction(self.popup_action_new_remote)
+
+        self.popup_action_settings = QAction(tr("Configurações..."), self)
+        self.popup_action_settings.triggered.connect(self._show_settings_dialog)
+        self._popup_menu.addAction(self.popup_action_settings)
+
+        self._popup_menu.addSeparator()
+
+        self.popup_action_exit = QAction(tr("Sair"), self)
+        self.popup_action_exit.triggered.connect(self._confirm_quit)
+        self._popup_menu.addAction(self.popup_action_exit)
+
         self.setContextMenu(self._menu)
-        self.status_popup.set_tray_menu(self._menu)
+        self.status_popup.set_tray_menu(self._popup_menu)
         self.apply_theme(str(load_config().get("theme") or "auto"))
 
         for r, d in list(self.daemons.items()):
@@ -554,8 +361,11 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def notify_update_available(self, latest_ver: str, release_url: str) -> None:
         """Shows update action in menu and displays a tray message if available."""
         self._latest_release_url = release_url
-        self.action_update.setText(tr("★ Nova versão %s disponível!") % latest_ver)
+        update_label = tr("★ Nova versão %s disponível!") % latest_ver
+        self.action_update.setText(update_label)
         self.action_update.setVisible(True)
+        self.popup_action_update.setText(update_label)
+        self.popup_action_update.setVisible(True)
         if self.tray_available:
             self.showMessage(
                 APP_NAME,
@@ -575,6 +385,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         if palette is not None:
             self._menu.setPalette(palette)
             self.menu_remotes.setPalette(palette)
+            self._popup_menu.setPalette(palette)
+            self.popup_menu_remotes.setPalette(palette)
         self.status_popup.apply_theme(active_pref)
 
     def refresh_remotes(self, callback: Optional[Callable[[list[str]], None]] = None) -> None:
@@ -595,8 +407,62 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
     def _on_remotes_menu_about_to_show(self) -> None:
         """Shows the cached list instantly and refreshes it in the background."""
-        self._populate_remotes_menu()
+        self._populate_remotes_submenu(self.menu_remotes)
         self.refresh_remotes()
+
+    def _on_popup_remotes_menu_about_to_show(self) -> None:
+        """Shows the cached list in the popup's Manage Clouds submenu and refreshes in background."""
+        self._populate_remotes_submenu(self.popup_menu_remotes)
+        self.refresh_remotes()
+
+    def _get_popup_selected_remote(self) -> str:
+        """Returns the remote currently selected in StatusPopup (or active fallback)."""
+        selected = (
+            self.status_popup.current_remote_name
+            or str(self.status_popup.remote_combo.currentData() or "")
+        ).rstrip(":")
+        if not selected:
+            active_d = self.get_active_daemon()
+            selected = (active_d.current_remote or "").rstrip(":") if active_d else ""
+        return selected
+
+    def _sync_popup_menu_state(self) -> None:
+        """Synchronizes contextual actions in the StatusPopup menu before display."""
+        selected = self._get_popup_selected_remote()
+        self.popup_action_cloud_settings.setEnabled(bool(selected))
+        d = self.daemons.get(selected) if selected else None
+        is_mounted = bool(d and d.is_running())
+        self.popup_action_disconnect_current.setVisible(is_mounted)
+        self.popup_action_disconnect_current.setEnabled(is_mounted)
+        self._populate_remotes_submenu(self.popup_menu_remotes)
+
+    def _open_popup_selected_remote_settings(self) -> None:
+        remote = self._get_popup_selected_remote()
+        if remote:
+            self._show_remote_settings_dialog(remote)
+
+    def _unmount_popup_selected_remote(self) -> None:
+        remote = self._get_popup_selected_remote()
+        if remote:
+            self._unmount_remote(remote)
+
+    def _open_turbo_for_remote(self, remote_name: str) -> None:
+        """Opens the parallel Turbo Transfer dialog for the given active remote."""
+        clean = remote_name.rstrip(":")
+        d = self.daemons.get(clean)
+        if d is None:
+            return
+        from ducksdrive.ui.turbo_transfer_dialog import TurboTransferDialog
+
+        dlg = TurboTransferDialog(
+            remote_name=clean,
+            mount_point=d.mount_point,
+            daemon=d,
+            parent=self.status_popup if not self.tray_available else None,
+        )
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def shutdown_workers(self) -> None:
         """Waits for pending background rclone calls and creation threads. Call only when the app is exiting."""
@@ -808,35 +674,43 @@ class RcloneTrayIcon(QSystemTrayIcon):
         dialog.activateWindow()
 
     def _populate_remotes_menu(self, force: bool = False) -> None:
-        """Dynamically populates the 'Gerenciar Nuvens' submenu with multi-mount actions."""
+        """Populates both the tray and popup 'Gerenciar Nuvens' submenus."""
+        self._populate_remotes_submenu(self.menu_remotes, force=force)
+        if hasattr(self, "popup_menu_remotes"):
+            self._populate_remotes_submenu(self.popup_menu_remotes, force=force)
+
+    def _populate_remotes_submenu(self, target_menu: QMenu, force: bool = False) -> None:
+        """Dynamically populates a 'Gerenciar Nuvens' submenu with multi-mount actions."""
         menu_sig = (
             tuple(self._remotes_cache) if self._remotes_cache is not None else None,
             tuple((r, d.is_running(), d.state) for r, d in sorted(self.daemons.items())),
             tr("Gerenciar Nuvens"),
         )
-        if not force and self._last_menu_sig == menu_sig and not self.menu_remotes.isEmpty():
+        menu_id = id(target_menu)
+        if not force and self._menu_sigs.get(menu_id) == menu_sig and not target_menu.isEmpty():
             return
+        self._menu_sigs[menu_id] = menu_sig
         self._last_menu_sig = menu_sig
 
-        for act in self.menu_remotes.actions():
+        for act in target_menu.actions():
             if act.menu():
                 act.menu().deleteLater()
             act.deleteLater()
-        self.menu_remotes.clear()
+        target_menu.clear()
 
         remotes = self._remotes_cache
         if remotes is None:
-            loading_action = QAction(tr("Carregando nuvens..."), self.menu_remotes)
+            loading_action = QAction(tr("Carregando nuvens..."), target_menu)
             loading_action.setEnabled(False)
-            self.menu_remotes.addAction(loading_action)
-            self.menu_remotes.addSeparator()
+            target_menu.addAction(loading_action)
+            target_menu.addSeparator()
         elif remotes:
             for remote in remotes:
                 clean_r = remote.rstrip(":")
                 d = self.daemons.get(clean_r)
                 is_active = d is not None and d.is_running()
                 label = f"✓ {remote} (" + tr("Ativo") + ")" if is_active else remote
-                remote_menu = QMenu(label, self.menu_remotes)
+                remote_menu = QMenu(label, target_menu)
                 if is_active and d is not None:
                     action_open_r = QAction(tr("Abrir Pasta Local"), remote_menu)
                     action_open_r.triggered.connect(
@@ -855,6 +729,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
                         lambda checked=False, daemon_item=d: self._refresh_single_vfs(daemon_item)
                     )
                     remote_menu.addAction(action_refresh_r)
+
+                    action_turbo_r = QAction(tr("⚡ Transferência Turbo..."), remote_menu)
+                    action_turbo_r.triggered.connect(
+                        lambda checked=False, r=remote: self._open_turbo_for_remote(r)
+                    )
+                    remote_menu.addAction(action_turbo_r)
                 else:
                     action_mount = QAction(tr("Montar"), remote_menu)
                     action_mount.triggered.connect(
@@ -883,25 +763,27 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 action_delete_remote.triggered.connect(lambda checked=False, r=remote: self._request_delete_remote(r))
                 remote_menu.addAction(action_delete_remote)
 
-                self.menu_remotes.addMenu(remote_menu)
+                target_menu.addMenu(remote_menu)
 
             active_count = len(self.active_daemons())
             if active_count > 1:
-                self.menu_remotes.addSeparator()
-                action_unmount_all = QAction(tr("Desconectar Todas as Nuvens"), self.menu_remotes)
+                target_menu.addSeparator()
+                action_unmount_all = QAction(tr("Desconectar Todas as Nuvens"), target_menu)
                 action_unmount_all.triggered.connect(self._unmount_all)
-                self.menu_remotes.addAction(action_unmount_all)
+                target_menu.addAction(action_unmount_all)
 
-            self.menu_remotes.addSeparator()
+            target_menu.addSeparator()
         else:
-            empty_action = QAction(tr("Nenhuma nuvem configurada"), self.menu_remotes)
+            empty_action = QAction(tr("Nenhuma nuvem configurada"), target_menu)
             empty_action.setEnabled(False)
-            self.menu_remotes.addAction(empty_action)
-            self.menu_remotes.addSeparator()
+            target_menu.addAction(empty_action)
+            target_menu.addSeparator()
 
-        self.action_new = QAction(tr("Adicionar Nova Nuvem..."), self.menu_remotes)
-        self.action_new.triggered.connect(self._show_new_remote_dialog)
-        self.menu_remotes.addAction(self.action_new)
+        action_new = QAction(tr("Adicionar Nova Nuvem..."), target_menu)
+        action_new.triggered.connect(self._show_new_remote_dialog)
+        target_menu.addAction(action_new)
+        if target_menu is self.menu_remotes:
+            self.action_new = action_new
 
     def retranslate_ui(self) -> None:
         """Updates all tray menu labels and the floating status popup in real time when language changes."""
@@ -911,6 +793,13 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.menu_remotes.setTitle(tr("Gerenciar Nuvens"))
         self.action_settings.setText(tr("Configurações..."))
         self.action_exit.setText(tr("Sair"))
+
+        self.popup_menu_remotes.setTitle(tr("Gerenciar Nuvens"))
+        self.popup_action_cloud_settings.setText(tr("Configurações da Nuvem Atual..."))
+        self.popup_action_disconnect_current.setText(tr("Desconectar Nuvem Atual"))
+        self.popup_action_new_remote.setText(tr("Adicionar Nova Nuvem..."))
+        self.popup_action_settings.setText(tr("Configurações..."))
+        self.popup_action_exit.setText(tr("Sair"))
 
         active = self.active_daemons()
         if len(active) > 1:
@@ -1007,6 +896,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.setToolTip(status_header)
         self._populate_remotes_menu()
         self.status_popup.update_mounted_remotes()
+        self._sync_popup_menu_state()
 
         if state == "mounted":
             self.update_tray_icon("idle")

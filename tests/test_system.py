@@ -373,5 +373,11 @@ class TestI18n:
             assert tr("100 MB/s (Ultra Rápido)") == "100 MB/s (Ultra Fast)"
             assert tr("Fechar") == "Close"
             assert tr("Tamanho Máximo do Cache:") == "Max Cache Size:"
+            assert tr("Geral") == "General"
+            assert tr("Desempenho e Cache") == "Performance & Cache"
+            assert tr("Salvar Configurações") == "Save Settings"
+            assert tr("Configurações da Nuvem Atual...") == "Current Cloud Settings..."
+            assert tr("Desconectar Nuvem Atual") == "Disconnect Current Cloud"
+            assert tr("⚡ Transferência Turbo...") == "⚡ Turbo Transfer..."
         finally:
             set_language("pt_BR")

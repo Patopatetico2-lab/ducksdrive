@@ -127,8 +127,11 @@ O DucksDrive adota uma arquitetura modular no pacote `ducksdrive/`, dividindo re
 |---|---|
 | `ducksdrive/main.py` | Ponto de entrada, trava de instância única (`QLockFile`), checagem de bandeja e fallback de modo janela, orquestração geral. |
 | `ducksdrive/core/rclone_daemon.py` | Gerenciamento de processos `rclone mount`, alocação de portas RC dinâmicas, credenciais em memória e desmontagem FUSE segura. |
-| `ducksdrive/ui/gui_tray.py` | Interface da bandeja do sistema (`QSystemTrayIcon`), menus contextuais, gestão do ciclo de vida das nuvens montadas. |
-| `ducksdrive/ui/status_popup.py` | Painel flutuante de telemetria (Wayland/X11), seletor de nuvem concorrente, quotas, progresso individual e gráfico `QPainter`. |
+| `ducksdrive/ui/gui_tray.py` | Interface da bandeja do sistema (`QSystemTrayIcon`), menus contextuais da bandeja e painel, gestão das nuvens montadas. |
+| `ducksdrive/ui/status_popup.py` | Painel flutuante de telemetria (Wayland/X11), seletor de nuvem concorrente, atalho de configurações do remoto e controles rápidos. |
+| `ducksdrive/ui/popup_widgets.py` | Gráfico de velocidade `QPainter`, itens de transferência ativa/recente e worker de quota. |
+| `ducksdrive/ui/new_remote_dialog.py` | Assistente para criação de novas nuvens OAuth ou credenciais diretas. |
+| `ducksdrive/ui/turbo_transfer_dialog.py` | Diálogo e worker de Transferência Turbo paralela (`rclone copy`). |
 | `ducksdrive/ui/remote_settings_dialog.py` | Diálogo de configurações específicas por nuvem (ponto de montagem customizado, modo somente leitura, flags extras). |
 | `ducksdrive/ui/settings_dialog.py` | Diálogo de configurações globais do aplicativo (banda, cache VFS, tema, autostart, idioma). |
 | `ducksdrive/ui/log_viewer.py` | Visualizador de logs diagnósticos em tempo real com filtros por severidade, busca textual e cópia rápida. |
@@ -313,8 +316,11 @@ DucksDrive is organized inside the `ducksdrive/` package, cleanly separating `co
 |---|---|
 | `ducksdrive/main.py` | Entrypoint, single-instance lock (`QLockFile`), tray detection & window mode fallback, app lifecycle. |
 | `ducksdrive/core/rclone_daemon.py` | `rclone mount` process manager, dynamic RC port allocation, in-memory basic auth, clean FUSE unmount. |
-| `ducksdrive/ui/gui_tray.py` | System tray icon (`QSystemTrayIcon`), context menus, multi-daemon lifecycle management. |
-| `ducksdrive/ui/status_popup.py` | Floating telemetry dashboard (Wayland/X11), active remote selector, quota bar, rolling speed chart (`QPainter`). |
+| `ducksdrive/ui/gui_tray.py` | System tray icon (`QSystemTrayIcon`), tray and popup context menus, multi-daemon lifecycle management. |
+| `ducksdrive/ui/status_popup.py` | Floating telemetry dashboard (Wayland/X11), active remote selector, quick remote settings, and quick controls. |
+| `ducksdrive/ui/popup_widgets.py` | Rolling speed chart (`QPainter`), transfer/recent item widgets, and async quota worker. |
+| `ducksdrive/ui/new_remote_dialog.py` | Provider-aware wizard dialog for creating OAuth and direct-credential remotes. |
+| `ducksdrive/ui/turbo_transfer_dialog.py` | Parallel Turbo Transfer dialog and worker (`rclone copy`). |
 | `ducksdrive/ui/remote_settings_dialog.py` | Per-remote preferences dialog (custom mount paths, read-only defaults, extra flags). |
 | `ducksdrive/ui/settings_dialog.py` | Global application preferences (bandwidth limit, VFS cache settings, theme, autostart, language). |
 | `ducksdrive/ui/log_viewer.py` | Integrated real-time diagnostic log viewer with log level filtering, instant text search, and clipboard export. |

@@ -11,7 +11,6 @@ progress bars, active file info, a rolling speed history chart, and quick action
 
 import logging
 import os
-import subprocess
 import time
 import weakref
 from collections import deque
@@ -19,568 +18,49 @@ from typing import Any, Optional
 
 from ducksdrive.i18n import tr
 from ducksdrive.resources import get_icon_path
-from PySide6.QtCore import Qt, QTimer, QThread, QEvent, QPoint, Signal, Slot
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QPainter,
-    QPainterPath,
-    QLinearGradient,
-    QPen,
-    QBrush,
-    QCursor,
-    QIcon,
-)
+from PySide6.QtCore import Qt, QTimer, QEvent, QPoint, Slot
+from PySide6.QtGui import QCursor, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QDialog,
-    QFileDialog,
-    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
     QProgressBar,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
-    QScrollArea
+    QScrollArea,
 )
 
 from ducksdrive.system.filemanager_integration import open_local_folder
-from ducksdrive.core.rclone_config import TaskRunner, get_clean_env, get_rclone_path
+from ducksdrive.core.rclone_config import TaskRunner
 from ducksdrive.core.rclone_daemon import RcloneDaemon, is_path_mounted
-from ducksdrive.core.rclone_settings import is_dark_theme_active
+from ducksdrive.core.rclone_settings import QUICK_BANDWIDTH_PRESETS, is_dark_theme_active
 from ducksdrive.core.rclone_stats import (
     StatsData,
     format_bytes,
-    rc_request,
     rc_vfs_forget,
     rc_vfs_refresh,
     set_rc_bwlimit,
 )
+from ducksdrive.ui.popup_widgets import (
+    QuotaWorkerThread,
+    RecentTransferItem,
+    SpeedChartWidget,
+    TransferItem,
+    _format_transfer_item_details,
+    _quota_cache,
+)
+from ducksdrive.ui.turbo_transfer_dialog import (
+    TurboTransferDialog,
+    TurboTransferWorker,  # noqa: F401
+)
 
 logger = logging.getLogger(__name__)
-
-
-class SpeedChartWidget(QWidget):
-    """Custom lightweight line chart rendering rolling speed history peaks."""
-
-    def __init__(self, max_points: int = 30, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setMaximumHeight(80)
-        self.setMinimumHeight(60)
-        self.max_points = max_points
-        self.is_dark = False
-        self.speed_history: deque[float] = deque([0.0] * max_points, maxlen=max_points)
-
-    def add_speed_point(self, speed_mb_s: float) -> None:
-        """Appends a new speed data point and triggers a repaint only when visible."""
-        self.speed_history.append(speed_mb_s)
-        if self.isVisible():
-            self.update()
-
-    def paintEvent(self, event: Any) -> None:
-        """Renders a smooth gradient-filled line chart of transfer speeds."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        rect = self.rect()
-        width = rect.width()
-        height = rect.height()
-
-        # Background card styling
-        painter.setPen(Qt.NoPen)
-        bg_color = QColor(38, 46, 56) if self.is_dark else QColor(245, 247, 250)
-        painter.setBrush(bg_color)
-        painter.drawRoundedRect(rect, 8, 8)
-
-        if not self.speed_history or max(self.speed_history) == 0:
-            # Draw subtle empty state text
-            painter.setPen(QColor(149, 165, 166) if self.is_dark else QColor(150, 150, 150))
-            painter.setFont(QFont("Sans Serif", 9))
-            painter.drawText(rect, Qt.AlignCenter, tr("Sem velocidade de transferência ativa"))
-            painter.end()
-            return
-
-        max_speed = max(self.speed_history)
-        if max_speed < 1.0:
-            max_speed = 1.0  # Minimum scale
-
-        # Construct path for line and gradient fill
-        path = QPainterPath()
-        fill_path = QPainterPath()
-
-        points = []
-        n = len(self.speed_history)
-        for i, val in enumerate(self.speed_history):
-            x = (i / max(1, n - 1)) * (width - 10) + 5
-            y = height - 10 - (val / max_speed) * (height - 25)
-            points.append((x, y))
-
-        if points:
-            fill_path.moveTo(points[0][0], height - 5)
-            fill_path.lineTo(points[0][0], points[0][1])
-            path.moveTo(points[0][0], points[0][1])
-
-            for x, y in points[1:]:
-                path.lineTo(x, y)
-                fill_path.lineTo(x, y)
-
-            fill_path.lineTo(points[-1][0], height - 5)
-            fill_path.closeSubpath()
-
-            # Gradient fill under the curve
-            gradient = QLinearGradient(0, 0, 0, height)
-            gradient.setColorAt(0.0, QColor(41, 128, 185, 80))
-            gradient.setColorAt(1.0, QColor(41, 128, 185, 5))
-            painter.setBrush(QBrush(gradient))
-            painter.setPen(Qt.NoPen)
-            painter.drawPath(fill_path)
-
-            # Draw speed curve line
-            pen = QPen(QColor(41, 128, 185), 2)
-            pen.setCapStyle(Qt.RoundCap)
-            pen.setJoinStyle(Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
-
-        painter.end()
-
-
-# In-memory quota cache per remote to prevent UI flicker and "Quota indisponível" on transient network hiccups
-_quota_cache: dict[str, tuple[int, int]] = {}
-
-
-class QuotaWorkerThread(QThread):
-    """Background worker thread to fetch cloud storage quota without blocking UI."""
-    quota_fetched = Signal(object, object)  # total, used
-    quota_failed = Signal()
-
-    def __init__(self, credentials: Any, remote_name: str, parent: Optional[Any] = None) -> None:
-        super().__init__(parent)
-        self.credentials = credentials
-        self.remote_name = remote_name
-
-    def run(self) -> None:
-        import time
-
-        try:
-            creds = self.credentials
-            fs_arg = self.remote_name if self.remote_name.endswith(":") else f"{self.remote_name}:"
-
-            # Up to 2 attempts with a generous timeout so rate-limited remotes don't hit context canceled
-            for attempt in range(2):
-                try:
-                    status, data = rc_request(creds, "/operations/about", {"fs": fs_arg}, timeout=15.0)
-                    if status == 200 and isinstance(data, dict):
-                        total = int(data.get("total") or 0)
-                        used = int(data.get("used") or 0)
-                        if (data.get("total") is not None or data.get("used") is not None) and (total >= 0 and used >= 0):
-                            self.quota_fetched.emit(total, used)
-                            return
-                        else:
-                            break
-                except Exception as attempt_err:
-                    logger.debug("Quota attempt %d/2 failed: %s", attempt + 1, attempt_err)
-                if attempt < 1:
-                    time.sleep(2.0)
-
-            self.quota_failed.emit()
-        except Exception as e:
-            logger.debug("Failed to fetch quota: %s", e)
-            self.quota_failed.emit()
-
-
-def _format_transfer_item_details(t: dict[str, Any], default_name: str) -> tuple[str, int, str]:
-    """Formats (display_name_with_arrow, percentage, detail_text) for an active transfer item."""
-    raw_name = str(t.get("name") or default_name)
-    direction = str(t.get("direction") or "")
-    if direction == "upload":
-        prefix = "↑ "
-    elif direction == "download":
-        prefix = "↓ "
-    elif direction == "sync":
-        prefix = "⇄ "
-    else:
-        prefix = ""
-    display_name = f"{prefix}{raw_name}"
-    pct = max(0, min(100, int(t.get("percentage") or 0)))
-
-    size = int(t.get("size") or 0)
-    done_bytes = int(t.get("bytes") or 0)
-    item_speed = float(t.get("speed") if t.get("speed") is not None else (t.get("speedAvg") or 0.0))
-
-    parts: list[str] = []
-    if size > 0:
-        parts.append(f"{format_bytes(done_bytes)} / {format_bytes(size)}")
-    if item_speed > 0:
-        parts.append(f"{format_bytes(int(item_speed))}/s")
-    parts.append(f"{pct}%")
-    return display_name, pct, " • ".join(parts)
-
-
-class TransferItem(QWidget):
-    """Small widget representing a single file transfer in the list with direction, size, and speed."""
-
-    def __init__(
-        self,
-        name: str,
-        percentage: int,
-        is_dark: bool = False,
-        parent: Optional[QWidget] = None,
-        detail_text: str = "",
-    ) -> None:
-        super().__init__(parent)
-        self.file_name = name
-        self._percentage = percentage
-        self._detail_text = detail_text or f"{percentage}%"
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setSpacing(2)
-
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(6)
-
-        self.name_label = QLabel(name)
-        self.name_label.setWordWrap(False)
-        self.name_label.setToolTip(name)
-        self.detail_label = QLabel(self._detail_text)
-        self.detail_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        top_row.addWidget(self.name_label, 1)
-        top_row.addWidget(self.detail_label, 0)
-        layout.addLayout(top_row)
-
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(percentage)
-        self.progress.setFixedHeight(4)
-        self.progress.setTextVisible(False)
-        layout.addWidget(self.progress)
-        self.apply_theme(is_dark)
-
-    def apply_theme(self, is_dark: bool) -> None:
-        text_col = "#ecf0f1" if is_dark else "#2c3e50"
-        detail_col = "#95a5a6" if is_dark else "#7f8c8d"
-        self.name_label.setStyleSheet(f"font-size: 9pt; color: {text_col};")
-        self.detail_label.setStyleSheet(f"font-size: 8pt; color: {detail_col};")
-
-    def update_data(self, name: str, percentage: int, detail_text: Optional[str] = None) -> None:
-        if name != self.file_name:
-            self.file_name = name
-            self.name_label.setText(name)
-            self.name_label.setToolTip(name)
-        if percentage != self._percentage:
-            self._percentage = percentage
-            self.progress.setValue(percentage)
-        new_detail = detail_text if detail_text is not None else f"{percentage}%"
-        if new_detail != self._detail_text:
-            self._detail_text = new_detail
-            self.detail_label.setText(new_detail)
-
-
-class RecentTransferItem(QWidget):
-    """Small widget representing a completed file transfer in recent history."""
-
-    def __init__(self, name: str, size_str: str, is_dark: bool = False, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._file_name = name
-        self._size_str = size_str
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 3, 0, 3)
-        layout.setSpacing(6)
-
-        self.name_label = QLabel(f"✓  {name}")
-        self.name_label.setWordWrap(False)
-        self.name_label.setToolTip(name)
-        self.size_label = QLabel(size_str)
-        self.size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        layout.addWidget(self.name_label, 1)
-        layout.addWidget(self.size_label, 0)
-        self.apply_theme(is_dark)
-
-    def apply_theme(self, is_dark: bool) -> None:
-        name_col = "#ecf0f1" if is_dark else "#2c3e50"
-        size_col = "#95a5a6" if is_dark else "#7f8c8d"
-        self.name_label.setStyleSheet(f"font-size: 8.5pt; color: {name_col};")
-        self.size_label.setStyleSheet(f"font-size: 8pt; color: {size_col};")
-
-    def update_data(self, name: str, size_str: str) -> None:
-        if name != self._file_name:
-            self._file_name = name
-            self.name_label.setText(f"✓  {name}")
-            self.name_label.setToolTip(name)
-        if size_str != self._size_str:
-            self._size_str = size_str
-            self.size_label.setText(size_str)
-
-
-class TurboTransferWorker(QThread):
-    """Background worker executing parallel `rclone copy` outside FUSE single-stream bottlenecks."""
-
-    progress_line = Signal(str)
-    finished_transfer = Signal(bool, str)
-
-    def __init__(
-        self,
-        source: str,
-        destination: str,
-        transfers: int = 8,
-        multi_thread_streams: int = 4,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.source = source
-        self.destination = destination
-        self.transfers = max(1, min(16, int(transfers)))
-        self.multi_thread_streams = max(1, min(8, int(multi_thread_streams)))
-        self._process: Optional[subprocess.Popen[str]] = None
-        self._cancelled = False
-
-    def cancel(self) -> None:
-        self._cancelled = True
-        if self._process is not None and self._process.poll() is None:
-            try:
-                self._process.terminate()
-            except Exception:
-                pass
-
-    def run(self) -> None:
-        try:
-            rclone_bin = get_rclone_path()
-        except FileNotFoundError as exc:
-            self.finished_transfer.emit(False, tr(str(exc)))
-            return
-
-        checkers = max(8, self.transfers * 2)
-        cmd = [
-            rclone_bin,
-            "copy",
-            self.source,
-            self.destination,
-            "--transfers",
-            str(self.transfers),
-            "--checkers",
-            str(checkers),
-            "--multi-thread-streams",
-            str(self.multi_thread_streams),
-            "--fast-list",
-            "--stats",
-            "1s",
-            "--stats-one-line",
-            "-v",
-        ]
-        try:
-            self._process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=get_clean_env(),
-            )
-            last_lines: deque[str] = deque(maxlen=8)
-            if self._process.stdout is not None:
-                for raw_line in self._process.stdout:
-                    if self._cancelled:
-                        break
-                    line = raw_line.strip()
-                    if line:
-                        last_lines.append(line)
-                        self.progress_line.emit(line)
-            try:
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=2)
-
-            if self._cancelled:
-                self.finished_transfer.emit(False, tr("Transferência Turbo cancelada pelo usuário."))
-                return
-            if self._process.returncode == 0:
-                self.finished_transfer.emit(True, tr("Transferência Turbo concluída com sucesso!"))
-            else:
-                summary = "\n".join(last_lines) or (tr("Código de erro: %d") % self._process.returncode)
-                self.finished_transfer.emit(False, summary)
-        except Exception as exc:
-            self.finished_transfer.emit(False, str(exc))
-
-
-class TurboTransferDialog(QDialog):
-    """
-    Dialog for high-speed parallel folder/file copy (`rclone copy --transfers N --multi-thread-streams 4`),
-    bypassing FUSE sequential single-file overhead (up to 5.5x faster for many small files).
-    """
-
-    def __init__(
-        self,
-        remote_name: str,
-        mount_point: str,
-        daemon: Optional[RcloneDaemon] = None,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.remote_name = remote_name.rstrip(":")
-        self.mount_point = os.path.abspath(os.path.expanduser(mount_point))
-        self.daemon = daemon
-        self._worker: Optional[TurboTransferWorker] = None
-
-        self.setWindowTitle(tr("⚡ Transferência Turbo Paralela (%s)") % self.remote_name)
-        self.setMinimumWidth(520)
-        self._init_ui()
-
-    def _init_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
-
-        info_lbl = QLabel(
-            tr(
-                "Transfere pastas diretamente com múltiplos fluxos paralelos (--transfers + --multi-thread-streams), "
-                "ideal para lotes com centenas de arquivos ou arquivos gigantes sem o gargalo sequencial do FUSE."
-            )
-        )
-        info_lbl.setWordWrap(True)
-        info_lbl.setStyleSheet("font-size: 8.5pt; color: #7f8c8d;")
-        layout.addWidget(info_lbl)
-
-        form = QFormLayout()
-        form.setSpacing(8)
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem(tr("↓ Baixar da Nuvem para o PC (Download Paralelo)"), "download")
-        self.mode_combo.addItem(tr("↑ Enviar do PC para a Nuvem (Upload Paralelo)"), "upload")
-        form.addRow(tr("Direção:"), self.mode_combo)
-
-        cloud_row = QHBoxLayout()
-        self.cloud_path_edit = QLineEdit()
-        self.cloud_path_edit.setPlaceholderText(tr("Subpasta na nuvem (vazio = raiz de %s:)") % self.remote_name)
-        self.btn_browse_cloud = QPushButton(tr("Procurar..."))
-        self.btn_browse_cloud.clicked.connect(self._browse_cloud_path)
-        cloud_row.addWidget(self.cloud_path_edit, 1)
-        cloud_row.addWidget(self.btn_browse_cloud)
-        form.addRow(tr("Pasta na Nuvem:"), cloud_row)
-
-        local_row = QHBoxLayout()
-        self.local_path_edit = QLineEdit()
-        self.local_path_edit.setPlaceholderText(os.path.expanduser("~/Downloads"))
-        self.btn_browse_local = QPushButton(tr("Procurar..."))
-        self.btn_browse_local.clicked.connect(self._browse_local_path)
-        local_row.addWidget(self.local_path_edit, 1)
-        local_row.addWidget(self.btn_browse_local)
-        form.addRow(tr("Pasta no PC:"), local_row)
-
-        self.transfers_spin = QSpinBox()
-        self.transfers_spin.setRange(2, 16)
-        self.transfers_spin.setValue(8)
-        form.addRow(tr("Arquivos Simultâneos:"), self.transfers_spin)
-        layout.addLayout(form)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setFixedHeight(6)
-        self.progress_bar.hide()
-        layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel(tr("Pronto para iniciar."))
-        self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #2980b9;")
-        layout.addWidget(self.status_label)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        self.btn_close = QPushButton(tr("Fechar"))
-        self.btn_close.clicked.connect(self._on_close_or_cancel)
-        self.btn_start = QPushButton(tr("Iniciar Transferência Turbo"))
-        self.btn_start.setStyleSheet(
-            "background-color: #2980b9; color: white; border: none; padding: 6px 14px; border-radius: 5px; font-weight: bold;"
-        )
-        self.btn_start.clicked.connect(self._start_transfer)
-        btn_row.addWidget(self.btn_close)
-        btn_row.addWidget(self.btn_start)
-        layout.addLayout(btn_row)
-
-    def _browse_cloud_path(self) -> None:
-        start_dir = self.mount_point if os.path.isdir(self.mount_point) else os.path.expanduser("~")
-        chosen = QFileDialog.getExistingDirectory(self, tr("Selecionar Pasta na Nuvem"), start_dir)
-        if not chosen:
-            return
-        abs_chosen = os.path.abspath(chosen)
-        if abs_chosen == self.mount_point:
-            self.cloud_path_edit.setText("")
-        elif abs_chosen.startswith(self.mount_point + os.sep):
-            rel = os.path.relpath(abs_chosen, self.mount_point)
-            self.cloud_path_edit.setText(rel)
-        else:
-            self.cloud_path_edit.setText(chosen)
-
-    def _browse_local_path(self) -> None:
-        start_dir = self.local_path_edit.text().strip() or os.path.expanduser("~/Downloads")
-        chosen = QFileDialog.getExistingDirectory(self, tr("Selecionar Pasta no PC"), start_dir)
-        if chosen:
-            self.local_path_edit.setText(chosen)
-
-    def _resolve_endpoints(self) -> Optional[tuple[str, str, str]]:
-        mode = str(self.mode_combo.currentData() or "download")
-        local_dir = os.path.abspath(os.path.expanduser(self.local_path_edit.text().strip()))
-        if not self.local_path_edit.text().strip():
-            QMessageBox.warning(self, tr("Pasta Local Ausente"), tr("Selecione uma pasta local no seu PC."))
-            return None
-        raw_cloud = self.cloud_path_edit.text().strip()
-        if raw_cloud == self.mount_point or raw_cloud.startswith(self.mount_point + os.sep):
-            rel = os.path.relpath(raw_cloud, self.mount_point)
-            raw_cloud = "" if rel == "." else rel
-        else:
-            raw_cloud = raw_cloud.lstrip("/")
-        remote_spec = f"{self.remote_name}:{raw_cloud}" if raw_cloud else f"{self.remote_name}:"
-        if mode == "download":
-            os.makedirs(local_dir, exist_ok=True)
-            return remote_spec, local_dir, mode
-        if not os.path.isdir(local_dir):
-            QMessageBox.warning(self, tr("Pasta Ausente"), tr("O diretório %s não existe.") % local_dir)
-            return None
-        return local_dir, remote_spec, mode
-
-    def _start_transfer(self) -> None:
-        resolved = self._resolve_endpoints()
-        if not resolved:
-            return
-        src, dst, mode = resolved
-        self.btn_start.setEnabled(False)
-        self.btn_close.setText(tr("Cancelar"))
-        self.progress_bar.show()
-        self.status_label.setText(tr("Iniciando transferência paralela..."))
-
-        worker = TurboTransferWorker(src, dst, transfers=self.transfers_spin.value(), parent=self)
-        self._worker = worker
-        worker.progress_line.connect(self.status_label.setText)
-        worker.finished_transfer.connect(lambda ok, msg, m=mode: self._on_finished(ok, msg, m))
-        worker.start()
-
-    def _on_finished(self, ok: bool, msg: str, mode: str) -> None:
-        self.progress_bar.hide()
-        self.btn_start.setEnabled(True)
-        self.btn_close.setText(tr("Fechar"))
-        self.status_label.setText(msg)
-        if ok and mode == "upload" and self.daemon and self.daemon.is_running() and self.daemon.rc_credentials:
-            creds = self.daemon.rc_credentials
-            threading_runner = TaskRunner(self)
-            threading_runner.submit(lambda c=creds: rc_vfs_refresh(c, recursive=True, async_mode=True))
-
-    def _on_close_or_cancel(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.cancel()
-            return
-        self.close()
 
 
 def _get_window_icon() -> QIcon:
@@ -790,6 +270,15 @@ class StatusPopup(QWidget):
         self.remote_combo.setFixedHeight(26)
         self.remote_combo.currentIndexChanged.connect(self._on_remote_combo_changed)
         self.selector_bar.addWidget(self.remote_combo, 1)
+
+        self.btn_remote_settings = QPushButton("⚙")
+        self.btn_remote_settings.setFixedSize(26, 26)
+        self.btn_remote_settings.setCursor(Qt.PointingHandCursor)
+        self.btn_remote_settings.setToolTip(tr("Configurações da Nuvem..."))
+        self.btn_remote_settings.setEnabled(False)
+        self.btn_remote_settings.clicked.connect(self._open_current_remote_settings)
+        self.selector_bar.addWidget(self.btn_remote_settings)
+
         cloud_card_layout.addLayout(self.selector_bar)
 
         quota_layout = QVBoxLayout()
@@ -839,18 +328,8 @@ class StatusPopup(QWidget):
 
         self.combo_bwlimit = QComboBox()
         self.combo_bwlimit.setFixedHeight(26)
-        self.combo_bwlimit.addItem(tr("Ilimitado"), "off")
-        self.combo_bwlimit.addItem(tr("↑ 2 MB/s • ↓ Ilimitado"), "2M:off")
-        self.combo_bwlimit.addItem(tr("↑ 4 MB/s • ↓ Ilimitado"), "4M:off")
-        self.combo_bwlimit.addItem(tr("↑ 10 MB/s • ↓ Ilimitado"), "10M:off")
-        self.combo_bwlimit.addItem(tr("↑ 25 MB/s • ↓ Ilimitado"), "25M:off")
-        self.combo_bwlimit.addItem("1 MB/s", "1M")
-        self.combo_bwlimit.addItem("2 MB/s", "2M")
-        self.combo_bwlimit.addItem("5 MB/s", "5M")
-        self.combo_bwlimit.addItem("10 MB/s", "10M")
-        self.combo_bwlimit.addItem("25 MB/s", "25M")
-        self.combo_bwlimit.addItem("50 MB/s", "50M")
-        self.combo_bwlimit.addItem("100 MB/s", "100M")
+        for label, rate in QUICK_BANDWIDTH_PRESETS:
+            self.combo_bwlimit.addItem(tr(label), rate)
         self.combo_bwlimit.currentIndexChanged.connect(self._on_quick_bwlimit_changed)
         controls_grid.addWidget(self.combo_bwlimit, 0, 1, 1, 2)
 
@@ -1153,6 +632,7 @@ class StatusPopup(QWidget):
         self.remote_combo.setStyleSheet(combo_qss)
         self.combo_bwlimit.setStyleSheet(combo_qss)
 
+        self.btn_remote_settings.setStyleSheet(self._secondary_button_qss(font_size="10pt", padding="0", radius=5))
         self.btn_clear_inactive.setStyleSheet(self._secondary_button_qss(font_size="8pt", padding="2px 8px", radius=5))
         self.btn_refresh.setStyleSheet(self._secondary_button_qss(font_size="9pt", padding="4px 10px", radius=6))
         self.btn_turbo.setStyleSheet(self._secondary_button_qss(font_size="9pt", padding="4px 8px", radius=6))
@@ -1212,7 +692,21 @@ class StatusPopup(QWidget):
             self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
         self.lbl_cloud.setText(tr("Nuvem:"))
+        self.btn_remote_settings.setToolTip(tr("Configurações da Nuvem..."))
         self.lbl_bw.setText(tr("Banda:"))
+        current_rate = self.combo_bwlimit.currentData()
+        self.combo_bwlimit.blockSignals(True)
+        self.combo_bwlimit.clear()
+        for label, rate in QUICK_BANDWIDTH_PRESETS:
+            self.combo_bwlimit.addItem(tr(label), rate)
+        if current_rate is not None:
+            idx = self.combo_bwlimit.findData(current_rate)
+            if idx >= 0:
+                self.combo_bwlimit.setCurrentIndex(idx)
+            elif current_rate:
+                self.combo_bwlimit.addItem(tr("Personalizado (%s)") % current_rate, current_rate)
+                self.combo_bwlimit.setCurrentIndex(self.combo_bwlimit.count() - 1)
+        self.combo_bwlimit.blockSignals(False)
         self.lbl_vfs_title.setText(tr("VFS SSD:"))
         self.btn_clear_inactive.setText(tr("Limpar Inativo"))
         self.btn_clear_inactive.setToolTip(
@@ -1270,8 +764,10 @@ class StatusPopup(QWidget):
         if not remotes_to_show:
             self.remote_combo.addItem(tr("(Nenhuma nuvem conectada)"), "")
             self.remote_combo.setEnabled(False)
+            self.btn_remote_settings.setEnabled(False)
         else:
             self.remote_combo.setEnabled(len(remotes_to_show) > 1)
+            self.btn_remote_settings.setEnabled(True)
             for r in remotes_to_show:
                 d = self.daemons.get(r)
                 is_active = d.is_running() if d else False
@@ -1813,6 +1309,19 @@ class StatusPopup(QWidget):
         self.btn_open.setEnabled(is_run)
         self.btn_refresh.setEnabled(is_run)
         self.btn_turbo.setEnabled(is_run)
+
+    def _open_current_remote_settings(self) -> None:
+        """Opens per-remote configuration dialog for the currently selected cloud."""
+        remote = (self.current_remote_name or str(self.remote_combo.currentData() or "")).rstrip(":")
+        if not remote:
+            return
+        if self._tray is not None and hasattr(self._tray, "_show_remote_settings_dialog"):
+            self._tray._show_remote_settings_dialog(remote)
+            return
+        from ducksdrive.ui.remote_settings_dialog import RemoteSettingsDialog
+
+        dialog = RemoteSettingsDialog(remote, parent=self if self.window_mode else None)
+        dialog.exec()
 
     def _open_turbo_transfer(self) -> None:
         """Opens the non-blocking parallel Turbo Transfer dialog for the active cloud remote."""

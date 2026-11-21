@@ -493,3 +493,98 @@ class TestUIRegressions:
         assert src == "drive:Projetos/2026"
         assert dst == str(local_dst)
         dlg.close()
+
+    def test_popup_uses_dedicated_menu_without_redundant_actions(self, qapp):
+        from ducksdrive.core.rclone_daemon import RcloneDaemon
+        from ducksdrive.ui.gui_tray import RcloneTrayIcon
+
+        d1 = RcloneDaemon(remote_name="gdrive")
+        d1.state = "stopped"
+        tray = RcloneTrayIcon(daemon=d1, daemons={"gdrive": d1})
+
+        popup_menu = tray.status_popup.btn_menu.menu()
+        assert popup_menu is tray._popup_menu
+        assert popup_menu is not tray._menu
+
+        popup_texts = [a.text() for a in popup_menu.actions() if not a.isSeparator()]
+        assert "Abrir Painel de Transferências" not in popup_texts
+        assert "Abrir Pasta Local" not in popup_texts
+        assert "Atualizar Pastas" not in popup_texts
+        assert "Configurações da Nuvem Atual..." in popup_texts
+        assert "Gerenciar Nuvens" in popup_texts
+        assert "Configurações..." in popup_texts
+        assert "Sair" in popup_texts
+
+        tray._sync_popup_menu_state()
+        assert tray.popup_action_cloud_settings.isEnabled() is True
+        assert tray.popup_action_disconnect_current.isVisible() is False
+
+        d1.state = "mounted"
+        d1.is_running = lambda: True
+        tray._sync_popup_menu_state()
+        assert tray.popup_action_disconnect_current.isVisible() is True
+        assert tray.popup_action_disconnect_current.isEnabled() is True
+
+    def test_popup_quick_remote_settings_button_state(self, qapp):
+        from ducksdrive.core.rclone_daemon import RcloneDaemon
+        from ducksdrive.ui.status_popup import StatusPopup
+
+        popup = StatusPopup(daemon=None, window_mode=True)
+        assert popup.btn_remote_settings.isEnabled() is False
+
+        d1 = RcloneDaemon(remote_name="gdrive")
+        popup.register_daemon("gdrive", d1)
+        assert popup.btn_remote_settings.isEnabled() is True
+
+        with patch("ducksdrive.ui.remote_settings_dialog.RemoteSettingsDialog") as mock_dlg:
+            popup._open_current_remote_settings()
+            mock_dlg.assert_called_once()
+            mock_dlg.return_value.exec.assert_called_once()
+
+    def test_settings_dialog_uses_three_tabs_and_shared_presets(self, qapp, monkeypatch):
+        from ducksdrive.core.rclone_settings import BANDWIDTH_LIMIT_PRESETS, PERFORMANCE_PROFILE_PRESETS
+        from ducksdrive.ui import settings_dialog
+        from ducksdrive.ui.settings_dialog import SettingsDialog
+
+        monkeypatch.setattr(settings_dialog, "load_config", lambda: {"theme": "auto", "language": "pt_BR"})
+        monkeypatch.setattr(settings_dialog, "get_vfs_cache_usage_bytes", lambda: 0)
+
+        dlg = SettingsDialog()
+        dlg._cache_runner.wait_all(1000)
+        assert dlg.tabs.count() == 3
+        tab_titles = [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())]
+        assert tab_titles == ["Geral", "Desempenho e Cache", "Segurança e Manutenção"]
+        assert dlg.btn_save.text() == "Salvar Configurações"
+        assert dlg.profile_combo.count() == len(PERFORMANCE_PROFILE_PRESETS)
+        assert dlg.bwlimit_combo.count() == len(BANDWIDTH_LIMIT_PRESETS)
+        dlg.close()
+
+    def test_remote_settings_dialog_scrollable_and_shared_presets(self, qapp, monkeypatch):
+        from PySide6.QtWidgets import QScrollArea
+        from ducksdrive.core.rclone_settings import BANDWIDTH_LIMIT_PRESETS, PERFORMANCE_PROFILE_PRESETS
+        from ducksdrive.ui import remote_settings_dialog
+        from ducksdrive.ui.remote_settings_dialog import RemoteSettingsDialog
+
+        monkeypatch.setattr(remote_settings_dialog, "get_remote_type_fast", lambda _r: "drive")
+        monkeypatch.setattr(remote_settings_dialog, "get_drive_client_credentials", lambda _r: ("", ""))
+        monkeypatch.setattr(remote_settings_dialog, "get_remote_config", lambda _r: {})
+        monkeypatch.setattr(remote_settings_dialog, "load_config", lambda: {"theme": "auto"})
+
+        dlg = RemoteSettingsDialog("gdrive")
+        assert isinstance(dlg.scroll_area, QScrollArea)
+        assert dlg.btn_save.text() == "Salvar"
+        assert dlg.profile_combo.count() == 1 + len(PERFORMANCE_PROFILE_PRESETS)
+        assert dlg.bwlimit_combo.count() == 1 + len(BANDWIDTH_LIMIT_PRESETS)
+        dlg.close()
+
+    def test_extracted_dialogs_importable_from_new_and_legacy_paths(self):
+        from ducksdrive.ui.gui_tray import NewRemoteDialog as LegacyNewRemoteDialog
+        from ducksdrive.ui.new_remote_dialog import NewRemoteDialog
+        from ducksdrive.ui.popup_widgets import SpeedChartWidget
+        from ducksdrive.ui.status_popup import SpeedChartWidget as LegacySpeedChartWidget
+        from ducksdrive.ui.status_popup import TurboTransferDialog as LegacyTurboDialog
+        from ducksdrive.ui.turbo_transfer_dialog import TurboTransferDialog
+
+        assert NewRemoteDialog is LegacyNewRemoteDialog
+        assert TurboTransferDialog is LegacyTurboDialog
+        assert SpeedChartWidget is LegacySpeedChartWidget

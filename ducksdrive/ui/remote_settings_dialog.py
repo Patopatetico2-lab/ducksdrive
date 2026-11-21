@@ -23,12 +23,14 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -41,6 +43,8 @@ from ducksdrive.core.rclone_config import (
     update_drive_client_credentials,
 )
 from ducksdrive.core.rclone_settings import (
+    BANDWIDTH_LIMIT_PRESETS,
+    PERFORMANCE_PROFILE_PRESETS,
     apply_app_theme,
     get_remote_config,
     load_config,
@@ -70,7 +74,8 @@ class RemoteSettingsDialog(QDialog):
         self.saved = False
 
         self.setWindowTitle(tr("Configurações da Nuvem: %s") % self.remote_name)
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(560)
+        self.setMaximumHeight(640)
 
         self._init_ui()
         self._load_values()
@@ -91,7 +96,7 @@ class RemoteSettingsDialog(QDialog):
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(14)
+        main_layout.setSpacing(12)
 
         # Header with remote name and type
         header_layout = QHBoxLayout()
@@ -105,6 +110,15 @@ class RemoteSettingsDialog(QDialog):
             header_layout.addWidget(type_label)
         header_layout.addStretch()
         main_layout.addLayout(header_layout)
+
+        # Scrollable container for groups (prevents clipping on 768p / scaled screens)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_content = QWidget()
+        groups_layout = QVBoxLayout(scroll_content)
+        groups_layout.setContentsMargins(0, 0, 6, 0)
+        groups_layout.setSpacing(12)
 
         # Group 1: Mount Path & Access Mode
         mount_group = QGroupBox(tr("Ponto de Montagem e Acesso"))
@@ -124,7 +138,7 @@ class RemoteSettingsDialog(QDialog):
 
         self.ro_checkbox = QCheckBox(tr("Montar sempre como Somente Leitura (--read-only)"))
         mount_layout.addRow("", self.ro_checkbox)
-        main_layout.addWidget(mount_group)
+        groups_layout.addWidget(mount_group)
 
         # Group 2: Custom Flags
         flags_group = QGroupBox(tr("Flags e Parâmetros Avançados do Rclone"))
@@ -152,7 +166,7 @@ class RemoteSettingsDialog(QDialog):
         hint_label.setWordWrap(True)
         flags_layout.addWidget(hint_label)
 
-        main_layout.addWidget(flags_group)
+        groups_layout.addWidget(flags_group)
 
         # Group 2b: Google Drive Custom OAuth Client ID (Anti Rate-Limit)
         if self.remote_type == "drive":
@@ -183,7 +197,7 @@ class RemoteSettingsDialog(QDialog):
             )
             guide_row.addWidget(self.btn_client_id_guide)
             oauth_layout.addLayout(guide_row)
-            main_layout.addWidget(oauth_group)
+            groups_layout.addWidget(oauth_group)
         else:
             self.drive_oauth_status_label = None
             self.client_id_edit = None
@@ -197,25 +211,14 @@ class RemoteSettingsDialog(QDialog):
 
         self.profile_combo = QComboBox()
         self.profile_combo.addItem(tr("Herdar configuração global"), "")
-        self.profile_combo.addItem(tr("Equilibrado (Dolphin Rápido + Multi-Stream)"), "balanced")
-        self.profile_combo.addItem(tr("Downloads Grandes e Streaming (Buffer 32M / Read-Ahead 64M)"), "streaming")
-        self.profile_combo.addItem(tr("Upload Seguro (Evita Saturar a Rede / Bufferbloat)"), "safe_upload")
+        for label, value in PERFORMANCE_PROFILE_PRESETS:
+            self.profile_combo.addItem(tr(label), value)
         perf_layout.addRow(tr("Perfil de Desempenho:"), self.profile_combo)
 
         self.bwlimit_combo = QComboBox()
         self.bwlimit_combo.addItem(tr("Herdar configuração global"), "")
-        self.bwlimit_combo.addItem(tr("Ilimitado (Sem teto de banda)"), "off")
-        self.bwlimit_combo.addItem(tr("Upload 2 MB/s • Download Ilimitado"), "2M:off")
-        self.bwlimit_combo.addItem(tr("Upload 4 MB/s • Download Ilimitado (Anti-Lag)"), "4M:off")
-        self.bwlimit_combo.addItem(tr("Upload 10 MB/s • Download Ilimitado"), "10M:off")
-        self.bwlimit_combo.addItem(tr("Upload 25 MB/s • Download Ilimitado"), "25M:off")
-        self.bwlimit_combo.addItem(tr("1 MB/s (Econômico)"), "1M")
-        self.bwlimit_combo.addItem(tr("2 MB/s (Modesto)"), "2M")
-        self.bwlimit_combo.addItem(tr("5 MB/s (Equilibrado)"), "5M")
-        self.bwlimit_combo.addItem(tr("10 MB/s (Rápido)"), "10M")
-        self.bwlimit_combo.addItem(tr("25 MB/s (Muito Rápido)"), "25M")
-        self.bwlimit_combo.addItem(tr("50 MB/s (Máximo)"), "50M")
-        self.bwlimit_combo.addItem(tr("100 MB/s (Ultra Rápido)"), "100M")
+        for label, value in BANDWIDTH_LIMIT_PRESETS:
+            self.bwlimit_combo.addItem(tr(label), value)
         perf_layout.addRow(tr("Limite de Banda:"), self.bwlimit_combo)
 
         self.cache_spin = QSpinBox()
@@ -225,7 +228,11 @@ class RemoteSettingsDialog(QDialog):
         self.cache_spin.setValue(0)
         perf_layout.addRow(tr("Tamanho Máximo do Cache:"), self.cache_spin)
 
-        main_layout.addWidget(perf_group)
+        groups_layout.addWidget(perf_group)
+        groups_layout.addStretch()
+
+        self.scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(self.scroll_area, 1)
 
         # Action buttons
         btn_layout = QHBoxLayout()
@@ -235,7 +242,8 @@ class RemoteSettingsDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton(tr("Guardar"))
+        self.btn_save = QPushButton(tr("Salvar"))
+        self.btn_save.setDefault(True)
         self.btn_save.clicked.connect(self._on_save)
         self.btn_save.setStyleSheet(
             "background-color: #3498db; color: white; border: none; padding: 6px 16px; border-radius: 4px; font-weight: bold;"
@@ -411,4 +419,4 @@ class RemoteSettingsDialog(QDialog):
             self.remote_cfg = updated_cfg
             self.accept()
         else:
-            QMessageBox.critical(self, tr("Erro"), tr("Falha ao gravar o ficheiro de configuração."))
+            QMessageBox.critical(self, tr("Erro"), tr("Falha ao gravar o arquivo de configuração."))
