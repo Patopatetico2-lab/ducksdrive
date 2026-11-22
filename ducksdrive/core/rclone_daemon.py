@@ -14,6 +14,7 @@ import base64
 import glob
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -220,15 +221,33 @@ def unescape_mount_path(p: str) -> str:
     )
 
 
+_RCLONE_LOG_RE = re.compile(r"^rclone-(.+)-(\d+)\.log$")
+
+
+def compute_reconnect_backoff_ms(attempt: int) -> int:
+    """Computes capped exponential backoff delay in milliseconds (3s, 6s, 12s, 24s, 30s)."""
+    return min(30000, 3000 * (2 ** max(0, int(attempt) - 1)))
+
+
 def prune_old_logs(keep: int = 5) -> None:
-    """Keeps only the `keep` most recent per-mount rclone logs in LOG_DIR."""
+    """Keeps the `keep` most recent per-mount rclone logs for each remote separately in LOG_DIR."""
+    if keep < 0:
+        keep = 0
     try:
-        files = sorted(glob.glob(os.path.join(LOG_DIR, "rclone-*.log")), key=os.path.getmtime, reverse=True)
-        for old in files[keep:]:
-            try:
-                os.remove(old)
-            except OSError:
-                pass
+        groups: dict[str, list[str]] = {}
+        for path in glob.glob(os.path.join(LOG_DIR, "rclone-*.log")):
+            base = os.path.basename(path)
+            m = _RCLONE_LOG_RE.match(base)
+            key = m.group(1) if m else "__other__"
+            groups.setdefault(key, []).append(path)
+
+        for group_files in groups.values():
+            group_files.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
+            for old in group_files[keep:]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
     except Exception as exc:
         logger.debug("Failed to prune old rclone logs: %s", exc)
 
@@ -407,6 +426,11 @@ class RcloneDaemon(QObject):
         self._retry_pending = False
         self._startup_start_time = 0.0
         self._log_file: Optional[Any] = None
+        self._integration_runner: Optional[Any] = None
+        self._user_stopped: bool = False
+        self._crash_reconnect_attempts: int = 0
+        self._max_crash_reconnect_attempts: int = 5
+        self._last_mount_params: Optional[tuple[str, Optional[List[str]], bool]] = None
 
         # Asynchronous shutdown bookkeeping (see stop_async / stop)
         self._stop_worker: Optional[_TeardownWorker] = None
@@ -462,6 +486,48 @@ class RcloneDaemon(QObject):
                     self.stop_async()
                     return
                 logger.error("Rclone mount process died unexpectedly in background!")
+                from ducksdrive.core.rclone_settings import load_config
+
+                auto_reconnect = bool(load_config().get("auto_reconnect", True))
+                if (
+                    auto_reconnect
+                    and not self._user_stopped
+                    and self.current_remote
+                    and self._crash_reconnect_attempts < self._max_crash_reconnect_attempts
+                ):
+                    self._crash_reconnect_attempts += 1
+                    delay_ms = compute_reconnect_backoff_ms(self._crash_reconnect_attempts)
+                    failed_remote = self.current_remote
+                    failed_ro = self.current_read_only
+                    failed_args = list(self.current_extra_args) if self.current_extra_args else None
+                    logger.warning(
+                        "Auto-reconnecting dropped mount '%s' in %.1fs (attempt %d/%d)...",
+                        failed_remote,
+                        delay_ms / 1000.0,
+                        self._crash_reconnect_attempts,
+                        self._max_crash_reconnect_attempts,
+                    )
+
+                    def _retry_crash() -> None:
+                        self.start(
+                            failed_remote,
+                            extra_args=failed_args,
+                            read_only=failed_ro,
+                            startup_timeout=30.0,
+                            retry_on_timeout=3,
+                        )
+
+                    def _on_stopped_crash() -> None:
+                        if self._retry_pending:
+                            self._schedule_retry(delay_ms, _retry_crash)
+
+                    self.stop_async(on_done=_on_stopped_crash, user_initiated=False)
+                    if self.state != "stopped":
+                        self._retry_pending = True
+                    else:
+                        self._schedule_retry(delay_ms, _retry_crash)
+                    return
+
                 # stop_async() flips the state to 'unmounting' right away, so this check cannot re-trigger
                 # while the (background) teardown runs. The error state is applied once it finishes.
                 self._stop_then_fail(tr("Rclone mount process died unexpectedly."))
@@ -479,7 +545,7 @@ class RcloneDaemon(QObject):
             self._set_state("error")
             self.mount_error.emit(message)
 
-        self.stop_async(on_done=_report)
+        self.stop_async(on_done=_report, user_initiated=False)
 
     def start(
         self,
@@ -502,13 +568,14 @@ class RcloneDaemon(QObject):
             bool: True if the mount was started (or queued behind a running shutdown), False otherwise.
         """
         self._cancel_retry_timer()
+        self._user_stopped = False
 
         if self.state in ("mounted", "starting", "unmounting") or self.is_running():
             # Never block the GUI waiting for the old mount to go away: shut it down in the
             # background and start the requested remote as soon as that finishes.
             logger.info("Another mount is active. Stopping current mount before starting '%s'", remote_name)
             self._pending_start = (remote_name, extra_args, read_only, startup_timeout, retry_on_timeout)
-            self.stop_async(on_done=self._run_pending_start)
+            self.stop_async(on_done=self._run_pending_start, user_initiated=False)
             return True
 
         if hasattr(self, "_startup_timer") and self._startup_timer:
@@ -870,7 +937,7 @@ class RcloneDaemon(QObject):
                         if self._retry_pending:
                             self._schedule_retry(retry_delay_ms, _retry_on_net)
 
-                    self.stop_async(on_done=_on_stopped_net)
+                    self.stop_async(on_done=_on_stopped_net, user_initiated=False)
                     if self.state != "stopped":
                         self._retry_pending = True
                     else:
@@ -884,6 +951,12 @@ class RcloneDaemon(QObject):
 
             if is_path_mounted(self.mount_point):
                 _dispose_startup_timer()
+                self._crash_reconnect_attempts = 0
+                self._last_mount_params = (
+                    remote_name,
+                    list(extra_args) if extra_args else None,
+                    read_only,
+                )
                 self._set_state("mounted")
                 self._warm_mount_cache()
                 return
@@ -913,7 +986,7 @@ class RcloneDaemon(QObject):
                         if self._retry_pending:
                             self._schedule_retry(retry_delay_ms, _retry_start)
 
-                    self.stop_async(on_done=_on_stopped_timeout)
+                    self.stop_async(on_done=_on_stopped_timeout, user_initiated=False)
                     if self.state != "stopped":
                         self._retry_pending = True
                     else:
@@ -1024,7 +1097,7 @@ class RcloneDaemon(QObject):
         worker.deleteLater()
         self._finish_stop(unmounted)
 
-    def stop_async(self, on_done: Optional[Callable[[], None]] = None) -> None:
+    def stop_async(self, on_done: Optional[Callable[[], None]] = None, user_initiated: bool = True) -> None:
         """
         Stops the mount without blocking the GUI thread.
 
@@ -1033,6 +1106,10 @@ class RcloneDaemon(QObject):
         is called on the GUI thread right after the 'stopped' state is published, so several
         callers can safely wait on the same shutdown.
         """
+        if user_initiated:
+            self._user_stopped = True
+            self._crash_reconnect_attempts = 0
+            self._last_mount_params = None
         self._cancel_retry_timer()
         if on_done is not self._run_pending_start:
             self._pending_start = None
@@ -1067,6 +1144,9 @@ class RcloneDaemon(QObject):
         Returns:
             bool: True if stopped and unmounted cleanly.
         """
+        self._user_stopped = True
+        self._crash_reconnect_attempts = 0
+        self._last_mount_params = None
         self._cancel_retry_timer()
         self._pending_start = None
         self._stop_callbacks = [cb for cb in self._stop_callbacks if cb != self._run_pending_start]

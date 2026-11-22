@@ -173,6 +173,11 @@ class SettingsDialog(QDialog):
 
         self.autostart_checkbox = QCheckBox(tr("Iniciar DucksDrive automaticamente com o sistema"))
         general_outer.addWidget(self.autostart_checkbox)
+
+        self.auto_reconnect_checkbox = QCheckBox(
+            tr("Reconectar nuvens automaticamente após suspensão ou queda de rede")
+        )
+        general_outer.addWidget(self.auto_reconnect_checkbox)
         tab_general_layout.addWidget(general_group)
         tab_general_layout.addStretch()
         self.tabs.addTab(tab_general, tr("Geral"))
@@ -389,6 +394,7 @@ class SettingsDialog(QDialog):
         self._on_vfs_mode_changed()
 
         self.autostart_checkbox.setChecked(bool(self.config.get("autostart", True)))
+        self.auto_reconnect_checkbox.setChecked(bool(self.config.get("auto_reconnect", True)))
 
         lang = str(self.config.get("language", "pt_BR"))
         index = self.lang_combo.findData(lang)
@@ -875,6 +881,7 @@ class SettingsDialog(QDialog):
         self.config["transfers"] = transfers
         self.config["vfs_cache_mode"] = vfs_mode
         self.config["autostart"] = autostart
+        self.config["auto_reconnect"] = self.auto_reconnect_checkbox.isChecked()
         self.config["use_system_keyring"] = use_keyring
         self.config["language"] = language
         self.config["theme"] = theme

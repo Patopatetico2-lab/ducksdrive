@@ -245,17 +245,23 @@ class TransferItem(QWidget):
 class RecentTransferItem(QWidget):
     """Small widget representing a completed file transfer in recent history."""
 
+    clicked = Signal(str)
+
     def __init__(self, name: str, size_str: str, is_dark: bool = False, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._file_name = name
         self._size_str = size_str
+        self.setObjectName("RecentTransferItem")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(tr("Clique para abrir '%s' no gerenciador de arquivos") % name)
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 3, 0, 3)
+        layout.setContentsMargins(4, 3, 4, 3)
         layout.setSpacing(6)
 
         self.name_label = QLabel(f"✓  {name}")
         self.name_label.setWordWrap(False)
-        self.name_label.setToolTip(name)
         self.size_label = QLabel(size_str)
         self.size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -266,6 +272,11 @@ class RecentTransferItem(QWidget):
     def apply_theme(self, is_dark: bool) -> None:
         name_col = "#ecf0f1" if is_dark else "#2c3e50"
         size_col = "#95a5a6" if is_dark else "#7f8c8d"
+        hover_bg = "rgba(255, 255, 255, 0.06)" if is_dark else "rgba(52, 152, 219, 0.10)"
+        self.setStyleSheet(
+            f"QWidget#RecentTransferItem {{ border-radius: 4px; }}"
+            f" QWidget#RecentTransferItem:hover {{ background-color: {hover_bg}; }}"
+        )
         self.name_label.setStyleSheet(f"font-size: 8.5pt; color: {name_col};")
         self.size_label.setStyleSheet(f"font-size: 8pt; color: {size_col};")
 
@@ -273,7 +284,14 @@ class RecentTransferItem(QWidget):
         if name != self._file_name:
             self._file_name = name
             self.name_label.setText(f"✓  {name}")
-            self.name_label.setToolTip(name)
+            self.setToolTip(tr("Clique para abrir '%s' no gerenciador de arquivos") % name)
         if size_str != self._size_str:
             self._size_str = size_str
             self.size_label.setText(size_str)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self._file_name)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)

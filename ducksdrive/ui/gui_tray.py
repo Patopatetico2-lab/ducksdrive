@@ -28,7 +28,9 @@ from PySide6.QtGui import (
     QPixmap
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
+    QFileDialog,
     QMenu,
     QMessageBox,
     QProgressDialog,
@@ -44,6 +46,8 @@ from ducksdrive.core.rclone_config import (
     RemoteCreationThread,
     delete_remote,
     check_remote_connection,
+    create_public_link,
+    get_provider_web_url,
     reconnect_remote,
 )
 from ducksdrive.core.rclone_daemon import RcloneDaemon, is_path_mounted
@@ -173,6 +177,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._sync_start_transfers: dict[str, int] = {}
         self._last_menu_sig: Any = None
         self._menu_sigs: dict[int, Any] = {}
+        self._last_error_time: float = 0.0
+        self._last_error_msg: str = ""
+        self._progress_box: Optional[QMessageBox] = None
+        self._quit_dialog_open: bool = False
+        self._is_shutting_down: bool = False
+        self.action_new: Optional[QAction] = None
 
         # Background runner for rclone subprocess calls (never block the GUI thread)
         self.runner = TaskRunner(self)
@@ -253,6 +263,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.popup_menu_remotes = self._popup_menu.addMenu(tr("Gerenciar Nuvens"))
         self.popup_menu_remotes.aboutToShow.connect(self._on_popup_remotes_menu_about_to_show)
         self._populate_remotes_submenu(self.popup_menu_remotes)
+
+        self.popup_action_copy_link = QAction(tr("Copiar Link Compartilhável..."), self)
+        self.popup_action_copy_link.triggered.connect(self._copy_popup_selected_remote_link)
+        self._popup_menu.addAction(self.popup_action_copy_link)
+
+        self.popup_action_open_web = QAction(tr("Abrir na Web"), self)
+        self.popup_action_open_web.triggered.connect(self._open_popup_selected_remote_web)
+        self._popup_menu.addAction(self.popup_action_open_web)
 
         self.popup_action_cloud_settings = QAction(tr("Configurações da Nuvem Atual..."), self)
         self.popup_action_cloud_settings.triggered.connect(self._open_popup_selected_remote_settings)
@@ -432,9 +450,80 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.popup_action_cloud_settings.setEnabled(bool(selected))
         d = self.daemons.get(selected) if selected else None
         is_mounted = bool(d and d.is_running())
+        self.popup_action_copy_link.setVisible(is_mounted)
+        self.popup_action_copy_link.setEnabled(is_mounted)
+        web_url = get_provider_web_url(selected) if selected else None
+        self.popup_action_open_web.setVisible(bool(web_url))
+        self.popup_action_open_web.setEnabled(bool(web_url))
         self.popup_action_disconnect_current.setVisible(is_mounted)
         self.popup_action_disconnect_current.setEnabled(is_mounted)
         self._populate_remotes_submenu(self.popup_menu_remotes)
+
+    def _copy_popup_selected_remote_link(self) -> None:
+        remote = self._get_popup_selected_remote()
+        if remote:
+            self._copy_share_link_for_remote(remote)
+
+    def _open_popup_selected_remote_web(self) -> None:
+        remote = self._get_popup_selected_remote()
+        if not remote:
+            return
+        web_url = get_provider_web_url(remote)
+        if web_url:
+            QDesktopServices.openUrl(QUrl(web_url))
+
+    def _copy_share_link_for_remote(self, remote_name: str) -> None:
+        """Prompts for a file inside the mounted cloud drive and copies its public rclone link."""
+        clean_r = remote_name.rstrip(":")
+        d = self.daemons.get(clean_r)
+        if d is None or not d.is_running():
+            return
+        mount_abs = os.path.abspath(os.path.expanduser(d.mount_point))
+        chosen, _ = QFileDialog.getOpenFileName(
+            None,
+            tr("Selecionar Arquivo para Link Compartilhável (%s)") % clean_r,
+            mount_abs,
+        )
+        if not chosen:
+            return
+        chosen_abs = os.path.abspath(chosen)
+        try:
+            inside_mount = os.path.commonpath([mount_abs, chosen_abs]) == mount_abs
+        except ValueError:
+            inside_mount = False
+        if not inside_mount:
+            QMessageBox.warning(
+                None,
+                tr("Caminho Inválido"),
+                tr("Selecione um arquivo dentro da pasta montada em:\n%s") % mount_abs,
+            )
+            return
+        rel = os.path.relpath(chosen_abs, mount_abs)
+        rel_path = "" if rel == "." else rel.replace(os.sep, "/")
+        self.runner.submit(
+            create_public_link,
+            clean_r,
+            rel_path,
+            callback=lambda res, r=clean_r, target_rel=(rel_path or clean_r): self._on_public_link_created(
+                r, target_rel, res
+            ),
+        )
+
+    def _on_public_link_created(self, remote_name: str, target_label: str, result: Any) -> None:
+        if not isinstance(result, tuple) or len(result) != 2:
+            return
+        ok, payload = result
+        if ok:
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(payload)
+            send_desktop_notification(
+                APP_NAME,
+                tr("Link de '%s' copiado para a área de transferência!") % target_label,
+                fallback_tray=self if self.tray_available else None,
+            )
+        else:
+            QMessageBox.warning(None, tr("Link Compartilhável"), str(payload))
 
     def _open_popup_selected_remote_settings(self) -> None:
         remote = self._get_popup_selected_remote()
@@ -661,13 +750,15 @@ class RcloneTrayIcon(QSystemTrayIcon):
                 if res == QMessageBox.StandardButton.Yes:
                     self._safe_unmount_daemon(d, lambda r=clean_r: self._mount_remote(r))
 
-    def _show_log_viewer_dialog(self) -> None:
+    def _show_log_viewer_dialog(self, initial_level: Optional[str] = None) -> None:
         """Opens the diagnostic log viewer dialog."""
         if self._log_viewer_dialog is not None and self._log_viewer_dialog.isVisible():
+            if initial_level:
+                self._log_viewer_dialog.set_level_filter(initial_level)
             self._log_viewer_dialog.raise_()
             self._log_viewer_dialog.activateWindow()
             return
-        dialog = LogViewerDialog(parent=None)
+        dialog = LogViewerDialog(parent=None, initial_level=initial_level)
         self._log_viewer_dialog = dialog
         dialog.show()
         dialog.raise_()
@@ -693,8 +784,9 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self._last_menu_sig = menu_sig
 
         for act in target_menu.actions():
-            if act.menu():
-                act.menu().deleteLater()
+            submenu = act.menu()
+            if submenu is not None:
+                submenu.deleteLater()
             act.deleteLater()
         target_menu.clear()
 
@@ -735,6 +827,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
                         lambda checked=False, r=remote: self._open_turbo_for_remote(r)
                     )
                     remote_menu.addAction(action_turbo_r)
+
+                    action_copy_link = QAction(tr("Copiar Link Compartilhável..."), remote_menu)
+                    action_copy_link.triggered.connect(
+                        lambda checked=False, r=remote: self._copy_share_link_for_remote(r)
+                    )
+                    remote_menu.addAction(action_copy_link)
                 else:
                     action_mount = QAction(tr("Montar"), remote_menu)
                     action_mount.triggered.connect(
@@ -747,6 +845,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
                         lambda checked=False, r=remote: self._mount_remote(r, read_only=True)
                     )
                     remote_menu.addAction(action_mount_ro)
+
+                web_url = get_provider_web_url(remote)
+                if web_url:
+                    action_web = QAction(tr("Abrir na Web"), remote_menu)
+                    action_web.triggered.connect(
+                        lambda checked=False, u=web_url: QDesktopServices.openUrl(QUrl(u))
+                    )
+                    remote_menu.addAction(action_web)
 
                 remote_menu.addSeparator()
                 action_cfg = QAction(tr("Configurações da Nuvem..."), remote_menu)
@@ -795,6 +901,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
         self.action_exit.setText(tr("Sair"))
 
         self.popup_menu_remotes.setTitle(tr("Gerenciar Nuvens"))
+        self.popup_action_copy_link.setText(tr("Copiar Link Compartilhável..."))
+        self.popup_action_open_web.setText(tr("Abrir na Web"))
         self.popup_action_cloud_settings.setText(tr("Configurações da Nuvem Atual..."))
         self.popup_action_disconnect_current.setText(tr("Desconectar Nuvem Atual"))
         self.popup_action_new_remote.setText(tr("Adicionar Nova Nuvem..."))
@@ -1442,7 +1550,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
             return
         self._progress_box = None
         try:
-            progress.rejected.disconnect(self._creation_thread.cancel)
+            if self._creation_thread is not None:
+                progress.rejected.disconnect(self._creation_thread.cancel)
         except (RuntimeError, TypeError):
             pass
         progress.close()

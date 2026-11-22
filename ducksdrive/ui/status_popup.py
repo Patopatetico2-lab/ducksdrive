@@ -109,8 +109,9 @@ class StatusPopup(QWidget):
 
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.is_paused = False
+        self.is_pinned = False
 
-        self._last_quota_update = 0
+        self._last_quota_update: float = 0.0
         self._quota_remote: Optional[str] = None
         self._quota_timer = QTimer(self)
         self._quota_timer.setInterval(10 * 60 * 1000)  # 10 minutes cache
@@ -119,6 +120,7 @@ class StatusPopup(QWidget):
 
         self._quota_worker: Optional[QuotaWorkerThread] = None
         self._old_quota_workers: list[QuotaWorkerThread] = []
+        self._log_viewer_dialog: Optional[Any] = None
         self._last_quota_values: Optional[tuple[int, int]] = None
         self._pause_runner = TaskRunner(self)
         self._pause_busy = False
@@ -126,6 +128,7 @@ class StatusPopup(QWidget):
         self._theme_pref: Optional[str] = None
         self._applied_theme_state: Optional[tuple[bool, str, str]] = None
         self._latest_stats: Optional[StatsData] = None
+        self._remote_speed_history: dict[str, deque[float]] = {}
         self._drag_pos: Optional[QPoint] = None
         self._user_moved = False
 
@@ -223,7 +226,7 @@ class StatusPopup(QWidget):
         main_layout.setContentsMargins(14, 12, 14, 14)
         main_layout.setSpacing(10)
 
-        # 1. Header (Title left • Status badge, Menu, Close right)
+        # 1. Header (Title left • Status badge, Menu, Pin, Close right)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
@@ -239,6 +242,16 @@ class StatusPopup(QWidget):
         self.btn_menu.setFixedHeight(24)
         self.btn_menu.setCursor(Qt.PointingHandCursor)
         header_layout.addWidget(self.btn_menu)
+
+        self.btn_pin = QPushButton("📌")
+        self.btn_pin.setCheckable(True)
+        self.btn_pin.setFixedSize(24, 24)
+        self.btn_pin.setCursor(Qt.PointingHandCursor)
+        self.btn_pin.setToolTip(tr("Fixar painel na tela (não fechar ao clicar fora)"))
+        self.btn_pin.toggled.connect(self._on_pin_toggled)
+        header_layout.addWidget(self.btn_pin)
+        if self.window_mode:
+            self.btn_pin.hide()
 
         self.btn_close = QPushButton("✕")
         self.btn_close.setFixedSize(24, 24)
@@ -312,6 +325,13 @@ class StatusPopup(QWidget):
         """)
         self.lbl_inhibitor_banner.hide()
         main_layout.addWidget(self.lbl_inhibitor_banner)
+
+        # Clickable Error Banner (opens LogViewer filtered to ERROR)
+        self.btn_error_banner = QPushButton()
+        self.btn_error_banner.setCursor(Qt.PointingHandCursor)
+        self.btn_error_banner.clicked.connect(self._open_error_logs)
+        self.btn_error_banner.hide()
+        main_layout.addWidget(self.btn_error_banner)
 
         # 3. Network & VFS Cache Controls Card (aligned grid)
         self.controls_card = QFrame()
@@ -595,6 +615,47 @@ class StatusPopup(QWidget):
             }}
         """)
 
+        pin_checked_bg = "#2980b9"
+        pin_checked_bd = "#3498db"
+        self.btn_pin.setStyleSheet(f"""
+            QPushButton {{
+                background: {close_bg};
+                color: {close_fg};
+                border: 1px solid {card_border};
+                border-radius: 12px;
+                font-size: 8.5pt;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background: {"#39404a" if self.is_dark else "#e3e7ed"};
+            }}
+            QPushButton:checked {{
+                background: {pin_checked_bg};
+                color: white;
+                border-color: {pin_checked_bd};
+            }}
+        """)
+
+        err_bg = "#4a1c20" if self.is_dark else "#fdecea"
+        err_fg = "#ff8585" if self.is_dark else "#a93226"
+        err_bd = "#78282f" if self.is_dark else "#f5b7b1"
+        err_hv = "#5e2328" if self.is_dark else "#fadbd8"
+        self.btn_error_banner.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {err_bg};
+                color: {err_fg};
+                border: 1px solid {err_bd};
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 8.5pt;
+                padding: 6px 10px;
+                text-align: center;
+            }}
+            QPushButton:hover {{
+                background-color: {err_hv};
+            }}
+        """)
+
         self.btn_menu.setStyleSheet(f"""
             QPushButton {{
                 background-color: {close_bg};
@@ -664,7 +725,8 @@ class StatusPopup(QWidget):
         if self.isVisible():
             self.chart_widget.update()
         for i in range(self.scroll_layout.count()):
-            w = self.scroll_layout.itemAt(i).widget()
+            item = self.scroll_layout.itemAt(i)
+            w = item.widget() if item is not None else None
             if isinstance(w, (TransferItem, RecentTransferItem)):
                 w.apply_theme(self.is_dark)
 
@@ -690,6 +752,11 @@ class StatusPopup(QWidget):
         self.btn_menu.setText(tr("Menu"))
         if self.window_mode:
             self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
+        self.btn_pin.setToolTip(
+            tr("Painel fixado (clique para desafixar)")
+            if self.is_pinned
+            else tr("Fixar painel na tela (não fechar ao clicar fora)")
+        )
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
         self.lbl_cloud.setText(tr("Nuvem:"))
         self.btn_remote_settings.setToolTip(tr("Configurações da Nuvem..."))
@@ -724,6 +791,10 @@ class StatusPopup(QWidget):
         self.btn_turbo.setToolTip(
             tr("Transferência Turbo Paralela (baixar ou enviar pastas com múltiplos fluxos simultâneos)")
         )
+        if self._latest_stats is not None and self._latest_stats.is_online and self._latest_stats.errors_count > 0:
+            self.btn_error_banner.setText(
+                tr("⚠️ %d erro(s) na sincronização — Ver Logs") % self._latest_stats.errors_count
+            )
         active_daemon = self.get_active_daemon()
         if active_daemon and active_daemon.is_running():
             self._apply_status_badge_ui(True)
@@ -1186,9 +1257,13 @@ class StatusPopup(QWidget):
 
     def _render_stats(self, stats: StatsData) -> None:
         """Renders the telemetry snapshot into visible popup widgets."""
-        def clear_transfers():
+        def _item_widget(index: int) -> Optional[QWidget]:
+            item = self.scroll_layout.itemAt(index)
+            return item.widget() if item is not None else None
+
+        def clear_transfers() -> None:
             for i in reversed(range(self.scroll_layout.count())):
-                widget = self.scroll_layout.itemAt(i).widget()
+                widget = _item_widget(i)
                 if isinstance(widget, (TransferItem, RecentTransferItem)):
                     self.scroll_layout.removeWidget(widget)
                     widget.deleteLater()
@@ -1201,6 +1276,14 @@ class StatusPopup(QWidget):
             else:
                 self.speed_value.setText(stats.speed_str)
             self.eta_value.setText(stats.eta_str)
+
+            if getattr(stats, "errors_count", 0) > 0:
+                self.btn_error_banner.setText(
+                    tr("⚠️ %d erro(s) na sincronização — Ver Logs") % stats.errors_count
+                )
+                self.btn_error_banner.show()
+            else:
+                self.btn_error_banner.hide()
 
             clean_remote = (self.daemon.current_remote or "Drive").rstrip(":")
             self.title_label.setText(f"<b>{clean_remote}</b>")
@@ -1221,14 +1304,14 @@ class StatusPopup(QWidget):
                 self.empty_label.hide()
                 # Remove any leftover recent transfer widgets while active transfers are running
                 for i in reversed(range(self.scroll_layout.count())):
-                    w = self.scroll_layout.itemAt(i).widget()
+                    w = _item_widget(i)
                     if isinstance(w, RecentTransferItem):
                         self.scroll_layout.removeWidget(w)
                         w.deleteLater()
 
                 existing_widgets: list[TransferItem] = []
                 for i in range(self.scroll_layout.count()):
-                    w = self.scroll_layout.itemAt(i).widget()
+                    w = _item_widget(i)
                     if isinstance(w, TransferItem):
                         existing_widgets.append(w)
 
@@ -1246,14 +1329,14 @@ class StatusPopup(QWidget):
             else:
                 # Remove active transfer widgets
                 for i in reversed(range(self.scroll_layout.count())):
-                    w = self.scroll_layout.itemAt(i).widget()
+                    w = _item_widget(i)
                     if isinstance(w, TransferItem):
                         self.scroll_layout.removeWidget(w)
                         w.deleteLater()
 
                 if stats.vfs_queue_count > 0:
                     for i in reversed(range(self.scroll_layout.count())):
-                        w = self.scroll_layout.itemAt(i).widget()
+                        w = _item_widget(i)
                         if isinstance(w, RecentTransferItem):
                             self.scroll_layout.removeWidget(w)
                             w.deleteLater()
@@ -1265,7 +1348,7 @@ class StatusPopup(QWidget):
 
                     existing_recent: list[RecentTransferItem] = []
                     for i in range(self.scroll_layout.count()):
-                        w = self.scroll_layout.itemAt(i).widget()
+                        w = _item_widget(i)
                         if isinstance(w, RecentTransferItem):
                             existing_recent.append(w)
 
@@ -1276,6 +1359,7 @@ class StatusPopup(QWidget):
                             existing_recent[idx].update_data(name, size_str)
                         else:
                             item = RecentTransferItem(name, size_str, is_dark=self.is_dark)
+                            item.clicked.connect(self._on_recent_item_clicked)
                             self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
 
                     for extra_w in existing_recent[len(stats.recent_transfers):]:
@@ -1302,6 +1386,7 @@ class StatusPopup(QWidget):
             self.lbl_vfs_info.setStyleSheet(f"font-size: 8.5pt; color: {muted_col};")
             self.lbl_vfs_info.setText(tr("Desconectado"))
             self.lbl_inhibitor_banner.hide()
+            self.btn_error_banner.hide()
             clear_transfers()
 
         self._apply_pause_button_ui()
@@ -1309,6 +1394,76 @@ class StatusPopup(QWidget):
         self.btn_open.setEnabled(is_run)
         self.btn_refresh.setEnabled(is_run)
         self.btn_turbo.setEnabled(is_run)
+
+    def _on_pin_toggled(self, checked: bool) -> None:
+        self.is_pinned = bool(checked)
+        self.btn_pin.setToolTip(
+            tr("Painel fixado (clique para desafixar)")
+            if self.is_pinned
+            else tr("Fixar painel na tela (não fechar ao clicar fora)")
+        )
+
+    def _open_error_logs(self) -> None:
+        """Opens the diagnostic log viewer pre-filtered to ERROR severity."""
+        if self._tray is not None and hasattr(self._tray, "_show_log_viewer_dialog"):
+            self._tray._show_log_viewer_dialog(initial_level="error_only")
+            return
+        from ducksdrive.ui.log_viewer import LogViewerDialog
+
+        if self._log_viewer_dialog is not None and self._log_viewer_dialog.isVisible():
+            self._log_viewer_dialog.set_level_filter("error_only")
+            self._log_viewer_dialog.raise_()
+            self._log_viewer_dialog.activateWindow()
+            return
+        dlg = LogViewerDialog(parent=self if self.window_mode else None, initial_level="error_only")
+        self._log_viewer_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _on_recent_item_clicked(self, relative_name: str) -> None:
+        """Opens a recently synced file or its parent folder inside the local mount point."""
+        active_d = self.get_active_daemon()
+        if active_d is None or not active_d.mount_point:
+            return
+        mount_abs = os.path.abspath(os.path.expanduser(active_d.mount_point))
+        clean_rel = (relative_name or "").lstrip("/")
+        candidate = os.path.abspath(os.path.join(mount_abs, clean_rel)) if clean_rel else mount_abs
+        try:
+            inside_mount = os.path.commonpath([mount_abs, candidate]) == mount_abs
+        except ValueError:
+            inside_mount = False
+
+        if inside_mount and os.path.exists(candidate):
+            target = candidate
+        elif inside_mount and os.path.exists(os.path.dirname(candidate)):
+            target = os.path.dirname(candidate)
+        else:
+            target = mount_abs
+
+        if os.path.exists(target) or is_path_mounted(mount_abs):
+            open_local_folder(target)
+
+    def _should_auto_close_on_deactivate(self) -> bool:
+        if self.window_mode or self.is_pinned or not self.isVisible():
+            return False
+        if QApplication.activePopupWidget() is not None or QApplication.activeModalWidget() is not None:
+            return False
+        menu = self.btn_menu.menu()
+        if menu is not None and menu.isVisible():
+            return False
+        for combo in (self.remote_combo, self.combo_bwlimit):
+            view = combo.view()
+            if view is not None and view.isVisible():
+                return False
+        return True
+
+    def changeEvent(self, event: Any) -> None:
+        """Auto-closes floating popup when clicking outside, unless pinned or using menus."""
+        if event.type() in (QEvent.Type.WindowDeactivate, QEvent.Type.ActivationChange):
+            if not self.isActiveWindow() and self._should_auto_close_on_deactivate():
+                self.close()
+        super().changeEvent(event)
 
     def _open_current_remote_settings(self) -> None:
         """Opens per-remote configuration dialog for the currently selected cloud."""

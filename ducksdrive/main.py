@@ -27,12 +27,14 @@ from PySide6.QtCore import QObject, Slot, QTimer, QLockFile
 from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QSystemTrayIcon
 
 from ducksdrive.core.rclone_config import TaskRunner, get_clean_env
-from ducksdrive.core.rclone_daemon import RcloneDaemon
+from ducksdrive.core.rclone_daemon import RcloneDaemon, is_path_mounted
 from ducksdrive.core.rclone_settings import (
     CONFIG_DIR,
     _sync_autostart,
     apply_app_theme,
+    get_auto_mount_remotes,
     load_config,
+    save_active_remotes,
     save_config,
     save_last_remote,
     set_system_default_palette,
@@ -42,6 +44,7 @@ from ducksdrive.core.rclone_stats import RcloneStatsPoller
 from ducksdrive.system.filemanager_integration import integrate_mount, clean_integration
 from ducksdrive.ui.gui_tray import RcloneTrayIcon, get_app_icon
 from ducksdrive.system.notifications import notify_connection_lost
+from ducksdrive.system.power_monitor import SystemPowerMonitor
 from ducksdrive.system.updater import UpdateCheckWorker
 
 # Configure logging (Stream + RotatingFileHandler in ~/.local/share/ducksdrive/ducksdrive.log)
@@ -79,7 +82,7 @@ def get_rclone_version() -> Optional[tuple[int, int, int]]:
         )
         match = re.search(r"rclone v?(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9.-]+)?", result.stdout)
         if match:
-            return tuple(map(int, match.groups()))
+            return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
     except Exception as e:
         logger.error("Could not determine rclone version: %s", e)
     return None
@@ -110,6 +113,11 @@ class RcloneAppController(QObject):
         self.runner = TaskRunner(self)
         self._is_shutting_down = False
         self._threads_cleaned = False
+        self._remotes_before_sleep: Dict[str, tuple[bool, Optional[List[str]]]] = {}
+        self._wake_timer: Optional[QTimer] = None
+        self.power_monitor = SystemPowerMonitor(self)
+        self.power_monitor.system_sleeping.connect(self._on_system_sleeping)
+        self.power_monitor.system_resumed.connect(self._schedule_wake_reconnect)
 
         # Initialize Tray UI (with Window Mode fallback if system tray is missing)
         self.tray = RcloneTrayIcon(
@@ -181,6 +189,7 @@ class RcloneAppController(QObject):
     def remove_daemon(self, remote_name: str) -> None:
         """Stops and removes a deleted remote's daemon and poller from controller and UI."""
         clean = remote_name.rstrip(":")
+        self._remotes_before_sleep.pop(clean, None)
         self._stop_poller_for(clean, wait=False)
         daemon = self.daemons.pop(clean, None)
         if daemon is not None:
@@ -195,7 +204,17 @@ class RcloneAppController(QObject):
         daemon = self.daemons.get(clean)
         if daemon and (daemon.is_running() or daemon.is_process_alive() or daemon.state in ("starting", "unmounting")):
             self._stop_poller_for(clean)
-            daemon.stop_async(on_done=on_done)
+
+            def _after_stop() -> None:
+                if not self._is_shutting_down:
+                    save_active_remotes([
+                        r for r, dm in self.daemons.items()
+                        if dm.is_running() or dm.state in ("mounted", "starting")
+                    ])
+                if on_done is not None:
+                    on_done()
+
+            daemon.stop_async(on_done=_after_stop)
         elif on_done:
             on_done()
 
@@ -206,6 +225,8 @@ class RcloneAppController(QObject):
             if d.is_running() or d.is_process_alive() or d.state in ("starting", "unmounting")
         ]
         if not active:
+            if not self._is_shutting_down:
+                save_active_remotes([])
             if on_done:
                 on_done()
             return
@@ -218,8 +239,11 @@ class RcloneAppController(QObject):
         def _step_done() -> None:
             nonlocal remaining
             remaining -= 1
-            if remaining <= 0 and on_done:
-                on_done()
+            if remaining <= 0:
+                if not self._is_shutting_down:
+                    save_active_remotes([])
+                if on_done:
+                    on_done()
 
         for d in active:
             d.stop_async(on_done=_step_done)
@@ -271,11 +295,95 @@ class RcloneAppController(QObject):
             logger.info("No cloud remotes found. Triggering first-run setup dialog...")
             QTimer.singleShot(200, self.tray._show_new_remote_dialog)
         else:
-            last_remote = str(load_config().get("last_remote") or "").rstrip(":")
-            target_remote = last_remote if last_remote in remotes else remotes[0]
+            targets = get_auto_mount_remotes(remotes)
             retries = 5 if self.autostart_mode else 2
-            logger.info("Auto-mounting remote: %s (with %d network retries)", target_remote, retries)
-            self.mount_remote(target_remote, startup_timeout=30.0, retry_on_timeout=retries)
+            for target_remote in targets:
+                logger.info("Auto-mounting remote: %s (with %d network retries)", target_remote, retries)
+                self.mount_remote(target_remote, startup_timeout=30.0, retry_on_timeout=retries)
+
+    @Slot()
+    def _on_system_sleeping(self) -> None:
+        """Snapshots active mounts when the OS enters suspend/sleep."""
+        if self._wake_timer is not None:
+            self._wake_timer.stop()
+            self._wake_timer.deleteLater()
+            self._wake_timer = None
+        snapshot: Dict[str, tuple[bool, Optional[List[str]]]] = {}
+        for r, d in self.daemons.items():
+            if d.is_running() or d.state == "mounted":
+                snapshot[r] = (
+                    bool(d.current_read_only),
+                    list(d.current_extra_args) if d.current_extra_args else None,
+                )
+        if snapshot:
+            self._remotes_before_sleep = snapshot
+            logger.info("Captured active mounts before sleep: %s", list(snapshot.keys()))
+
+    @Slot()
+    def _schedule_wake_reconnect(self) -> None:
+        """Schedules post-sleep mount verification after network interfaces have time to settle."""
+        if self._is_shutting_down or not bool(load_config().get("auto_reconnect", True)):
+            return
+        if self._wake_timer is not None:
+            self._wake_timer.stop()
+            self._wake_timer.deleteLater()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        self._wake_timer = timer
+
+        def _fire() -> None:
+            self._wake_timer = None
+            timer.deleteLater()
+            self._on_system_resumed()
+
+        timer.timeout.connect(_fire)
+        timer.start(3000)
+
+    def _on_system_resumed(self) -> None:
+        """Checks previously mounted remotes after sleep/wake and reconnects any that dropped."""
+        if self._is_shutting_down or not bool(load_config().get("auto_reconnect", True)):
+            return
+        candidates: Dict[str, tuple[bool, Optional[List[str]]]] = dict(self._remotes_before_sleep)
+        self._remotes_before_sleep = {}
+        for r, d in self.daemons.items():
+            if r not in candidates and not getattr(d, "_user_stopped", False) and getattr(d, "_last_mount_params", None):
+                last_params = d._last_mount_params
+                if last_params is not None:
+                    _, args, ro = last_params
+                    candidates[r] = (bool(ro), list(args) if args else None)
+
+        for remote_name, (read_only, extra_args) in candidates.items():
+            daemon = self.daemons.get(remote_name)
+            if daemon is None or getattr(daemon, "_user_stopped", False):
+                continue
+            if daemon.state in ("starting", "unmounting"):
+                continue
+            if daemon.is_running() and is_path_mounted(daemon.mount_point):
+                if daemon.rc_credentials is not None:
+                    self.runner.submit(
+                        lambda d_item=daemon: d_item.refresh_vfs(timeout=10.0, recursive=False, async_mode=True)
+                    )
+                continue
+            logger.info("Mount '%s' dropped during sleep; reconnecting...", remote_name)
+            if daemon.is_running() or daemon.is_process_alive() or daemon.state == "mounted":
+                daemon.stop_async(
+                    on_done=lambda d_item=daemon, r=remote_name, args=extra_args, ro=read_only: d_item.start(
+                        r,
+                        extra_args=args,
+                        read_only=ro,
+                        startup_timeout=30.0,
+                        retry_on_timeout=4,
+                    ),
+                    user_initiated=False,
+                )
+            else:
+                daemon.start(
+                    remote_name,
+                    extra_args=extra_args,
+                    read_only=read_only,
+                    startup_timeout=30.0,
+                    retry_on_timeout=4,
+                )
 
     def _signal_handler(self, sig: int, frame: Any) -> None:
         """Async-signal-safe handler: records signal number to be processed on the Qt main loop."""
@@ -312,8 +420,13 @@ class RcloneAppController(QObject):
                 poller.start()
                 self.stats_pollers[clean] = poller
 
-            # Add to file manager sidebar and persist last_remote
-            save_last_remote(clean)
+            # Add to file manager sidebar and persist last_remote / active list
+            if not self._is_shutting_down:
+                save_last_remote(clean)
+                save_active_remotes([
+                    r for r, d in self.daemons.items()
+                    if d.is_running() or d.state == "mounted"
+                ])
             self.runner.submit(integrate_mount, daemon.mount_point, f"DucksDrive - {clean}")
 
         elif state in ("unmounting", "stopped", "error"):
@@ -353,6 +466,10 @@ class RcloneAppController(QObject):
         if self._threads_cleaned:
             return
         self._threads_cleaned = True
+        if self._wake_timer is not None:
+            self._wake_timer.stop()
+            self._wake_timer.deleteLater()
+            self._wake_timer = None
         for clean in list(self.stats_pollers.keys()):
             self._stop_poller_for(clean, wait=True)
         for poller in self._old_pollers:
@@ -390,7 +507,7 @@ def main() -> None:
     app.setWindowIcon(get_app_icon())
     app.setQuitOnLastWindowClosed(False)
 
-    SYSTEM_DEFAULT_PALETTE = QApplication.instance().palette()
+    SYSTEM_DEFAULT_PALETTE = app.palette()
     set_system_default_palette(SYSTEM_DEFAULT_PALETTE)
 
     # Initialize language and theme

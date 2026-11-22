@@ -10,8 +10,14 @@ severity levels, log folder exploration, and one-click copy to clipboard.
 """
 
 import glob
+import json
 import logging
 import os
+import platform
+import re
+import subprocess
+import sys
+import zipfile
 from typing import Any, List, Optional
 
 from PySide6.QtCore import Qt, QTimer
@@ -21,15 +27,19 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ducksdrive import __version__ as APP_VERSION
+from ducksdrive.core.rclone_config import get_clean_env
 from ducksdrive.system.filemanager_integration import open_local_folder
 from ducksdrive.i18n import tr
 from ducksdrive.core.rclone_settings import apply_app_theme, is_dark_theme_active, load_config
@@ -40,6 +50,119 @@ xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 LOG_DIR = os.path.join(xdg_data, "ducksdrive")
 APP_LOG_FILE = os.path.join(LOG_DIR, "ducksdrive.log")
 MAX_READ_TAIL_BYTES = 512 * 1024  # Read at most the last 512 KB per file to keep UI snappy
+
+_SENSITIVE_KEY_VALUE_RE = re.compile(
+    r"(?i)(\b(?:pass|password|password2|secret_access_key|client_secret|token|access_token|refresh_token|"
+    r"--rc-pass|--rc-user|--password-command)\b(?:\s*[:=]\s*|\s+))([^\s,;\"']+)"
+)
+_SENSITIVE_HEADER_RE = re.compile(r"(?i)(Authorization\s*:\s*(?:Basic|Bearer)\s+)([A-Za-z0-9+/=._-]+)")
+_SENSITIVE_CFG_KEY_RE = re.compile(r"(?i)(pass|secret|token|credential|auth)")
+
+
+def _sanitize_diagnostic_text(text: str) -> str:
+    """Redacts credentials, OAuth tokens, and Basic/Bearer auth headers from diagnostic logs."""
+    cleaned = _SENSITIVE_HEADER_RE.sub(r"\1******", text)
+    cleaned = _SENSITIVE_KEY_VALUE_RE.sub(r"\1******", cleaned)
+    return cleaned
+
+
+def _sanitize_config_dict(obj: Any) -> Any:
+    """Returns a deep-sanitized copy of DucksDrive config safe to share in public issue reports."""
+    if isinstance(obj, dict):
+        sanitized: dict[str, Any] = {}
+        for k, v in obj.items():
+            key_str = str(k)
+            if _SENSITIVE_CFG_KEY_RE.search(key_str) and not isinstance(v, (bool, int, float)):
+                sanitized[key_str] = "******" if v else ""
+            else:
+                sanitized[key_str] = _sanitize_config_dict(v)
+        return sanitized
+    if isinstance(obj, list):
+        return [_sanitize_config_dict(item) for item in obj]
+    return obj
+
+
+def _collect_system_info() -> str:
+    """Collects non-sensitive environment details for bug reports."""
+    rclone_ver = "unavailable"
+    try:
+        res = subprocess.run(
+            ["rclone", "version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            env=get_clean_env(include_keyring=False),
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            rclone_ver = " | ".join(res.stdout.strip().splitlines()[:4])
+    except Exception:
+        pass
+
+    lines = [
+        f"DucksDrive Version: {APP_VERSION}",
+        f"Python Version: {sys.version.split()[0]}",
+        f"Platform: {platform.platform()}",
+        f"Desktop Environment: {os.environ.get('XDG_CURRENT_DESKTOP', 'unknown')}",
+        f"Session Type: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}",
+        f"Flatpak: {os.path.exists('/.flatpak-info') or bool(os.environ.get('FLATPAK_ID'))}",
+        f"AppImage: {bool(os.environ.get('APPIMAGE'))}",
+        f"Rclone: {rclone_ver}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def export_diagnostic_bundle(
+    zip_path: str,
+    log_dir: Optional[str] = None,
+    app_log_file: Optional[str] = None,
+) -> str:
+    """
+    Generates a sanitized `.zip` diagnostic bundle containing system info,
+    sanitized config, `ducksdrive.log`, and the latest per-mount rclone logs.
+    """
+    target_log_dir = log_dir or LOG_DIR
+    target_app_log = app_log_file or os.path.join(target_log_dir, "ducksdrive.log")
+    out_dir = os.path.dirname(os.path.abspath(zip_path))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("system_info.txt", _collect_system_info())
+
+        try:
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+        zf.writestr(
+            "config_sanitized.json",
+            json.dumps(_sanitize_config_dict(cfg), indent=2, ensure_ascii=False) + "\n",
+        )
+
+        if target_app_log and os.path.isfile(target_app_log):
+            try:
+                content = "".join(_read_tail_lines(target_app_log))
+                zf.writestr("logs/ducksdrive.log", _sanitize_diagnostic_text(content))
+            except Exception as exc:
+                zf.writestr("logs/ducksdrive_read_error.txt", str(exc))
+
+        rclone_logs = sorted(
+            glob.glob(os.path.join(target_log_dir, "rclone-*.log")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for log_path in rclone_logs[:8]:
+            if os.path.isfile(log_path):
+                try:
+                    content = "".join(_read_tail_lines(log_path))
+                    zf.writestr(
+                        f"logs/{os.path.basename(log_path)}",
+                        _sanitize_diagnostic_text(content),
+                    )
+                except Exception:
+                    pass
+
+    return zip_path
 
 
 def _read_tail_lines(path: str, max_bytes: int = MAX_READ_TAIL_BYTES) -> List[str]:
@@ -63,10 +186,15 @@ class LogViewerDialog(QDialog):
     Integrated diagnostic log viewer window showing real-time rclone and application logs.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None, initial_file: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        initial_file: Optional[str] = None,
+        initial_level: Optional[str] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"DucksDrive - {tr('Logs de Diagnóstico')}")
-        self.resize(780, 560)
+        self.resize(820, 560)
         self.setMinimumSize(600, 400)
 
         self._active_file: Optional[str] = None
@@ -75,6 +203,8 @@ class LogViewerDialog(QDialog):
 
         self._init_ui()
         self.apply_theme()
+        if initial_level:
+            self.set_level_filter(initial_level)
         has_initial = bool(initial_file and os.path.exists(initial_file))
         self._refresh_log_sources(load_default=not has_initial)
 
@@ -90,6 +220,12 @@ class LogViewerDialog(QDialog):
         self._poll_timer.setInterval(1500)
         self._poll_timer.timeout.connect(self._check_file_updates)
         self._poll_timer.start()
+
+    def set_level_filter(self, level_mode: str) -> None:
+        """Selects the severity filter combo ('all', 'warn_err', 'error_only')."""
+        idx = self.level_combo.findData(level_mode)
+        if idx >= 0:
+            self.level_combo.setCurrentIndex(idx)
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -137,7 +273,7 @@ class LogViewerDialog(QDialog):
         self.text_edit.setFont(font)
         main_layout.addWidget(self.text_edit)
 
-        # 3. Bottom Bar: Auto-scroll + File info + Copy + Open Folder + Close
+        # 3. Bottom Bar: Auto-scroll + File info + Export Zip + Copy + Open Folder + Close
         bottom_bar = QHBoxLayout()
         bottom_bar.setSpacing(8)
 
@@ -150,6 +286,11 @@ class LogViewerDialog(QDialog):
         bottom_bar.addWidget(self.info_label)
 
         bottom_bar.addStretch()
+
+        self.btn_export_zip = QPushButton(tr("Exportar Diagnóstico (.zip)"))
+        self.btn_export_zip.setCursor(Qt.PointingHandCursor)
+        self.btn_export_zip.clicked.connect(self._export_diagnostic_zip)
+        bottom_bar.addWidget(self.btn_export_zip)
 
         self.btn_copy = QPushButton(tr("Copiar para Área de Transferência"))
         self.btn_copy.setCursor(Qt.PointingHandCursor)
@@ -339,6 +480,32 @@ class LogViewerDialog(QDialog):
             self.btn_copy.setEnabled(True)
         except (RuntimeError, AttributeError):
             pass
+
+    def _export_diagnostic_zip(self) -> None:
+        default_path = os.path.join(os.path.expanduser("~"), "ducksdrive-diagnostico.zip")
+        chosen_path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("Exportar Diagnóstico (.zip)"),
+            default_path,
+            "ZIP (*.zip)",
+        )
+        if not chosen_path:
+            return
+        if not chosen_path.lower().endswith(".zip"):
+            chosen_path += ".zip"
+        try:
+            out_path = export_diagnostic_bundle(chosen_path)
+            QMessageBox.information(
+                self,
+                tr("Diagnóstico Exportado"),
+                tr("Pacote de diagnóstico sanitizado salvo em:\n%s") % out_path,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                tr("Erro"),
+                tr("Falha ao gerar pacote de diagnóstico: %s") % str(exc),
+            )
 
     def _open_log_folder(self) -> None:
         os.makedirs(LOG_DIR, exist_ok=True)

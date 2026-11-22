@@ -138,6 +138,9 @@ class RemoteSettingsDialog(QDialog):
 
         self.ro_checkbox = QCheckBox(tr("Montar sempre como Somente Leitura (--read-only)"))
         mount_layout.addRow("", self.ro_checkbox)
+
+        self.auto_mount_checkbox = QCheckBox(tr("Montar automaticamente ao iniciar o DucksDrive"))
+        mount_layout.addRow("", self.auto_mount_checkbox)
         groups_layout.addWidget(mount_group)
 
         # Group 2: Custom Flags
@@ -149,6 +152,7 @@ class RemoteSettingsDialog(QDialog):
         self.flags_edit.setPlaceholderText(tr("ex: --drive-shared-with-me --fast-list"))
         flags_layout.addWidget(self.flags_edit)
 
+        self.shared_with_me_check: Optional[QCheckBox] = None
         # Special helper for Google Drive
         if self.remote_type == "drive":
             self.shared_with_me_check = QCheckBox(
@@ -156,8 +160,6 @@ class RemoteSettingsDialog(QDialog):
             )
             self.shared_with_me_check.toggled.connect(self._toggle_shared_with_me)
             flags_layout.addWidget(self.shared_with_me_check)
-        else:
-            self.shared_with_me_check = None
 
         hint_label = QLabel(
             tr("Dica: As flags informadas serão adicionadas ao comando rclone mount específico deste drive.")
@@ -169,6 +171,10 @@ class RemoteSettingsDialog(QDialog):
         groups_layout.addWidget(flags_group)
 
         # Group 2b: Google Drive Custom OAuth Client ID (Anti Rate-Limit)
+        self.drive_oauth_status_label: Optional[QLabel] = None
+        self.client_id_edit: Optional[QLineEdit] = None
+        self.client_secret_edit: Optional[QLineEdit] = None
+        self.btn_client_id_guide: Optional[QPushButton] = None
         if self.remote_type == "drive":
             oauth_group = QGroupBox(tr("Credenciais OAuth Próprias do Google Drive (Anti Rate-Limit)"))
             oauth_layout = QVBoxLayout(oauth_group)
@@ -198,11 +204,6 @@ class RemoteSettingsDialog(QDialog):
             guide_row.addWidget(self.btn_client_id_guide)
             oauth_layout.addLayout(guide_row)
             groups_layout.addWidget(oauth_group)
-        else:
-            self.drive_oauth_status_label = None
-            self.client_id_edit = None
-            self.client_secret_edit = None
-            self.btn_client_id_guide = None
 
         # Group 3: Performance Overrides (Optional)
         perf_group = QGroupBox(tr("Substituições de Desempenho (Opcional)"))
@@ -255,6 +256,7 @@ class RemoteSettingsDialog(QDialog):
     def _load_values(self) -> None:
         self.mount_path_edit.setText(str(self.remote_cfg.get("custom_mount_point") or ""))
         self.ro_checkbox.setChecked(bool(self.remote_cfg.get("read_only", False)))
+        self.auto_mount_checkbox.setChecked(bool(self.remote_cfg.get("auto_mount", False)))
 
         flags = str(self.remote_cfg.get("custom_flags") or "")
         self.flags_edit.setText(flags)
@@ -408,6 +410,7 @@ class RemoteSettingsDialog(QDialog):
         updated_cfg = {
             "custom_mount_point": custom_mp,
             "read_only": read_only,
+            "auto_mount": self.auto_mount_checkbox.isChecked(),
             "custom_flags": flags,
             "bwlimit": bw,
             "vfs_cache_max_size": cache_str,

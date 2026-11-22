@@ -379,5 +379,91 @@ class TestI18n:
             assert tr("Configurações da Nuvem Atual...") == "Current Cloud Settings..."
             assert tr("Desconectar Nuvem Atual") == "Disconnect Current Cloud"
             assert tr("⚡ Transferência Turbo...") == "⚡ Turbo Transfer..."
+            assert tr("Exportar Diagnóstico (.zip)") == "Export Diagnostics (.zip)"
+            assert tr("Copiar Link Compartilhável...") == "Copy Shareable Link..."
+            assert tr("Abrir na Web") == "Open on Web"
+            assert tr("Cofre Criptografado (Rclone Crypt)") == "Encrypted Vault (Rclone Crypt)"
+            assert tr("Montar automaticamente ao iniciar o DucksDrive") == "Mount automatically when DucksDrive starts"
         finally:
             set_language("pt_BR")
+
+
+# ============================================================================
+# 7. Release Manifest Consistency Tests
+# ============================================================================
+class TestReleaseConsistency:
+    def test_project_versions_consistent_across_all_manifests(self):
+        import pathlib
+        import re
+        import xml.etree.ElementTree as ET
+        from ducksdrive import __version__
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+
+        pyproject_text = (root / "pyproject.toml").read_text(encoding="utf-8")
+        m_py = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
+        assert m_py is not None and m_py.group(1) == __version__
+
+        pkgbuild_text = (root / "PKGBUILD").read_text(encoding="utf-8")
+        m_pkg = re.search(r"^pkgver=([^\s]+)", pkgbuild_text, re.MULTILINE)
+        assert m_pkg is not None and m_pkg.group(1) == __version__
+
+        srcinfo_text = (root / ".SRCINFO").read_text(encoding="utf-8")
+        m_src = re.search(r"^\s*pkgver\s*=\s*([^\s]+)", srcinfo_text, re.MULTILINE)
+        assert m_src is not None and m_src.group(1) == __version__
+
+        deb_text = (root / "packaging" / "build_deb.sh").read_text(encoding="utf-8")
+        m_deb = re.search(r'^PKG_VER="([^"]+)"', deb_text, re.MULTILINE)
+        assert m_deb is not None and m_deb.group(1) == __version__
+
+        meta_tree = ET.parse(root / "packaging" / "flatpak" / "com.github.patopatetico2.ducksdrive.metainfo.xml")
+        first_rel = meta_tree.getroot().find("./releases/release")
+        assert first_rel is not None and first_rel.get("version") == __version__
+
+
+# ============================================================================
+# 8. Sleep/Wake Power Monitor Tests
+# ============================================================================
+class TestPowerMonitor:
+    def test_power_monitor_signals_and_controller_wake_reconnect(self, qapp, monkeypatch):
+        from ducksdrive.main import RcloneAppController
+        from ducksdrive.system.power_monitor import SystemPowerMonitor
+
+        monitor = SystemPowerMonitor()
+        events: list[str] = []
+        monitor.system_sleeping.connect(lambda: events.append("sleep"))
+        monitor.system_resumed.connect(lambda: events.append("resume"))
+
+        monitor.on_prepare_for_sleep(True)
+        monitor.on_prepare_for_sleep(False)
+        assert events == ["sleep", "resume"]
+
+        controller = RcloneAppController(qapp, tray_available=False)
+        try:
+            d = controller.get_or_create_daemon("gdrive")
+            d.state = "mounted"
+            d.is_running = lambda: True
+            d._last_mount_params = ("gdrive", ["--fast-list"], True)
+            d.current_read_only = True
+            d.current_extra_args = ["--fast-list"]
+
+            controller._on_system_sleeping()
+            assert "gdrive" in controller._remotes_before_sleep
+
+            # Simulate process dropped while asleep
+            d.state = "error"
+            d.is_running = lambda: False
+            started_calls: list[tuple] = []
+            monkeypatch.setattr("ducksdrive.main.is_path_mounted", lambda _p: False)
+            monkeypatch.setattr(
+                d,
+                "start",
+                lambda r, extra_args=None, read_only=False, startup_timeout=30.0, retry_on_timeout=0: started_calls.append(
+                    (r, extra_args, read_only)
+                ) or True,
+            )
+
+            controller._on_system_resumed()
+            assert started_calls == [("gdrive", ["--fast-list"], True)]
+        finally:
+            controller.shutdown()

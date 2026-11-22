@@ -3,12 +3,15 @@ ducksdrive/ui/turbo_transfer_dialog.py - Parallel Turbo Transfer worker and dial
 """
 
 import os
+import re
 import subprocess
 from collections import deque
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -26,15 +29,45 @@ from PySide6.QtWidgets import (
 
 from ducksdrive.core.rclone_config import TaskRunner, get_clean_env, get_rclone_path
 from ducksdrive.core.rclone_daemon import RcloneDaemon
-from ducksdrive.core.rclone_settings import apply_app_theme, load_config
+from ducksdrive.core.rclone_settings import apply_app_theme, get_remote_config, load_config
 from ducksdrive.core.rclone_stats import rc_vfs_refresh
 from ducksdrive.i18n import tr
+
+_STATS_FULL_RE = re.compile(
+    r"([\d.]+\s*[KMGTPE]?i?B)\s*/\s*([\d.]+\s*[KMGTPE]?i?B),\s*(\d{1,3})%,\s*([^,]+),\s*ETA\s+(\S+)",
+    re.IGNORECASE,
+)
+_STATS_PCT_RE = re.compile(r"\b(\d{1,3})%")
+
+
+def parse_rclone_stats_line(line: str) -> Optional[tuple[int, str]]:
+    """
+    Extracts `(percentage, readable_summary)` from an `rclone copy --stats-one-line` line.
+    Returns None for regular verbose log lines without transfer progress telemetry.
+    """
+    clean = (line or "").strip()
+    if not clean:
+        return None
+    m = _STATS_FULL_RE.search(clean)
+    if m:
+        done_str, total_str, pct_str, speed_str, eta_str = m.groups()
+        pct = max(0, min(100, int(pct_str)))
+        summary = f"{pct}% • {done_str.strip()} / {total_str.strip()} • {speed_str.strip()} • ETA {eta_str.strip()}"
+        return pct, summary
+    lower = clean.lower()
+    if "%" in clean and ("eta " in lower or "/s" in lower or "transferred:" in lower):
+        m_pct = _STATS_PCT_RE.search(clean)
+        if m_pct:
+            pct = max(0, min(100, int(m_pct.group(1))))
+            return pct, clean
+    return None
 
 
 class TurboTransferWorker(QThread):
     """Background worker executing parallel `rclone copy` outside FUSE single-stream bottlenecks."""
 
     progress_line = Signal(str)
+    progress_updated = Signal(int, str)
     finished_transfer = Signal(bool, str)
 
     def __init__(
@@ -43,6 +76,7 @@ class TurboTransferWorker(QThread):
         destination: str,
         transfers: int = 8,
         multi_thread_streams: int = 4,
+        bwlimit: str = "",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -50,6 +84,7 @@ class TurboTransferWorker(QThread):
         self.destination = destination
         self.transfers = max(1, min(16, int(transfers)))
         self.multi_thread_streams = max(1, min(8, int(multi_thread_streams)))
+        self.bwlimit = (bwlimit or "").strip()
         self._process: Optional[subprocess.Popen[str]] = None
         self._cancelled = False
 
@@ -86,6 +121,9 @@ class TurboTransferWorker(QThread):
             "--stats-one-line",
             "-v",
         ]
+        if self.bwlimit and self.bwlimit.lower() != "off":
+            cmd.extend(["--bwlimit", self.bwlimit])
+
         try:
             self._process = subprocess.Popen(
                 cmd,
@@ -104,6 +142,9 @@ class TurboTransferWorker(QThread):
                     if line:
                         last_lines.append(line)
                         self.progress_line.emit(line)
+                        parsed = parse_rclone_stats_line(line)
+                        if parsed is not None:
+                            self.progress_updated.emit(parsed[0], parsed[1])
             try:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -140,9 +181,11 @@ class TurboTransferDialog(QDialog):
         self.mount_point = os.path.abspath(os.path.expanduser(mount_point))
         self.daemon = daemon
         self._worker: Optional[TurboTransferWorker] = None
+        self._refresh_runner = TaskRunner(self)
 
         self.setWindowTitle(tr("⚡ Transferência Turbo Paralela (%s)") % self.remote_name)
         self.setMinimumWidth(520)
+        self.setAcceptDrops(True)
         self._init_ui()
         self.apply_theme(str(load_config().get("theme") or "auto"))
 
@@ -154,8 +197,10 @@ class TurboTransferDialog(QDialog):
             self.setPalette(palette)
             for child in self.findChildren(QWidget):
                 child.setPalette(palette)
-            self.style().unpolish(self)
-            self.style().polish(self)
+            style_obj = self.style()
+            if style_obj is not None:
+                style_obj.unpolish(self)
+                style_obj.polish(self)
             self.update()
 
     def _init_ui(self) -> None:
@@ -166,7 +211,8 @@ class TurboTransferDialog(QDialog):
         info_lbl = QLabel(
             tr(
                 "Transfere pastas diretamente com múltiplos fluxos paralelos (--transfers + --multi-thread-streams), "
-                "ideal para lotes com centenas de arquivos ou arquivos gigantes sem o gargalo sequencial do FUSE."
+                "ideal para lotes com centenas de arquivos ou arquivos gigantes sem o gargalo sequencial do FUSE. "
+                "Dica: arraste e solte uma pasta sobre esta janela para preencher o caminho."
             )
         )
         info_lbl.setWordWrap(True)
@@ -203,11 +249,15 @@ class TurboTransferDialog(QDialog):
         self.transfers_spin.setRange(2, 16)
         self.transfers_spin.setValue(8)
         form.addRow(tr("Arquivos Simultâneos:"), self.transfers_spin)
+
+        self.bwlimit_checkbox = QCheckBox(tr("Respeitar limite de banda configurado (--bwlimit)"))
+        form.addRow("", self.bwlimit_checkbox)
         layout.addLayout(form)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
-        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setTextVisible(True)
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
 
@@ -228,6 +278,38 @@ class TurboTransferDialog(QDialog):
         btn_row.addWidget(self.btn_close)
         btn_row.addWidget(self.btn_start)
         layout.addLayout(btn_row)
+
+    def handle_dropped_path(self, raw_path: str) -> str:
+        """Routes a dropped filesystem path to cloud or local field depending on whether it resides under mount_point."""
+        abs_path = os.path.abspath(os.path.expanduser(raw_path))
+        if os.path.isfile(abs_path):
+            abs_path = os.path.dirname(abs_path)
+        if abs_path == self.mount_point:
+            self.cloud_path_edit.setText("")
+            return "cloud"
+        if abs_path.startswith(self.mount_point + os.sep):
+            rel = os.path.relpath(abs_path, self.mount_point)
+            self.cloud_path_edit.setText(rel)
+            return "cloud"
+        self.local_path_edit.setText(abs_path)
+        return "local"
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls() and any(u.isLocalFile() for u in mime.urls()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile():
+                    self.handle_dropped_path(url.toLocalFile())
+                    event.acceptProposedAction()
+                    return
+        super().dropEvent(event)
 
     def _browse_cloud_path(self) -> None:
         start_dir = self.mount_point if os.path.isdir(self.mount_point) else os.path.expanduser("~")
@@ -270,6 +352,24 @@ class TurboTransferDialog(QDialog):
             return None
         return local_dir, remote_spec, mode
 
+    def _effective_bwlimit(self) -> str:
+        if not self.bwlimit_checkbox.isChecked():
+            return ""
+        rem_cfg = get_remote_config(self.remote_name)
+        global_cfg = load_config()
+        rate = str(rem_cfg.get("bwlimit") or global_cfg.get("bwlimit") or "off").strip()
+        return "" if rate.lower() == "off" else rate
+
+    def _on_progress_updated(self, pct: int, summary: str) -> None:
+        if self.progress_bar.maximum() == 0:
+            self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(max(0, min(100, pct)))
+        self.status_label.setText(summary)
+
+    def _on_progress_line(self, line: str) -> None:
+        if self.progress_bar.maximum() == 0:
+            self.status_label.setText(line)
+
     def _start_transfer(self) -> None:
         resolved = self._resolve_endpoints()
         if not resolved:
@@ -277,27 +377,44 @@ class TurboTransferDialog(QDialog):
         src, dst, mode = resolved
         self.btn_start.setEnabled(False)
         self.btn_close.setText(tr("Cancelar"))
+        self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
         self.status_label.setText(tr("Iniciando transferência paralela..."))
 
-        worker = TurboTransferWorker(src, dst, transfers=self.transfers_spin.value(), parent=self)
+        worker = TurboTransferWorker(
+            src,
+            dst,
+            transfers=self.transfers_spin.value(),
+            bwlimit=self._effective_bwlimit(),
+            parent=self,
+        )
         self._worker = worker
-        worker.progress_line.connect(self.status_label.setText)
+        worker.progress_line.connect(self._on_progress_line)
+        worker.progress_updated.connect(self._on_progress_updated)
         worker.finished_transfer.connect(lambda ok, msg, m=mode: self._on_finished(ok, msg, m))
         worker.start()
 
     def _on_finished(self, ok: bool, msg: str, mode: str) -> None:
+        if ok:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
         self.progress_bar.hide()
         self.btn_start.setEnabled(True)
         self.btn_close.setText(tr("Fechar"))
         self.status_label.setText(msg)
         if ok and mode == "upload" and self.daemon and self.daemon.is_running() and self.daemon.rc_credentials:
             creds = self.daemon.rc_credentials
-            threading_runner = TaskRunner(self)
-            threading_runner.submit(lambda c=creds: rc_vfs_refresh(c, recursive=True, async_mode=True))
+            self._refresh_runner.submit(lambda c=creds: rc_vfs_refresh(c, recursive=True, async_mode=True))
 
     def _on_close_or_cancel(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
             return
         self.close()
+
+    def closeEvent(self, event: Any) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait(2000)
+        self._refresh_runner.wait_all(3000, run_queued=False)
+        super().closeEvent(event)

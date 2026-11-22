@@ -66,7 +66,7 @@ class StatsData:
         return self.is_online and (len(self.active_transfers) > 0 or self.vfs_queue_count > 0)
 
 
-def format_bytes(num_bytes: int) -> str:
+def format_bytes(num_bytes: int | float) -> str:
     """
     Formats a raw byte count into human-readable units (B, KB, MB, GB, TB).
 
@@ -76,13 +76,14 @@ def format_bytes(num_bytes: int) -> str:
     Returns:
         str: Human-readable string.
     """
-    if num_bytes < 0:
+    val = float(num_bytes)
+    if val < 0:
         return "0 B"
     for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if num_bytes < 1024.0:
-            return f"{num_bytes:.2f} {unit}" if unit != "B" else f"{int(num_bytes)} B"
-        num_bytes /= 1024.0
-    return f"{num_bytes:.2f} PB"
+        if val < 1024.0:
+            return f"{val:.2f} {unit}" if unit != "B" else f"{int(val)} B"
+        val /= 1024.0
+    return f"{val:.2f} PB"
 
 
 def format_eta(eta_seconds: Optional[int]) -> str:
@@ -309,7 +310,7 @@ def fetch_vfs_stats(creds: RCCredentials, timeout: float = 2.0) -> Dict[str, Any
     - totalBytes (int)
     """
     status, data = rc_request(creds, "/vfs/stats", timeout=timeout)
-    result = {
+    result: Dict[str, Any] = {
         "uploadsInProgress": 0,
         "uploadsQueued": 0,
         "bytesUsed": 0,

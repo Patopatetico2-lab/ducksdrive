@@ -121,7 +121,10 @@ def _atomic_write_tree(tree: ET.ElementTree, path: str, doctype: Optional[str] =
     os.makedirs(parent_dir, exist_ok=True)
     if hasattr(ET, "indent"):
         ET.indent(tree, space=" ")  # keep the file human-readable like KDE writes it
-    xml_bytes = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
+    root = tree.getroot()
+    if root is None:
+        return
+    xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_text = xml_bytes.decode("utf-8")
     if doctype and "<!DOCTYPE" not in xml_text:
         lines = xml_text.splitlines(keepends=True)

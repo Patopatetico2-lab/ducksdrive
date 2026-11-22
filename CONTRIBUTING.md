@@ -100,10 +100,11 @@ Se você estiver em um ambiente sem servidor gráfico ativo (servidor SSH, cont�
 QT_QPA_PLATFORM=offscreen pytest -v
 ```
 
-#### 2.2 Verificação de Estilo com Ruff
-Utilizamos o **Ruff** para análise estática e padronização de código Python (alinhado ao PEP 8, limite de linha 120):
+#### 2.2 Verificação de Estilo e Tipagem (Ruff & Mypy)
+Utilizamos o **Ruff** para análise estática e padronização de código Python (alinhado ao PEP 8, limite de linha 120) e o **Mypy** para checagem de tipos:
 ```bash
 ruff check .
+mypy ducksdrive
 ```
 
 Para aplicar correções automáticas seguras sugeridas pelo linter:

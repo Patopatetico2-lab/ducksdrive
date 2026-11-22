@@ -18,7 +18,7 @@ import shutil
 import socket
 import sys
 import tempfile
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Set
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +82,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "transfers": 4,
     "vfs_cache_mode": "full",
     "autostart": True,
+    "auto_reconnect": True,
     "language": "pt_BR",
     "last_remote": "",
+    "last_active_remotes": [],
     "theme": "auto",
     "remotes_config": {},
     "use_system_keyring": False,
@@ -94,6 +96,7 @@ DEFAULT_REMOTE_CONFIG: Dict[str, Any] = {
     "custom_mount_point": "",
     "mount_path": "",
     "read_only": False,
+    "auto_mount": False,
     "custom_flags": "",
     "bwlimit": "",
     "vfs_cache_max_size": "",
@@ -233,6 +236,70 @@ def save_last_remote(remote_name: str) -> None:
         logger.error("Failed to save last_remote: %s", e)
 
 
+def save_active_remotes(remote_names: List[str]) -> None:
+    """Atomically persists the list of currently active/mounted remote names."""
+    global _CONFIG_CACHE, _CONFIG_MTIME
+    cleaned: List[str] = []
+    for name in remote_names:
+        c = name.rstrip(":") if name else ""
+        if c and c not in cleaned:
+            cleaned.append(c)
+
+    config = load_config()
+    if config.get("last_active_remotes") == cleaned:
+        return
+    config["last_active_remotes"] = cleaned
+    try:
+        _atomic_write_file(CONFIG_FILE, json.dumps(config, indent=4) + "\n")
+        try:
+            _CONFIG_MTIME = os.path.getmtime(CONFIG_FILE)
+        except OSError:
+            _CONFIG_MTIME = None
+        _CONFIG_CACHE = copy.deepcopy(config)
+        logger.info("Updated last_active_remotes to %s", cleaned)
+    except Exception as e:
+        logger.error("Failed to save last_active_remotes: %s", e)
+
+
+def get_auto_mount_remotes(available_remotes: List[str]) -> List[str]:
+    """
+    Determines which configured cloud remotes should auto-mount at startup:
+    1. Remotes explicitly marked `auto_mount=True` in `remotes_config`.
+    2. Otherwise `last_active_remotes` from the previous session (multi-mount memory).
+    3. Fallback to `last_remote`, or the first available remote.
+    """
+    available = [r.rstrip(":") for r in available_remotes if r and r.rstrip(":")]
+    if not available:
+        return []
+    available_set = set(available)
+    cfg = load_config()
+
+    remotes_cfg = cfg.get("remotes_config")
+    explicit: List[str] = []
+    if isinstance(remotes_cfg, dict):
+        for r in available:
+            r_cfg = remotes_cfg.get(r)
+            if isinstance(r_cfg, dict) and r_cfg.get("auto_mount"):
+                explicit.append(r)
+    if explicit:
+        return explicit
+
+    last_active = cfg.get("last_active_remotes")
+    remembered: List[str] = []
+    if isinstance(last_active, list):
+        for item in last_active:
+            c = str(item).rstrip(":")
+            if c in available_set and c not in remembered:
+                remembered.append(c)
+    if remembered:
+        return remembered
+
+    last_remote = str(cfg.get("last_remote") or "").rstrip(":")
+    if last_remote in available_set:
+        return [last_remote]
+    return [available[0]]
+
+
 def get_rclone_cache_dir() -> str:
     """Returns the rclone cache directory path (~/.cache/rclone or XDG_CACHE_HOME/rclone)."""
     xdg_cache = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
@@ -354,7 +421,7 @@ def _detect_system_dark() -> bool:
                 return True
 
         app = QApplication.instance()
-        if app is not None:
+        if isinstance(app, QApplication):
             window_color = app.palette().color(QPalette.Window)
             if window_color.isValid() and window_color.lightness() < 128:
                 return True
@@ -389,7 +456,7 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
         from PySide6.QtWidgets import QApplication, QWidget
 
         app = QApplication.instance()
-        if app is None:
+        if not isinstance(app, QApplication):
             return None
 
         if SYSTEM_DEFAULT_PALETTE is None:
@@ -669,8 +736,15 @@ def delete_remote_config(remote_name: str) -> None:
     if not clean:
         return
     cfg = load_config()
+    changed = False
     remotes_cfg = cfg.get("remotes_config")
     if isinstance(remotes_cfg, dict) and clean in remotes_cfg:
         del remotes_cfg[clean]
+        changed = True
+    last_active = cfg.get("last_active_remotes")
+    if isinstance(last_active, list) and clean in last_active:
+        cfg["last_active_remotes"] = [r for r in last_active if r != clean]
+        changed = True
+    if changed:
         save_config(cfg)
 

@@ -128,17 +128,52 @@ SUPPORTED_REMOTE_TYPES = [
     {"type": "drive", "label": "Google Drive"},
     {"type": "onedrive", "label": "Microsoft OneDrive"},
     {"type": "dropbox", "label": "Dropbox"},
+    {"type": "protondrive", "label": "Proton Drive"},
     {"type": "mega", "label": "Mega"},
     {"type": "box", "label": "Box"},
     {"type": "pcloud", "label": "pCloud"},
-    {"type": "s3", "label": "Amazon S3 / S3-Compatible"},
+    {"type": "s3", "label": "Amazon S3 / R2 / Wasabi / MinIO"},
+    {"type": "b2", "label": "Backblaze B2"},
     {"type": "webdav", "label": "Nextcloud / WebDAV"},
+    {"type": "smb", "label": "SMB / Samba (NAS Local)"},
     {"type": "ftp", "label": "FTP"},
     {"type": "sftp", "label": "SFTP"},
+    {"type": "crypt", "label": "Cofre Criptografado (Rclone Crypt)"},
 ]
 
+# Ready-to-use S3 provider presets: (label, rclone provider key, region hint, endpoint hint)
+S3_PROVIDER_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
+    ("Amazon S3 (AWS)", "AWS", "us-east-1 (ou vazio para padrão)", ""),
+    ("Cloudflare R2", "Cloudflare", "auto", "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"),
+    ("Wasabi", "Wasabi", "us-east-1 (ex: us-east-1, eu-central-1)", "s3.wasabisys.com"),
+    ("MinIO (Self-Hosted)", "Minio", "us-east-1 (opcional)", "https://minio.example.com:9000"),
+    ("Outro S3-Compatível", "Other", "us-east-1 (opcional)", "https://s3.example.com"),
+)
 
-_SENSITIVE_PARAMS = {"pass", "password", "secret_access_key", "token", "client_secret", "--rc-pass", "--password-command"}
+PROVIDER_WEB_URLS: Dict[str, str] = {
+    "drive": "https://drive.google.com/",
+    "onedrive": "https://onedrive.live.com/",
+    "dropbox": "https://www.dropbox.com/home",
+    "protondrive": "https://drive.proton.me/",
+    "mega": "https://mega.nz/fm",
+    "box": "https://app.box.com/",
+    "pcloud": "https://my.pcloud.com/",
+    "b2": "https://secure.backblaze.com/b2_buckets.htm",
+}
+
+
+_SENSITIVE_PARAMS = {
+    "pass",
+    "password",
+    "password2",
+    "secret_access_key",
+    "key",
+    "token",
+    "client_secret",
+    "2fa",
+    "--rc-pass",
+    "--password-command",
+}
 
 
 def mask_command(cmd: List[str]) -> str:
@@ -575,10 +610,29 @@ class RemoteCreationThread(QThread):
         params.update(self.extra_params)
 
         cmd = [rclone_bin, "config", "create"]
-        if "pass" in params and self.remote_type in ("mega", "ftp", "sftp", "webdav"):
-            obscured = self._obscure_password_via_stdin(rclone_bin, str(params["pass"]))
-            if obscured is not None:
-                params["pass"] = obscured
+        obscure_keys_by_type: Dict[str, Tuple[str, ...]] = {
+            "mega": ("pass",),
+            "ftp": ("pass",),
+            "sftp": ("pass",),
+            "webdav": ("pass",),
+            "smb": ("pass",),
+            "protondrive": ("password",),
+            "crypt": ("password", "password2"),
+        }
+        secret_keys = obscure_keys_by_type.get(self.remote_type, ())
+        present_secret_keys = [k for k in secret_keys if k in params and str(params[k])]
+        if present_secret_keys:
+            all_obscured = True
+            obscured_map: Dict[str, str] = {}
+            for k in present_secret_keys:
+                obscured = self._obscure_password_via_stdin(rclone_bin, str(params[k]))
+                if obscured is not None:
+                    obscured_map[k] = obscured
+                else:
+                    all_obscured = False
+                    break
+            if all_obscured and len(obscured_map) == len(present_secret_keys):
+                params.update(obscured_map)
                 cmd.append("--no-obscure")
             else:
                 cmd.append("--obscure")
@@ -810,3 +864,50 @@ def reconnect_remote(remote_name: str) -> Tuple[int, str]:
         return res.returncode, res.stderr or res.stdout or ""
     except Exception as exc:
         return -1, str(exc)
+
+
+def get_provider_web_url(remote_name: str) -> Optional[str]:
+    """Returns the web dashboard URL for a configured cloud remote, or None if not applicable."""
+    rtype = get_remote_type_fast(remote_name.rstrip(":"))
+    if not rtype:
+        return None
+    return PROVIDER_WEB_URLS.get(rtype.lower())
+
+
+def create_public_link(remote_name: str, remote_rel_path: str = "", timeout: float = 20.0) -> Tuple[bool, str]:
+    """
+    Generates a shareable public URL for a file or folder via `rclone link <remote>:<path>`.
+
+    Returns:
+        Tuple[bool, str]: (True, share_url) on success, or (False, error_message) on failure.
+    """
+    clean_name = remote_name.rstrip(":")
+    if not clean_name:
+        return False, tr("O nome da nuvem não pode estar vazio.")
+    try:
+        rclone_bin = get_rclone_path()
+    except FileNotFoundError as exc:
+        return False, tr(str(exc))
+
+    clean_rel = remote_rel_path.lstrip("/")
+    target = f"{clean_name}:{clean_rel}" if clean_rel else f"{clean_name}:"
+    cmd = [rclone_bin, "link", target]
+    logger.info("Generating shareable link: %s", mask_command(cmd))
+    try:
+        res = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=get_clean_env(),
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            lines = [ln.strip() for ln in res.stdout.strip().splitlines() if ln.strip()]
+            return True, lines[-1] if lines else res.stdout.strip()
+        err = (res.stderr or res.stdout or "").strip() or (tr("Código de erro: %d") % res.returncode)
+        return False, tr("Este provedor ou caminho não suporta links compartilháveis:\n%s") % err
+    except subprocess.TimeoutExpired:
+        return False, tr("Tempo limite esgotado ao gerar link compartilhável para '%s'.") % target
+    except Exception as exc:
+        return False, tr("Erro ao gerar link compartilhável: %s") % str(exc)

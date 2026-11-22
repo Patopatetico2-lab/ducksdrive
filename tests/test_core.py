@@ -487,3 +487,166 @@ class TestCoreRegressions:
                 called_cmd = mock_run.call_args.args[0]
                 assert "client_id" in called_cmd
                 assert "new_id" in called_cmd
+
+
+# ============================================================================
+# 10. Multi-Mount Auto-Mount, Per-Remote Log Rotation, Crash Reconnect & Links
+# ============================================================================
+class TestReliabilityAndProviders:
+    def test_per_remote_log_rotation_keeps_files_per_remote(self, tmp_path, monkeypatch):
+        from ducksdrive.core import rclone_daemon
+
+        monkeypatch.setattr(rclone_daemon, "LOG_DIR", str(tmp_path))
+        base_time = 1_700_000_000.0
+        for idx in range(7):
+            p1 = tmp_path / f"rclone-gdrive-{1000 + idx}.log"
+            p1.write_text(f"gdrive {idx}\n", encoding="utf-8")
+            os.utime(p1, (base_time + idx, base_time + idx))
+
+            p2 = tmp_path / f"rclone-my-nas-work-{1000 + idx}.log"
+            p2.write_text(f"nas {idx}\n", encoding="utf-8")
+            os.utime(p2, (base_time + 100 + idx, base_time + 100 + idx))
+
+        rclone_daemon.prune_old_logs(keep=5)
+        remaining_gd = sorted(p.name for p in tmp_path.glob("rclone-gdrive-*.log"))
+        remaining_nas = sorted(p.name for p in tmp_path.glob("rclone-my-nas-work-*.log"))
+        assert len(remaining_gd) == 5
+        assert len(remaining_nas) == 5
+        assert "rclone-gdrive-1000.log" not in remaining_gd
+        assert "rclone-gdrive-1006.log" in remaining_gd
+        assert "rclone-my-nas-work-1000.log" not in remaining_nas
+        assert "rclone-my-nas-work-1006.log" in remaining_nas
+
+    def test_get_auto_mount_remotes_priority(self, tmp_path, monkeypatch):
+        from ducksdrive.core import rclone_settings
+
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr(rclone_settings, "CONFIG_FILE", str(cfg_file))
+        monkeypatch.setattr(rclone_settings, "CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rclone_settings, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(rclone_settings, "_CONFIG_MTIME", None)
+
+        # 1. Explicit auto_mount flags win
+        rclone_settings.save_config({
+            "last_remote": "onedrive",
+            "last_active_remotes": ["onedrive"],
+            "remotes_config": {
+                "gdrive": {"auto_mount": True},
+                "s3": {"auto_mount": True},
+                "deleted_cloud": {"auto_mount": True},
+            },
+        })
+        assert rclone_settings.get_auto_mount_remotes(["gdrive", "onedrive", "s3"]) == ["gdrive", "s3"]
+
+        # 2. Without explicit flags, restores last_active_remotes
+        rclone_settings.save_config({
+            "last_remote": "s3",
+            "last_active_remotes": ["onedrive", "s3", "missing"],
+            "remotes_config": {},
+        })
+        assert rclone_settings.get_auto_mount_remotes(["gdrive", "onedrive", "s3"]) == ["onedrive", "s3"]
+
+        # 3. Fallback to last_remote or first available
+        rclone_settings.save_config({"last_remote": "s3", "last_active_remotes": [], "remotes_config": {}})
+        assert rclone_settings.get_auto_mount_remotes(["gdrive", "s3"]) == ["s3"]
+        assert rclone_settings.get_auto_mount_remotes(["gdrive", "onedrive"]) == ["gdrive"]
+
+    def test_crash_auto_reconnect_backoff_and_user_stop_suppression(self, qapp, monkeypatch):
+        from ducksdrive.core import rclone_daemon, rclone_settings
+
+        assert [rclone_daemon.compute_reconnect_backoff_ms(i) for i in range(1, 7)] == [
+            3000,
+            6000,
+            12000,
+            24000,
+            30000,
+            30000,
+        ]
+
+        monkeypatch.setattr(rclone_settings, "load_config", lambda: {"auto_reconnect": True})
+        d = rclone_daemon.RcloneDaemon(remote_name="gdrive")
+        d.state = "mounted"
+        d.current_remote = "gdrive"
+        d.process = MagicMock()
+        d.process.poll.return_value = 1
+        d.process.returncode = 1
+
+        scheduled: list[int] = []
+        monkeypatch.setattr(d, "_schedule_retry", lambda ms, _cb: scheduled.append(ms))
+        monkeypatch.setattr(d, "stop_async", lambda on_done=None, user_initiated=True: d._set_state("stopped"))
+
+        d._check_process_health()
+        assert d._crash_reconnect_attempts == 1
+        assert scheduled == [3000]
+
+        # Explicit user stop suppresses auto-reconnect and clears _last_mount_params
+        d._last_mount_params = ("gdrive", None, False)
+        d.stop()
+        assert d._user_stopped is True
+        assert d._crash_reconnect_attempts == 0
+        assert d._last_mount_params is None
+
+    def test_new_providers_masking_web_urls_and_public_link(self, monkeypatch):
+        from ducksdrive.core import rclone_config
+
+        types = {item["type"] for item in rclone_config.SUPPORTED_REMOTE_TYPES}
+        assert {"crypt", "smb", "b2", "protondrive", "s3"}.issubset(types)
+
+        masked = rclone_config.mask_command([
+            "rclone",
+            "config",
+            "create",
+            "--",
+            "vault",
+            "crypt",
+            "password",
+            "supersecret",
+            "password2",
+            "mysalt",
+            "key",
+            "b2key",
+        ])
+        assert "supersecret" not in masked
+        assert "mysalt" not in masked
+        assert "b2key" not in masked
+        assert masked.count("******") == 3
+
+        monkeypatch.setattr(
+            rclone_config,
+            "get_remote_type_fast",
+            lambda r: {"gdrive": "drive", "proton": "protondrive", "vault": "crypt"}.get(r.rstrip(":")),
+        )
+        assert rclone_config.get_provider_web_url("gdrive") == "https://drive.google.com/"
+        assert rclone_config.get_provider_web_url("proton") == "https://drive.proton.me/"
+        assert rclone_config.get_provider_web_url("vault") is None
+
+        fake_ok = MagicMock(returncode=0, stdout="https://drive.google.com/file/d/abc/view\n", stderr="")
+        with patch("ducksdrive.core.rclone_config.get_rclone_path", return_value="/usr/bin/rclone"):
+            with patch("ducksdrive.core.rclone_config.subprocess.run", return_value=fake_ok) as mock_run:
+                ok, url = rclone_config.create_public_link("gdrive:", "/Docs/file.pdf")
+                assert ok is True
+                assert url == "https://drive.google.com/file/d/abc/view"
+                assert mock_run.call_args.args[0] == ["/usr/bin/rclone", "link", "gdrive:Docs/file.pdf"]
+
+    def test_crypt_remote_creation_obscures_password_and_salt_via_stdin(self, qapp, monkeypatch):
+        from ducksdrive.core.rclone_config import RemoteCreationThread
+
+        thread = RemoteCreationThread(
+            "meu_cofre",
+            "crypt",
+            extra_params={"remote": "gdrive:Cofre", "password": "pw1", "password2": "pw2"},
+        )
+        monkeypatch.setattr(thread, "_obscure_password_via_stdin", lambda _bin, val: f"obs_{val}")
+
+        fake_proc = MagicMock()
+        fake_proc.stdout = None
+        fake_proc.poll.return_value = 0
+        fake_proc.returncode = 0
+
+        with patch("ducksdrive.core.rclone_config.get_rclone_path", return_value="/usr/bin/rclone"):
+            with patch("ducksdrive.core.rclone_config.subprocess.Popen", return_value=fake_proc) as mock_popen:
+                thread.run()
+                cmd = mock_popen.call_args.args[0]
+                assert "--no-obscure" in cmd
+                assert "obs_pw1" in cmd
+                assert "obs_pw2" in cmd

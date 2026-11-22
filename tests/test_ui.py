@@ -588,3 +588,220 @@ class TestUIRegressions:
         assert NewRemoteDialog is LegacyNewRemoteDialog
         assert TurboTransferDialog is LegacyTurboDialog
         assert SpeedChartWidget is LegacySpeedChartWidget
+
+    def test_turbo_transfer_stats_parsing_bwlimit_drag_drop_and_lifecycle(self, qapp, tmp_path, monkeypatch):
+        from ducksdrive.ui import turbo_transfer_dialog
+        from ducksdrive.ui.turbo_transfer_dialog import TurboTransferDialog, parse_rclone_stats_line
+
+        parsed = parse_rclone_stats_line("2026/11/21 12:00:00 INFO  :   120.5 MiB / 500 MiB, 24%, 15.2 MiB/s, ETA 25s")
+        assert parsed is not None
+        assert parsed[0] == 24
+        assert "120.5 MiB / 500 MiB" in parsed[1]
+        assert "ETA 25s" in parsed[1]
+        assert parse_rclone_stats_line("2026/11/21 12:00:00 DEBUG : Checking directory") is None
+
+        mount_root = tmp_path / "CloudDrives" / "gdrive"
+        cloud_sub = mount_root / "Projetos"
+        cloud_sub.mkdir(parents=True)
+        local_dir = tmp_path / "Downloads"
+        local_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(turbo_transfer_dialog, "load_config", lambda: {"bwlimit": "10M", "theme": "auto"})
+        monkeypatch.setattr(turbo_transfer_dialog, "get_remote_config", lambda _r: {"bwlimit": "4M:off"})
+
+        dlg = TurboTransferDialog(remote_name="gdrive", mount_point=str(mount_root))
+        assert dlg.handle_dropped_path(str(cloud_sub)) == "cloud"
+        assert dlg.cloud_path_edit.text() == "Projetos"
+        assert dlg.handle_dropped_path(str(local_dir)) == "local"
+        assert dlg.local_path_edit.text() == str(local_dir)
+
+        assert dlg._effective_bwlimit() == ""
+        dlg.bwlimit_checkbox.setChecked(True)
+        assert dlg._effective_bwlimit() == "4M:off"
+
+        dlg._on_progress_updated(24, parsed[1])
+        assert dlg.progress_bar.maximum() == 100
+        assert dlg.progress_bar.value() == 24
+        dlg._on_finished(True, "Concluído", "download")
+        assert dlg.progress_bar.value() == 100
+        dlg.close()
+
+    def test_new_remote_dialog_crypt_s3_presets_b2_and_smb(self, qapp):
+        from ducksdrive.ui.new_remote_dialog import NewRemoteDialog
+
+        dlg = NewRemoteDialog(existing_names=["gdrive", "onedrive"])
+
+        # Crypt wizard
+        crypt_idx = dlg.type_combo.findData("crypt")
+        assert crypt_idx >= 0
+        dlg.type_combo.setCurrentIndex(crypt_idx)
+        dlg.name_input.setText("meu_cofre")
+        dlg.crypt_folder_input.setText("Secretos")
+        dlg.crypt_pass_input.setText("senha-forte")
+        dlg.crypt_salt_input.setText("salt-extra")
+        name, rtype, params = dlg.get_data()
+        assert (name, rtype) == ("meu_cofre", "crypt")
+        assert params["remote"] == "gdrive:Secretos"
+        assert params["password"] == "senha-forte"
+        assert params["password2"] == "salt-extra"
+        assert params["filename_encryption"] == "standard"
+
+        # S3 preset (Cloudflare R2)
+        s3_idx = dlg.type_combo.findData("s3")
+        dlg.type_combo.setCurrentIndex(s3_idx)
+        r2_idx = dlg.s3_preset_combo.findData("Cloudflare")
+        assert r2_idx >= 0
+        dlg.s3_preset_combo.setCurrentIndex(r2_idx)
+        dlg.s3_key_input.setText("ak")
+        dlg.s3_secret_input.setText("sk")
+        dlg.s3_endpoint_input.setText("https://acct.r2.cloudflarestorage.com")
+        _, _, s3_params = dlg.get_data()
+        assert s3_params["provider"] == "Cloudflare"
+        assert s3_params["endpoint"] == "https://acct.r2.cloudflarestorage.com"
+
+        # SMB
+        smb_idx = dlg.type_combo.findData("smb")
+        dlg.type_combo.setCurrentIndex(smb_idx)
+        dlg.ftp_host_input.setText("192.168.1.50")
+        dlg.ftp_user_input.setText("nasuser")
+        dlg.ftp_pass_input.setText("naspass")
+        dlg.smb_domain_input.setText("HOME")
+        _, _, smb_params = dlg.get_data()
+        assert smb_params == {"host": "192.168.1.50", "user": "nasuser", "pass": "naspass", "domain": "HOME"}
+        dlg.close()
+
+    def test_remote_settings_dialog_auto_mount_checkbox(self, qapp, monkeypatch):
+        from ducksdrive.ui import remote_settings_dialog
+        from ducksdrive.ui.remote_settings_dialog import RemoteSettingsDialog
+
+        monkeypatch.setattr(remote_settings_dialog, "get_remote_type_fast", lambda _r: "drive")
+        monkeypatch.setattr(remote_settings_dialog, "get_drive_client_credentials", lambda _r: ("", ""))
+        monkeypatch.setattr(remote_settings_dialog, "get_remote_config", lambda _r: {"auto_mount": True})
+        monkeypatch.setattr(remote_settings_dialog, "load_config", lambda: {"theme": "auto"})
+        saved_calls: list[tuple] = []
+        monkeypatch.setattr(
+            remote_settings_dialog,
+            "save_remote_config",
+            lambda r, cfg: saved_calls.append((r, cfg)) or True,
+        )
+
+        dlg = RemoteSettingsDialog("gdrive")
+        assert dlg.auto_mount_checkbox.isChecked() is True
+        dlg.auto_mount_checkbox.setChecked(False)
+        dlg._on_save()
+        assert len(saved_calls) == 1
+        assert saved_calls[0][1]["auto_mount"] is False
+
+    def test_status_popup_pin_auto_close_error_banner_and_recent_click(self, qapp, tmp_path):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+        from ducksdrive.core.rclone_daemon import RcloneDaemon
+        from ducksdrive.core.rclone_stats import StatsData
+        from ducksdrive.ui.status_popup import StatusPopup
+
+        mount_dir = tmp_path / "CloudDrives" / "gdrive"
+        mount_dir.mkdir(parents=True)
+        recent_file = mount_dir / "relatorio.pdf"
+        recent_file.write_text("ok", encoding="utf-8")
+
+        daemon = RcloneDaemon(mount_point=str(mount_dir), remote_name="gdrive")
+        popup = StatusPopup(daemon=daemon, window_mode=False)
+        popup.show()
+        qapp.processEvents()
+
+        # Pin prevents auto-close on deactivate
+        popup.btn_pin.setChecked(True)
+        assert popup.is_pinned is True
+        assert popup._should_auto_close_on_deactivate() is False
+        QApplication.sendEvent(popup, QEvent(QEvent.Type.WindowDeactivate))
+        assert popup.isVisible() is True
+
+        # Unpinned floating popup closes when deactivated
+        popup.btn_pin.setChecked(False)
+        assert popup.is_pinned is False
+        assert popup._should_auto_close_on_deactivate() is True
+        QApplication.sendEvent(popup, QEvent(QEvent.Type.WindowDeactivate))
+        assert popup.isVisible() is False
+
+        # Error banner visibility & recent file click
+        popup._render_stats(
+            StatsData(
+                is_online=True,
+                errors_count=3,
+                recent_transfers=[{"name": "relatorio.pdf", "size": 2048}],
+            )
+        )
+        assert not popup.btn_error_banner.isHidden()
+        assert "3" in popup.btn_error_banner.text()
+
+        with patch("ducksdrive.ui.status_popup.open_local_folder") as mock_open:
+            popup._on_recent_item_clicked("relatorio.pdf")
+            mock_open.assert_called_once_with(str(recent_file))
+
+        # Error banner click opens LogViewerDialog pre-filtered to ERROR
+        popup._open_error_logs()
+        assert popup._log_viewer_dialog is not None
+        assert popup._log_viewer_dialog.level_combo.currentData() == "error_only"
+        popup._log_viewer_dialog.close()
+
+        popup._render_stats(StatsData(is_online=True, errors_count=0))
+        assert popup.btn_error_banner.isHidden()
+
+    def test_tray_popup_menu_quick_cloud_actions(self, qapp, monkeypatch):
+        from ducksdrive.core.rclone_daemon import RcloneDaemon
+        from ducksdrive.ui import gui_tray
+        from ducksdrive.ui.gui_tray import RcloneTrayIcon
+
+        monkeypatch.setattr(gui_tray, "get_provider_web_url", lambda r: "https://drive.google.com/" if r.rstrip(":") == "gdrive" else None)
+        d1 = RcloneDaemon(remote_name="gdrive")
+        d1.state = "mounted"
+        d1.is_running = lambda: True
+
+        tray = RcloneTrayIcon(daemon=d1, daemons={"gdrive": d1})
+        tray._sync_popup_menu_state()
+        assert tray.popup_action_copy_link.isVisible() is True
+        assert tray.popup_action_copy_link.isEnabled() is True
+        assert tray.popup_action_open_web.isVisible() is True
+
+        d1.is_running = lambda: False
+        tray._sync_popup_menu_state()
+        assert tray.popup_action_copy_link.isVisible() is False
+        assert tray.popup_action_open_web.isVisible() is True
+
+    def test_log_viewer_initial_level_and_export_diagnostic_zip(self, qapp, tmp_path, monkeypatch):
+        import zipfile
+        from ducksdrive.ui import log_viewer
+        from ducksdrive.ui.log_viewer import LogViewerDialog, export_diagnostic_bundle
+
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True)
+        app_log = log_dir / "ducksdrive.log"
+        app_log.write_text(
+            "2026-11-21 INFO Starting token=TOPSECRET_TOKEN_123\n"
+            "2026-11-21 ERROR Failed Authorization: Basic dXNlcjpzZWNyZXQ=\n",
+            encoding="utf-8",
+        )
+        rclone_log = log_dir / "rclone-gdrive-1234.log"
+        rclone_log.write_text("2026/11/21 ERROR : rclone failure password=my_pw\n", encoding="utf-8")
+
+        viewer = LogViewerDialog(initial_file=str(app_log), initial_level="error_only")
+        assert viewer.level_combo.currentData() == "error_only"
+        assert "Failed Authorization" in viewer.text_edit.toPlainText()
+        assert "Starting token" not in viewer.text_edit.toPlainText()
+        viewer.close()
+
+        monkeypatch.setattr(log_viewer, "load_config", lambda: {"bwlimit": "off", "client_secret": "GOCSPX-abc"})
+        zip_out = tmp_path / "diag.zip"
+        export_diagnostic_bundle(str(zip_out), log_dir=str(log_dir), app_log_file=str(app_log))
+        assert zip_out.is_file()
+
+        with zipfile.ZipFile(zip_out, "r") as zf:
+            names = set(zf.namelist())
+            assert {"system_info.txt", "config_sanitized.json", "logs/ducksdrive.log", "logs/rclone-gdrive-1234.log"}.issubset(names)
+            log_txt = zf.read("logs/ducksdrive.log").decode("utf-8")
+            rc_txt = zf.read("logs/rclone-gdrive-1234.log").decode("utf-8")
+            cfg_txt = zf.read("config_sanitized.json").decode("utf-8")
+            assert "TOPSECRET_TOKEN_123" not in log_txt
+            assert "dXNlcjpzZWNyZXQ=" not in log_txt
+            assert "my_pw" not in rc_txt
+            assert "GOCSPX-abc" not in cfg_txt
