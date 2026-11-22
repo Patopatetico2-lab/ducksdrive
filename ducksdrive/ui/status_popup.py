@@ -89,12 +89,15 @@ class StatusPopup(QWidget):
         self.window_mode = window_mode
         self._tray_ref: Optional[weakref.ref[Any]] = None
         if window_mode:
-            super().__init__(parent, Qt.Window)
+            super().__init__(parent, Qt.WindowType.Window)
             self.setWindowTitle(f"DucksDrive - {tr('Painel de Controle')}")
             self.setWindowIcon(_get_window_icon())
             self.setMinimumWidth(376)
         else:
-            super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            super().__init__(
+                parent,
+                Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint,
+            )
             self.setFixedWidth(364)
 
         self.daemons: dict[str, RcloneDaemon] = daemons.copy() if daemons else {}
@@ -107,7 +110,7 @@ class StatusPopup(QWidget):
         self._remote_stats: dict[str, StatsData] = {}
         self._runtime_bwlimit: dict[str, str] = {}
 
-        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.is_paused = False
         self.is_pinned = False
 
@@ -240,13 +243,13 @@ class StatusPopup(QWidget):
 
         self.btn_menu = QPushButton(tr("Menu"))
         self.btn_menu.setFixedHeight(24)
-        self.btn_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_menu.setCursor(Qt.CursorShape.PointingHandCursor)
         header_layout.addWidget(self.btn_menu)
 
         self.btn_pin = QPushButton("📌")
         self.btn_pin.setCheckable(True)
         self.btn_pin.setFixedSize(24, 24)
-        self.btn_pin.setCursor(Qt.PointingHandCursor)
+        self.btn_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pin.setToolTip(tr("Fixar painel na tela (não fechar ao clicar fora)"))
         self.btn_pin.toggled.connect(self._on_pin_toggled)
         header_layout.addWidget(self.btn_pin)
@@ -255,7 +258,7 @@ class StatusPopup(QWidget):
 
         self.btn_close = QPushButton("✕")
         self.btn_close.setFixedSize(24, 24)
-        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.setToolTip(tr("Fechar Painel (ou pressione Esc)"))
         self.btn_close.clicked.connect(self.close)
         header_layout.addWidget(self.btn_close)
@@ -286,7 +289,7 @@ class StatusPopup(QWidget):
 
         self.btn_remote_settings = QPushButton("⚙")
         self.btn_remote_settings.setFixedSize(26, 26)
-        self.btn_remote_settings.setCursor(Qt.PointingHandCursor)
+        self.btn_remote_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_remote_settings.setToolTip(tr("Configurações da Nuvem..."))
         self.btn_remote_settings.setEnabled(False)
         self.btn_remote_settings.clicked.connect(self._open_current_remote_settings)
@@ -312,7 +315,7 @@ class StatusPopup(QWidget):
         # Inhibitor Warning Banner (Shutdown Protection)
         self.lbl_inhibitor_banner = QLabel(tr("⚠️ Desligamento Adiado: Gravando arquivos na nuvem"))
         self.lbl_inhibitor_banner.setWordWrap(True)
-        self.lbl_inhibitor_banner.setAlignment(Qt.AlignCenter)
+        self.lbl_inhibitor_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_inhibitor_banner.setStyleSheet("""
             QLabel {
                 background-color: #d35400;
@@ -328,7 +331,7 @@ class StatusPopup(QWidget):
 
         # Clickable Error Banner (opens LogViewer filtered to ERROR)
         self.btn_error_banner = QPushButton()
-        self.btn_error_banner.setCursor(Qt.PointingHandCursor)
+        self.btn_error_banner.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_error_banner.clicked.connect(self._open_error_logs)
         self.btn_error_banner.hide()
         main_layout.addWidget(self.btn_error_banner)
@@ -365,7 +368,7 @@ class StatusPopup(QWidget):
             tr("Liberar metadados de pastas inativas da memória RAM (vfs/forget). Para limpar o SSD, use Configurações -> Limpar Cache Agora.")
         )
         self.btn_clear_inactive.setFixedHeight(24)
-        self.btn_clear_inactive.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_inactive.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear_inactive.clicked.connect(self._on_clear_inactive_vfs)
         controls_grid.addWidget(self.btn_clear_inactive, 1, 2)
 
@@ -375,30 +378,32 @@ class StatusPopup(QWidget):
 
         # Separator line
         self.sep_line = QFrame()
-        self.sep_line.setFrameShape(QFrame.HLine)
-        self.sep_line.setFrameShadow(QFrame.Sunken)
+        self.sep_line.setFrameShape(QFrame.Shape.HLine)
+        self.sep_line.setFrameShadow(QFrame.Shadow.Sunken)
         self.sep_line.setFixedHeight(1)
         main_layout.addWidget(self.sep_line)
 
         # 4. Dynamic Transfer List (Scrollable)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setMinimumHeight(56)
-        self.scroll.setMaximumHeight(160)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setMinimumHeight(56)
+        self.scroll_area.setMaximumHeight(160)
         self.scroll_content = QWidget()
         self.scroll_content.setObjectName("ScrollContent")
         self.scroll_layout = QVBoxLayout(self.scroll_content)
         self.scroll_layout.setContentsMargins(0, 0, 6, 0)
         self.scroll_layout.setSpacing(2)
         self.scroll_layout.addStretch()
-        self.scroll.setWidget(self.scroll_content)
-        self.scroll.viewport().installEventFilter(self)
+        self.scroll_area.setWidget(self.scroll_content)
+        vp = self.scroll_area.viewport()
+        if vp is not None:
+            vp.installEventFilter(self)
 
         self.empty_label = QLabel(tr("Nenhum arquivo sendo transferido"))
-        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll_layout.insertWidget(0, self.empty_label)
 
-        main_layout.addWidget(self.scroll)
+        main_layout.addWidget(self.scroll_area)
 
         # 5. Metrics & Chart
         metrics_layout = QHBoxLayout()
@@ -424,7 +429,7 @@ class StatusPopup(QWidget):
 
         self.btn_open = QPushButton(tr("Abrir Pasta Local"))
         self.btn_open.setFixedHeight(34)
-        self.btn_open.setCursor(Qt.PointingHandCursor)
+        self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_cloud_folder)
         footer_container.addWidget(self.btn_open)
@@ -435,13 +440,13 @@ class StatusPopup(QWidget):
 
         self.btn_pause = QPushButton(tr("Conectar / Reconectar"))
         self.btn_pause.setFixedHeight(30)
-        self.btn_pause.setCursor(Qt.PointingHandCursor)
+        self.btn_pause.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pause.clicked.connect(self._toggle_pause)
         secondary_actions.addWidget(self.btn_pause, 3)
 
         self.btn_refresh = QPushButton(tr("Atualizar"))
         self.btn_refresh.setFixedHeight(30)
-        self.btn_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_refresh.setEnabled(False)
         self.btn_refresh.setToolTip(tr("Recarregar cache de pastas (vfs/refresh)"))
         self.btn_refresh.clicked.connect(self._refresh_vfs)
@@ -449,7 +454,7 @@ class StatusPopup(QWidget):
 
         self.btn_turbo = QPushButton(tr("⚡ Turbo"))
         self.btn_turbo.setFixedHeight(30)
-        self.btn_turbo.setCursor(Qt.PointingHandCursor)
+        self.btn_turbo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_turbo.setEnabled(False)
         self.btn_turbo.setToolTip(
             tr("Transferência Turbo Paralela (baixar ou enviar pastas com múltiplos fluxos simultâneos)")
@@ -1358,13 +1363,13 @@ class StatusPopup(QWidget):
                         if idx < len(existing_recent):
                             existing_recent[idx].update_data(name, size_str)
                         else:
-                            item = RecentTransferItem(name, size_str, is_dark=self.is_dark)
-                            item.clicked.connect(self._on_recent_item_clicked)
-                            self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item)
+                            recent_item = RecentTransferItem(name, size_str, is_dark=self.is_dark)
+                            recent_item.clicked.connect(self._on_recent_item_clicked)
+                            self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, recent_item)
 
-                    for extra_w in existing_recent[len(stats.recent_transfers):]:
-                        self.scroll_layout.removeWidget(extra_w)
-                        extra_w.deleteLater()
+                    for extra_recent in existing_recent[len(stats.recent_transfers):]:
+                        self.scroll_layout.removeWidget(extra_recent)
+                        extra_recent.deleteLater()
                 else:
                     self.empty_label.setText(tr("Nenhum arquivo sendo transferido"))
                     clear_transfers()
@@ -1635,21 +1640,21 @@ class StatusPopup(QWidget):
 
     def eventFilter(self, watched: Any, event: Any) -> bool:
         """Allows dragging the window even when clicking inside the scroll area viewport (floating mode)."""
-        if not self.window_mode and watched is self.scroll.viewport():
-            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+        if not self.window_mode and watched is self.scroll_area.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._begin_drag(event.globalPosition().toPoint())
                 return True
-            if event.type() == QEvent.MouseMove and (event.buttons() & Qt.LeftButton) and self._drag_pos is not None:
+            if event.type() == QEvent.Type.MouseMove and (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_pos is not None:
                 self.move(event.globalPosition().toPoint() - self._drag_pos)
                 return True
-            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self._drag_pos = None
                 return True
         return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event: Any) -> None:
         """Initiates window dragging when clicking anywhere on the popup background (floating mode only)."""
-        if not self.window_mode and event.button() == Qt.LeftButton:
+        if not self.window_mode and event.button() == Qt.MouseButton.LeftButton:
             self._begin_drag(event.globalPosition().toPoint())
             event.accept()
             return
@@ -1657,7 +1662,7 @@ class StatusPopup(QWidget):
 
     def mouseMoveEvent(self, event: Any) -> None:
         """Fallback window dragging for compositors without startSystemMove support."""
-        if not self.window_mode and (event.buttons() & Qt.LeftButton) and self._drag_pos is not None:
+        if not self.window_mode and (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_pos is not None:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
             return
@@ -1665,7 +1670,7 @@ class StatusPopup(QWidget):
 
     def mouseReleaseEvent(self, event: Any) -> None:
         """Ends manual fallback dragging."""
-        if not self.window_mode and event.button() == Qt.LeftButton:
+        if not self.window_mode and event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = None
             event.accept()
             return
@@ -1673,7 +1678,7 @@ class StatusPopup(QWidget):
 
     def keyPressEvent(self, event: Any) -> None:
         """Closes popup when Escape key is pressed (floating mode only)."""
-        if not self.window_mode and event.key() == Qt.Key_Escape:
+        if not self.window_mode and event.key() == Qt.Key.Key_Escape:
             self.close()
         super().keyPressEvent(event)
 
@@ -1690,14 +1695,15 @@ class StatusPopup(QWidget):
 
     def closeEvent(self, event: Any) -> None:
         """Closing the popup. In window mode without tray, prompts quit confirmation."""
-        if self.window_mode and getattr(self, "_tray", None) is not None:
-            controller = getattr(self._tray, "controller", None)
+        tray_ref = getattr(self, "_tray", None)
+        if self.window_mode and tray_ref is not None:
+            controller = getattr(tray_ref, "controller", None)
             shutting_down = bool(
                 getattr(controller, "_is_shutting_down", False)
-                or getattr(self._tray, "_is_shutting_down", False)
+                or getattr(tray_ref, "_is_shutting_down", False)
             )
             if not shutting_down:
                 event.ignore()
-                self._tray._confirm_quit()
+                tray_ref._confirm_quit()
                 return
         super().closeEvent(event)

@@ -248,7 +248,7 @@ class SettingsDialog(QDialog):
         self.btn_clear_cache = QPushButton(tr("Limpar Cache Agora"))
         self.btn_clear_cache.setFixedHeight(28)
         self.btn_clear_cache.setMinimumWidth(152)
-        self.btn_clear_cache.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_cache.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear_cache.clicked.connect(self._on_clear_cache)
         cache_usage_row.addWidget(self.cache_usage_label)
         cache_usage_row.addStretch()
@@ -275,7 +275,7 @@ class SettingsDialog(QDialog):
         self.btn_manage_keyring = QPushButton(tr("Configurar Senha..."))
         self.btn_manage_keyring.setFixedHeight(28)
         self.btn_manage_keyring.setMinimumWidth(152)
-        self.btn_manage_keyring.setCursor(Qt.PointingHandCursor)
+        self.btn_manage_keyring.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_manage_keyring.clicked.connect(self._on_manage_keyring)
         keyring_row.addWidget(self.keyring_checkbox, 1)
         keyring_row.addWidget(self.btn_manage_keyring)
@@ -292,19 +292,19 @@ class SettingsDialog(QDialog):
 
         self.btn_check_update = QPushButton(tr("Verificar Atualizações"))
         self.btn_check_update.setFixedHeight(30)
-        self.btn_check_update.setCursor(Qt.PointingHandCursor)
+        self.btn_check_update.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_check_update.clicked.connect(self._on_check_updates)
         tools_row.addWidget(self.btn_check_update, 1)
 
         self.btn_view_logs = QPushButton(tr("Ver Logs de Diagnóstico"))
         self.btn_view_logs.setFixedHeight(30)
-        self.btn_view_logs.setCursor(Qt.PointingHandCursor)
+        self.btn_view_logs.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_view_logs.clicked.connect(self._on_view_logs)
         tools_row.addWidget(self.btn_view_logs, 1)
 
         self.btn_uninstall = QPushButton(tr("Desinstalar"))
         self.btn_uninstall.setFixedHeight(30)
-        self.btn_uninstall.setCursor(Qt.PointingHandCursor)
+        self.btn_uninstall.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_uninstall.clicked.connect(self._on_uninstall)
         tools_row.addWidget(self.btn_uninstall, 1)
 
@@ -324,7 +324,7 @@ class SettingsDialog(QDialog):
         self.btn_cancel = QPushButton(tr("Cancelar"))
         self.btn_cancel.setFixedHeight(32)
         self.btn_cancel.setMinimumWidth(100)
-        self.btn_cancel.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
@@ -332,7 +332,7 @@ class SettingsDialog(QDialog):
         self.btn_save.setFixedHeight(32)
         self.btn_save.setMinimumWidth(160)
         self.btn_save.setDefault(True)
-        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_save.clicked.connect(self._save_and_accept)
         btn_layout.addWidget(self.btn_save)
 
@@ -760,10 +760,10 @@ class SettingsDialog(QDialog):
             self,
             tr("Limpar Cache VFS"),
             tr("Deseja remover %s de arquivos temporários em cache no SSD?\n(Seus arquivos na nuvem não serão afetados.)") % format_bytes(usage),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if res != QMessageBox.Yes:
+        if res != QMessageBox.StandardButton.Yes:
             self.btn_clear_cache.setEnabled(True)
             return
 
@@ -867,10 +867,10 @@ class SettingsDialog(QDialog):
                 self,
                 tr("Aviso de Cache Elevado"),
                 tr("Atenção: Um tamanho de cache VFS de %s GB é muito elevado e corre o risco de esgotar o espaço do seu SSD!\n\nDeseja prosseguir?") % cache_gb,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
-            if res != QMessageBox.Yes:
+            if res != QMessageBox.StandardButton.Yes:
                 return
 
         # Update config dict
@@ -947,10 +947,10 @@ class SettingsDialog(QDialog):
             self,
             tr("Desinstalar DucksDrive"),
             tr("Tem certeza de que deseja remover todas as configurações, montagens, atalhos e arquivos do DucksDrive?\n\nO aplicativo será encerrado e desinstalado."),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
-        if res != QMessageBox.Yes:
+        if res != QMessageBox.StandardButton.Yes:
             return
 
         import subprocess
@@ -1005,10 +1005,10 @@ class SettingsDialog(QDialog):
                 self,
                 tr("Remover Configurações do Rclone?"),
                 tr("Deseja também apagar todas as nuvens configuradas no Rclone (%s) e o cache VFS?\n\nEscolha 'Não' se você utiliza o Rclone em outros programas ou scripts.") % rclone_conf_file,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            wipe_rclone = (rc_res == QMessageBox.Yes)
+            wipe_rclone = (rc_res == QMessageBox.StandardButton.Yes)
 
         # 2. Unmount and remove all directories under ~/CloudDrives and custom per-remote mount points
         cloud_drives_base = os.path.expanduser("~/CloudDrives")

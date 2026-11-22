@@ -100,11 +100,11 @@ def get_tray_icon(state: str = "idle") -> QIcon:
     pixmap = base_icon.pixmap(64, 64)
     if pixmap.isNull():
         pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.transparent)
+        pixmap.fill(Qt.GlobalColor.transparent)
 
     if state in ("syncing", "error"):
         painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         badge_radius = 11
         center_x = 64 - badge_radius - 2
@@ -121,7 +121,7 @@ def get_tray_icon(state: str = "idle") -> QIcon:
 
         # Draw glyph inside badge
         painter.setPen(QPen(QColor(255, 255, 255), 2))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         if state == "syncing":
             painter.drawArc(center_x - 5, center_y - 5, 10, 10, 30 * 16, 270 * 16)
         else:
@@ -388,7 +388,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self.showMessage(
                 APP_NAME,
                 tr("Nova versão do DucksDrive disponível (%s)!") % latest_ver,
-                QSystemTrayIcon.Information,
+                QSystemTrayIcon.MessageIcon.Information,
                 5000,
             )
 
@@ -500,13 +500,16 @@ class RcloneTrayIcon(QSystemTrayIcon):
             return
         rel = os.path.relpath(chosen_abs, mount_abs)
         rel_path = "" if rel == "." else rel.replace(os.sep, "/")
+        target_rel = rel_path or clean_r
+
+        def _on_link_done(res: Any) -> None:
+            self._on_public_link_created(clean_r, target_rel, res)
+
         self.runner.submit(
             create_public_link,
             clean_r,
             rel_path,
-            callback=lambda res, r=clean_r, target_rel=(rel_path or clean_r): self._on_public_link_created(
-                r, target_rel, res
-            ),
+            callback=_on_link_done,
         )
 
     def _on_public_link_created(self, remote_name: str, target_label: str, result: Any) -> None:
@@ -748,7 +751,12 @@ class RcloneTrayIcon(QSystemTrayIcon):
                     QMessageBox.StandardButton.Yes,
                 )
                 if res == QMessageBox.StandardButton.Yes:
-                    self._safe_unmount_daemon(d, lambda r=clean_r: self._mount_remote(r))
+                    def _make_remount(r: str) -> Callable[[], None]:
+                        def _cb() -> None:
+                            self._mount_remote(r)
+                        return _cb
+
+                    self._safe_unmount_daemon(d, _make_remount(clean_r))
 
     def _show_log_viewer_dialog(self, initial_level: Optional[str] = None) -> None:
         """Opens the diagnostic log viewer dialog."""
@@ -937,8 +945,8 @@ class RcloneTrayIcon(QSystemTrayIcon):
             runner=self.runner,
         )
         self._settings_dialog = dialog
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
-        if dialog.exec() == QDialog.Accepted:
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self.apply_theme(str(dialog.config.get("theme") or "auto"))
             if dialog.language_changed:
                 self.retranslate_ui()
@@ -1119,7 +1127,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
         Left-click (Trigger) toggles the floating status popup.
         Right-click (Context) is handled natively by setContextMenu().
         """
-        if reason == QSystemTrayIcon.Trigger:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
             if self.status_popup.isVisible():
                 self.status_popup.close()
             else:
@@ -1159,14 +1167,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
 
         if pending_count > 0:
             box = QMessageBox(
-                QMessageBox.Warning,
+                QMessageBox.Icon.Warning,
                 tr("Transferências Ativas"),
                 tr("%d arquivo(s) ainda estão sendo enviados para a nuvem.\nSe sair agora, o envio será retomado na próxima vez que esta nuvem for montada.") % pending_count,
                 parent=None,
             )
-            btn_wait = box.addButton(tr("Aguardar e sair"), QMessageBox.AcceptRole)
-            btn_quit = box.addButton(tr("Sair assim mesmo"), QMessageBox.DestructiveRole)
-            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.RejectRole)
+            btn_wait = box.addButton(tr("Aguardar e sair"), QMessageBox.ButtonRole.AcceptRole)
+            btn_quit = box.addButton(tr("Sair assim mesmo"), QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = box.addButton(tr("Cancelar"), QMessageBox.ButtonRole.RejectRole)
             box.setDefaultButton(btn_wait)
             box.setEscapeButton(btn_cancel)
             box.exec()
@@ -1209,7 +1217,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             tr("Cancelar"), 0, 0, None
         )
         dialog.setWindowTitle(tr("Aguardando envios"))
-        dialog.setWindowModality(Qt.ApplicationModal)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
         dialog.setMinimumDuration(0)
         dialog.setAutoClose(False)
         dialog.setAutoReset(False)
@@ -1331,10 +1339,15 @@ class RcloneTrayIcon(QSystemTrayIcon):
             tr("Testando conexão com '%s'...") % clean_remote,
             fallback_tray=self if self.tray_available else None,
         )
+        def _make_conn_cb(r: str) -> Callable[[Any], None]:
+            def _cb(res: Any) -> None:
+                self._on_connection_tested(r, res)
+            return _cb
+
         self.runner.submit(
             check_remote_connection,
             clean_remote,
-            callback=lambda res, r=clean_remote: self._on_connection_tested(r, res),
+            callback=_make_conn_cb(clean_remote),
         )
 
     def _on_connection_tested(self, remote: str, result: Any) -> None:
@@ -1418,9 +1431,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
         clean_remote = remote.rstrip(":")
         d = self.daemons.get(clean_remote)
         if d and d.is_running() and d.rc_credentials is not None:
+            def _make_queue_cb(r: str) -> Callable[[Any], None]:
+                def _cb(pending: Any) -> None:
+                    self._confirm_and_delete_remote(r, int(pending or 0))
+                return _cb
+
             self.runner.submit(
                 fetch_vfs_queue, d.rc_credentials,
-                callback=lambda pending, r=remote: self._confirm_and_delete_remote(r, int(pending or 0)),
+                callback=_make_queue_cb(remote),
             )
         else:
             self._confirm_and_delete_remote(remote, 0)
@@ -1433,10 +1451,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
             None,
             tr("Confirmar Exclusão"),
             text,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
-        if res != QMessageBox.Yes:
+        if res != QMessageBox.StandardButton.Yes:
             return
 
         clean_remote = remote.rstrip(":")
@@ -1448,9 +1466,14 @@ class RcloneTrayIcon(QSystemTrayIcon):
             self._delete_remote_in_background(remote)
 
     def _delete_remote_in_background(self, remote: str) -> None:
+        def _make_del_cb(r: str) -> Callable[[Any], None]:
+            def _cb(deleted: Any) -> None:
+                self._on_remote_deleted(r, bool(deleted))
+            return _cb
+
         self.runner.submit(
             delete_remote, remote,
-            callback=lambda deleted, r=remote: self._on_remote_deleted(r, bool(deleted)),
+            callback=_make_del_cb(remote),
         )
 
     def _on_remote_deleted(self, remote: str, deleted: bool) -> None:
@@ -1484,10 +1507,10 @@ class RcloneTrayIcon(QSystemTrayIcon):
     def _open_new_remote_dialog(self, existing_names: list[str]) -> None:
         dialog = NewRemoteDialog(parent=None, existing_names=existing_names)
         self._new_remote_dialog = dialog
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         dialog.raise_()
         dialog.activateWindow()
-        if dialog.exec() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             name, rtype, extra_params = dialog.get_data()
             if not name:
                 QMessageBox.warning(None, tr("Erro de Input"), tr("O nome da nuvem não pode estar vazio."))
@@ -1518,7 +1541,7 @@ class RcloneTrayIcon(QSystemTrayIcon):
             msg = (tr("Por favor, complete a autorização no seu navegador para '%s'...") % name) if is_oauth else (tr("Configurando nuvem '%s'...") % name)
 
             # Show a progress message since this can take time
-            progress = QMessageBox(QMessageBox.Information, tr("Configurando"), msg, QMessageBox.Cancel, parent=None)
+            progress = QMessageBox(QMessageBox.Icon.Information, tr("Configurando"), msg, QMessageBox.StandardButton.Cancel, parent=None)
             self._progress_box = progress
             # Cancel button and the window "X" both end up in rejected()
             progress.rejected.connect(self._creation_thread.cancel)

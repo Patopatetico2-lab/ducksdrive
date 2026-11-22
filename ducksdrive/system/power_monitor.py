@@ -38,13 +38,15 @@ class SystemPowerMonitor(QObject):
             if not bus.isConnected():
                 logger.debug("System D-Bus unavailable; sleep/wake auto-reconnect signal disabled.")
                 return
+            slot_sig = SLOT("on_prepare_for_sleep(bool)")
+            slot_bytes = slot_sig.encode("ascii") if isinstance(slot_sig, str) else bytes(slot_sig)
             ok = bus.connect(
                 "org.freedesktop.login1",
                 "/org/freedesktop/login1",
                 "org.freedesktop.login1.Manager",
                 "PrepareForSleep",
                 self,
-                SLOT("on_prepare_for_sleep(bool)"),
+                slot_bytes,
             )
             self._connected = bool(ok)
             if self._connected:

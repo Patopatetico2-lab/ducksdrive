@@ -360,20 +360,31 @@ class RcloneAppController(QObject):
                 continue
             if daemon.is_running() and is_path_mounted(daemon.mount_point):
                 if daemon.rc_credentials is not None:
-                    self.runner.submit(
-                        lambda d_item=daemon: d_item.refresh_vfs(timeout=10.0, recursive=False, async_mode=True)
-                    )
+                    def _make_refresh_cb(d_item: RcloneDaemon) -> Callable[[], bool]:
+                        return lambda: d_item.refresh_vfs(timeout=10.0, recursive=False, async_mode=True)
+
+                    self.runner.submit(_make_refresh_cb(daemon))
                 continue
             logger.info("Mount '%s' dropped during sleep; reconnecting...", remote_name)
             if daemon.is_running() or daemon.is_process_alive() or daemon.state == "mounted":
+                def _make_reconnect_cb(
+                    d_item: RcloneDaemon,
+                    r: str,
+                    args: Optional[List[str]],
+                    ro: bool,
+                ) -> Callable[[], None]:
+                    def _reconnect() -> None:
+                        d_item.start(
+                            r,
+                            extra_args=args,
+                            read_only=ro,
+                            startup_timeout=30.0,
+                            retry_on_timeout=4,
+                        )
+                    return _reconnect
+
                 daemon.stop_async(
-                    on_done=lambda d_item=daemon, r=remote_name, args=extra_args, ro=read_only: d_item.start(
-                        r,
-                        extra_args=args,
-                        read_only=ro,
-                        startup_timeout=30.0,
-                        retry_on_timeout=4,
-                    ),
+                    on_done=_make_reconnect_cb(daemon, remote_name, extra_args, read_only),
                     user_initiated=False,
                 )
             else:

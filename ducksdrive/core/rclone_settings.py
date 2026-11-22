@@ -416,13 +416,13 @@ def _detect_system_dark() -> bool:
         from PySide6.QtWidgets import QApplication
 
         if SYSTEM_DEFAULT_PALETTE is not None:
-            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window)
+            win_col = SYSTEM_DEFAULT_PALETTE.color(QPalette.ColorRole.Window)
             if win_col.isValid() and win_col.lightness() < 128:
                 return True
 
         app = QApplication.instance()
         if isinstance(app, QApplication):
-            window_color = app.palette().color(QPalette.Window)
+            window_color = app.palette().color(QPalette.ColorRole.Window)
             if window_color.isValid() and window_color.lightness() < 128:
                 return True
     except Exception:
@@ -455,6 +455,27 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
         from PySide6.QtGui import QColor, QPalette
         from PySide6.QtWidgets import QApplication, QWidget
 
+        def _build_dark_palette() -> QPalette:
+            p = QPalette()
+            p.setColor(QPalette.ColorRole.Window, QColor("#202326"))
+            p.setColor(QPalette.ColorRole.WindowText, QColor("#eff0f1"))
+            p.setColor(QPalette.ColorRole.Base, QColor("#181a1c"))
+            p.setColor(QPalette.ColorRole.AlternateBase, QColor("#232629"))
+            p.setColor(QPalette.ColorRole.Text, QColor("#eff0f1"))
+            p.setColor(QPalette.ColorRole.Button, QColor("#292c30"))
+            p.setColor(QPalette.ColorRole.ButtonText, QColor("#eff0f1"))
+            p.setColor(QPalette.ColorRole.Mid, QColor("#3b4045"))
+            p.setColor(QPalette.ColorRole.Dark, QColor("#121415"))
+            p.setColor(QPalette.ColorRole.Light, QColor("#454a4f"))
+            p.setColor(QPalette.ColorRole.Highlight, QColor("#3daee9"))
+            p.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+            p.setColor(QPalette.ColorRole.ToolTipBase, QColor("#202326"))
+            p.setColor(QPalette.ColorRole.ToolTipText, QColor("#eff0f1"))
+            p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#6c737a"))
+            p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#6c737a"))
+            p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#6c737a"))
+            return p
+
         app = QApplication.instance()
         if not isinstance(app, QApplication):
             return None
@@ -464,66 +485,32 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
 
         if mode == "light":
             palette = QPalette()
-            palette.setColor(QPalette.Window, QColor("#eff0f1"))
-            palette.setColor(QPalette.WindowText, QColor("#232629"))
-            palette.setColor(QPalette.Base, QColor("#ffffff"))
-            palette.setColor(QPalette.AlternateBase, QColor("#f7f7f7"))
-            palette.setColor(QPalette.Text, QColor("#232629"))
-            palette.setColor(QPalette.Button, QColor("#fcfcfc"))
-            palette.setColor(QPalette.ButtonText, QColor("#232629"))
-            palette.setColor(QPalette.Mid, QColor("#bdc3c7"))
-            palette.setColor(QPalette.Dark, QColor("#7f8c8d"))
-            palette.setColor(QPalette.Light, QColor("#ffffff"))
-            palette.setColor(QPalette.Highlight, QColor("#3daee9"))
-            palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-            palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
-            palette.setColor(QPalette.ToolTipText, QColor("#232629"))
-            palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#7f8c8d"))
-            palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#7f8c8d"))
-            palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#7f8c8d"))
+            palette.setColor(QPalette.ColorRole.Window, QColor("#eff0f1"))
+            palette.setColor(QPalette.ColorRole.WindowText, QColor("#232629"))
+            palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f7f7f7"))
+            palette.setColor(QPalette.ColorRole.Text, QColor("#232629"))
+            palette.setColor(QPalette.ColorRole.Button, QColor("#fcfcfc"))
+            palette.setColor(QPalette.ColorRole.ButtonText, QColor("#232629"))
+            palette.setColor(QPalette.ColorRole.Mid, QColor("#bdc3c7"))
+            palette.setColor(QPalette.ColorRole.Dark, QColor("#7f8c8d"))
+            palette.setColor(QPalette.ColorRole.Light, QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.Highlight, QColor("#3daee9"))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#232629"))
+            palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#7f8c8d"))
+            palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#7f8c8d"))
+            palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#7f8c8d"))
             app.setPalette(palette)
         elif mode == "dark":
-            palette = QPalette()
-            palette.setColor(QPalette.Window, QColor("#202326"))
-            palette.setColor(QPalette.WindowText, QColor("#eff0f1"))
-            palette.setColor(QPalette.Base, QColor("#181a1c"))
-            palette.setColor(QPalette.AlternateBase, QColor("#232629"))
-            palette.setColor(QPalette.Text, QColor("#eff0f1"))
-            palette.setColor(QPalette.Button, QColor("#292c30"))
-            palette.setColor(QPalette.ButtonText, QColor("#eff0f1"))
-            palette.setColor(QPalette.Mid, QColor("#3b4045"))
-            palette.setColor(QPalette.Dark, QColor("#121415"))
-            palette.setColor(QPalette.Light, QColor("#454a4f"))
-            palette.setColor(QPalette.Highlight, QColor("#3daee9"))
-            palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-            palette.setColor(QPalette.ToolTipBase, QColor("#202326"))
-            palette.setColor(QPalette.ToolTipText, QColor("#eff0f1"))
-            palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#6c737a"))
-            palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#6c737a"))
-            palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6c737a"))
+            palette = _build_dark_palette()
             app.setPalette(palette)
         else:
             is_dark = _detect_system_dark()
-            sys_is_dark = SYSTEM_DEFAULT_PALETTE.color(QPalette.Window).lightness() < 128
+            sys_is_dark = SYSTEM_DEFAULT_PALETTE.color(QPalette.ColorRole.Window).lightness() < 128
             if is_dark and not sys_is_dark:
-                palette = QPalette()
-                palette.setColor(QPalette.Window, QColor("#202326"))
-                palette.setColor(QPalette.WindowText, QColor("#eff0f1"))
-                palette.setColor(QPalette.Base, QColor("#181a1c"))
-                palette.setColor(QPalette.AlternateBase, QColor("#232629"))
-                palette.setColor(QPalette.Text, QColor("#eff0f1"))
-                palette.setColor(QPalette.Button, QColor("#292c30"))
-                palette.setColor(QPalette.ButtonText, QColor("#eff0f1"))
-                palette.setColor(QPalette.Mid, QColor("#3b4045"))
-                palette.setColor(QPalette.Dark, QColor("#121415"))
-                palette.setColor(QPalette.Light, QColor("#454a4f"))
-                palette.setColor(QPalette.Highlight, QColor("#3daee9"))
-                palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-                palette.setColor(QPalette.ToolTipBase, QColor("#202326"))
-                palette.setColor(QPalette.ToolTipText, QColor("#eff0f1"))
-                palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#6c737a"))
-                palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#6c737a"))
-                palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6c737a"))
+                palette = _build_dark_palette()
                 app.setPalette(palette)
             else:
                 palette = QPalette(SYSTEM_DEFAULT_PALETTE)
@@ -536,8 +523,10 @@ def apply_app_theme(theme_mode: str = "auto") -> Any:
                 top.setPalette(palette)
                 for child in top.findChildren(QWidget):
                     child.setPalette(palette)
-                top.style().unpolish(top)
-                top.style().polish(top)
+                style_obj = top.style()
+                if style_obj is not None:
+                    style_obj.unpolish(top)
+                    style_obj.polish(top)
                 top.update()
 
         return palette

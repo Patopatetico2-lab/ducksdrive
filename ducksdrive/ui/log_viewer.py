@@ -288,27 +288,27 @@ class LogViewerDialog(QDialog):
         bottom_bar.addStretch()
 
         self.btn_export_zip = QPushButton(tr("Exportar Diagnóstico (.zip)"))
-        self.btn_export_zip.setCursor(Qt.PointingHandCursor)
+        self.btn_export_zip.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_export_zip.clicked.connect(self._export_diagnostic_zip)
         bottom_bar.addWidget(self.btn_export_zip)
 
         self.btn_copy = QPushButton(tr("Copiar para Área de Transferência"))
-        self.btn_copy.setCursor(Qt.PointingHandCursor)
+        self.btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
         bottom_bar.addWidget(self.btn_copy)
 
         self.btn_open_folder = QPushButton(tr("Abrir Pasta de Logs"))
-        self.btn_open_folder.setCursor(Qt.PointingHandCursor)
+        self.btn_open_folder.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_folder.clicked.connect(self._open_log_folder)
         bottom_bar.addWidget(self.btn_open_folder)
 
         self.btn_refresh = QPushButton(tr("Atualizar"))
-        self.btn_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_refresh.clicked.connect(self._force_reload)
         bottom_bar.addWidget(self.btn_refresh)
 
         self.btn_close = QPushButton(tr("Fechar"))
-        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.clicked.connect(self.close)
         bottom_bar.addWidget(self.btn_close)
 

@@ -208,12 +208,14 @@ def fetch_rclone_stats(creds: RCCredentials, timeout: float = 4.0) -> StatsData:
             isinstance(t, dict) and ("speed" in t or "speedAvg" in t)
             for t in active_transfers
         )
+        speed_bytes: float = 0.0
         if active_transfers and has_per_item_speed:
-            speed_bytes = sum(
-                float(t.get("speed") if t.get("speed") is not None else (t.get("speedAvg") or 0.0))
-                for t in active_transfers
-                if isinstance(t, dict)
-            )
+            for t in active_transfers:
+                if isinstance(t, dict):
+                    raw_spd = t.get("speed")
+                    if raw_spd is None:
+                        raw_spd = t.get("speedAvg")
+                    speed_bytes += float(raw_spd or 0.0)
         elif active_transfers:
             speed_bytes = global_speed
         else:

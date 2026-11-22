@@ -67,7 +67,7 @@ class NewRemoteDialog(QDialog):
         self.s3_key_input.setPlaceholderText("Access Key ID")
         self.s3_secret_input = QLineEdit()
         self.s3_secret_input.setPlaceholderText("Secret Access Key")
-        self.s3_secret_input.setEchoMode(QLineEdit.Password)
+        self.s3_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.s3_region_input = QLineEdit()
         self.s3_region_input.setPlaceholderText(tr("Vazio = us-east-1 / auto; ou ex: sa-east-1"))
         self.s3_endpoint_input = QLineEdit()
@@ -83,7 +83,7 @@ class NewRemoteDialog(QDialog):
         self.b2_account_input.setPlaceholderText("keyID (Application Key ID)")
         self.b2_key_input = QLineEdit()
         self.b2_key_input.setPlaceholderText("applicationKey")
-        self.b2_key_input.setEchoMode(QLineEdit.Password)
+        self.b2_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.conditional_layout.addRow(tr("B2 Key ID (Account):"), self.b2_account_input)
         self.conditional_layout.addRow(tr("B2 Application Key:"), self.b2_key_input)
 
@@ -92,7 +92,7 @@ class NewRemoteDialog(QDialog):
         self.mega_user_input.setPlaceholderText("email@example.com")
         self.mega_pass_input = QLineEdit()
         self.mega_pass_input.setPlaceholderText(tr("Password"))
-        self.mega_pass_input.setEchoMode(QLineEdit.Password)
+        self.mega_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.conditional_layout.addRow(tr("Mega Email:"), self.mega_user_input)
         self.conditional_layout.addRow(tr("Mega Password:"), self.mega_pass_input)
 
@@ -101,7 +101,7 @@ class NewRemoteDialog(QDialog):
         self.proton_user_input.setPlaceholderText("usuario@proton.me")
         self.proton_pass_input = QLineEdit()
         self.proton_pass_input.setPlaceholderText(tr("Password"))
-        self.proton_pass_input.setEchoMode(QLineEdit.Password)
+        self.proton_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.proton_2fa_input = QLineEdit()
         self.proton_2fa_input.setPlaceholderText(tr("Opcional (código 2FA de 6 dígitos, se ativado)"))
         self.conditional_layout.addRow(tr("Usuário Proton:"), self.proton_user_input)
@@ -115,7 +115,7 @@ class NewRemoteDialog(QDialog):
         self.ftp_user_input.setPlaceholderText(tr("Username"))
         self.ftp_pass_input = QLineEdit()
         self.ftp_pass_input.setPlaceholderText(tr("Password"))
-        self.ftp_pass_input.setEchoMode(QLineEdit.Password)
+        self.ftp_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.smb_domain_input = QLineEdit()
         self.smb_domain_input.setPlaceholderText("WORKGROUP")
         self.conditional_layout.addRow(tr("Host:"), self.ftp_host_input)
@@ -143,11 +143,11 @@ class NewRemoteDialog(QDialog):
 
         self.crypt_pass_input = QLineEdit()
         self.crypt_pass_input.setPlaceholderText(tr("Senha forte do cofre"))
-        self.crypt_pass_input.setEchoMode(QLineEdit.Password)
+        self.crypt_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
 
         self.crypt_salt_input = QLineEdit()
         self.crypt_salt_input.setPlaceholderText(tr("Opcional (salt extra para maior segurança)"))
-        self.crypt_salt_input.setEchoMode(QLineEdit.Password)
+        self.crypt_salt_input.setEchoMode(QLineEdit.EchoMode.Password)
 
         self.crypt_filename_combo = QComboBox()
         self.crypt_filename_combo.addItem(tr("Padrão — criptografa nomes de arquivos e pastas (Recomendado)"), "standard")

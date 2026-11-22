@@ -45,14 +45,14 @@ class SpeedChartWidget(QWidget):
     def paintEvent(self, event: Any) -> None:
         """Renders a smooth gradient-filled line chart of transfer speeds."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
         width = rect.width()
         height = rect.height()
 
         # Background card styling
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         bg_color = QColor(38, 46, 56) if self.is_dark else QColor(245, 247, 250)
         painter.setBrush(bg_color)
         painter.drawRoundedRect(rect, 8, 8)
@@ -61,7 +61,7 @@ class SpeedChartWidget(QWidget):
             # Draw subtle empty state text
             painter.setPen(QColor(149, 165, 166) if self.is_dark else QColor(150, 150, 150))
             painter.setFont(QFont("Sans Serif", 9))
-            painter.drawText(rect, Qt.AlignCenter, tr("Sem velocidade de transferência ativa"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr("Sem velocidade de transferência ativa"))
             painter.end()
             return
 
@@ -97,15 +97,15 @@ class SpeedChartWidget(QWidget):
             gradient.setColorAt(0.0, QColor(41, 128, 185, 80))
             gradient.setColorAt(1.0, QColor(41, 128, 185, 5))
             painter.setBrush(QBrush(gradient))
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPath(fill_path)
 
             # Draw speed curve line
             pen = QPen(QColor(41, 128, 185), 2)
-            pen.setCapStyle(Qt.RoundCap)
-            pen.setJoinStyle(Qt.RoundJoin)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
 
         painter.end()
@@ -170,7 +170,10 @@ def _format_transfer_item_details(t: dict[str, Any], default_name: str) -> tuple
 
     size = int(t.get("size") or 0)
     done_bytes = int(t.get("bytes") or 0)
-    item_speed = float(t.get("speed") if t.get("speed") is not None else (t.get("speedAvg") or 0.0))
+    raw_speed: Any = t.get("speed")
+    if raw_speed is None:
+        raw_speed = t.get("speedAvg")
+    item_speed = float(raw_speed) if isinstance(raw_speed, (int, float)) else 0.0
 
     parts: list[str] = []
     if size > 0:
@@ -208,7 +211,7 @@ class TransferItem(QWidget):
         self.name_label.setWordWrap(False)
         self.name_label.setToolTip(name)
         self.detail_label = QLabel(self._detail_text)
-        self.detail_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.detail_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         top_row.addWidget(self.name_label, 1)
         top_row.addWidget(self.detail_label, 0)
@@ -252,8 +255,8 @@ class RecentTransferItem(QWidget):
         self._file_name = name
         self._size_str = size_str
         self.setObjectName("RecentTransferItem")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(tr("Clique para abrir '%s' no gerenciador de arquivos") % name)
 
         layout = QHBoxLayout(self)
@@ -263,7 +266,7 @@ class RecentTransferItem(QWidget):
         self.name_label = QLabel(f"✓  {name}")
         self.name_label.setWordWrap(False)
         self.size_label = QLabel(size_str)
-        self.size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.size_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(self.name_label, 1)
         layout.addWidget(self.size_label, 0)
@@ -290,7 +293,7 @@ class RecentTransferItem(QWidget):
             self.size_label.setText(size_str)
 
     def mouseReleaseEvent(self, event: Any) -> None:
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._file_name)
             event.accept()
             return
