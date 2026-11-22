@@ -1463,9 +1463,17 @@ class StatusPopup(QWidget):
                 return False
         return True
 
+    def event(self, event: Any) -> bool:
+        """Auto-closes floating popup on WindowDeactivate unless pinned or using child menus."""
+        is_deactivate = event.type() == QEvent.Type.WindowDeactivate
+        handled = bool(super().event(event))
+        if is_deactivate and self._should_auto_close_on_deactivate():
+            self.close()
+        return handled
+
     def changeEvent(self, event: Any) -> None:
-        """Auto-closes floating popup when clicking outside, unless pinned or using menus."""
-        if event.type() in (QEvent.Type.WindowDeactivate, QEvent.Type.ActivationChange):
+        """Auto-closes floating popup when losing activation, unless pinned or using menus."""
+        if event.type() == QEvent.Type.ActivationChange:
             if not self.isActiveWindow() and self._should_auto_close_on_deactivate():
                 self.close()
         super().changeEvent(event)
