@@ -115,7 +115,7 @@ def _atomic_write_text(path: str, content: str) -> None:
         raise
 
 
-def _atomic_write_tree(tree: ET.ElementTree[Any], path: str, doctype: Optional[str] = None) -> None:
+def _atomic_write_tree(tree: "ET.ElementTree[Any]", path: str, doctype: Optional[str] = None) -> None:
     target = os.path.realpath(path)
     parent_dir = os.path.dirname(target) or "."
     os.makedirs(parent_dir, exist_ok=True)
